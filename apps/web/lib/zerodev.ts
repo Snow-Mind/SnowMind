@@ -217,7 +217,7 @@ export async function grantAndSerializeSessionKey(
   const sessionKeyAccount  = privateKeyToAccount(sessionPrivateKey)
 
   // toECDSASigner — correct import for permission validators
-  const sessionKeySigner   = toECDSASigner({ signer: sessionKeyAccount })
+  const sessionKeySigner   = await toECDSASigner({ signer: sessionKeyAccount })
 
   // ── Call Policy: ABI-based, type-safe (not raw hex selectors) ─────────────
   const callPolicy = toCallPolicy({
