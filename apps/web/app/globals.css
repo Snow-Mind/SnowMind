@@ -1,6 +1,6 @@
 /* ── Fonts ───────────────────────────────────────────────── */
 @import url('https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* ── Tailwind v4 ─────────────────────────────────────────── */
 @import "tailwindcss";
@@ -181,8 +181,8 @@
     @apply border-border outline-ring/50;
   }
   body {
-    background-color: var(--void);
-    color: var(--arctic);
+    background-color: #F5F0EB;
+    color: #1A1715;
     font-family: var(--font-body);
   }
 }
@@ -508,4 +508,73 @@
   outline: 2px solid rgba(0, 196, 255, 0.4);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GLSL Landing Page — Staggered fade-in animations
+   ═══════════════════════════════════════════════════════════ */
+
+@keyframes hero-fadein {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-fadein-1 {
+  opacity: 0;
+  animation: hero-fadein 0.7s ease-out 0.3s forwards;
+}
+.hero-fadein-2 {
+  opacity: 0;
+  animation: hero-fadein 0.7s ease-out 0.6s forwards;
+}
+.hero-fadein-3 {
+  opacity: 0;
+  animation: hero-fadein 0.7s ease-out 0.9s forwards;
+}
+.hero-fadein-4 {
+  opacity: 0;
+  animation: hero-fadein 0.7s ease-out 1.1s forwards;
+}
+
+/* ── Card entrance animation ─────────────────────────────── */
+
+@keyframes card-entrance {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-hidden {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.card-visible {
+  animation: card-entrance 0.6s ease-out forwards;
+}
+
+/* ── Scroll indicator bounce ─────────────────────────────── */
+
+@keyframes scroll-bounce {
+  0%, 100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(8px);
+  }
+}
+
+.scroll-indicator {
+  animation: scroll-bounce 2s ease-in-out infinite;
 }

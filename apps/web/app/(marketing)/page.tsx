@@ -1,462 +1,464 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { useRef } from "react";
-import { motion, useInView } from "framer-motion";
-import MountainHero from "@/components/snow/MountainHero";
-import NeuralSnowflake from "@/components/snow/NeuralSnowflake";
-import CrystalCard from "@/components/snow/CrystalCard";
+import Image from "next/image";
+import { GLSLHills } from "@/components/ui/glsl-hills";
 import {
   Shield,
-  Lock,
-  Eye,
-  ArrowRight,
-  Wallet,
-  Brain,
   TrendingUp,
-  Check,
-  Sparkles,
+  Eye,
+  ChevronDown,
+  Lock,
+  ShieldCheck,
+  Snowflake,
 } from "lucide-react";
-import { PROTOCOL_CONFIG } from "@/lib/constants";
 
-/* ── Animation helpers ────────────────────────────────────── */
-const fadeUp = {
-  hidden: { opacity: 0, y: 32 },
-  visible: { opacity: 1, y: 0 },
-};
+const steps = [
+  {
+    num: "01",
+    title: "Deposit",
+    description:
+      "Connect your wallet and deposit USDC. Your funds stay in your own smart account. We never hold your money.",
+    icon: Shield,
+  },
+  {
+    num: "02",
+    title: "Optimize",
+    description:
+      "Our AI agent monitors lending rates across Avalanche and moves your capital to where it earns the most, within safe boundaries.",
+    icon: TrendingUp,
+  },
+  {
+    num: "03",
+    title: "Earn",
+    description:
+      "Watch your yield grow. Check your dashboard anytime to see exactly where your funds are and why the agent made each decision.",
+    icon: Eye,
+  },
+];
 
-const stagger = {
-  visible: { transition: { staggerChildren: 0.15 } },
-};
+const features = [
+  {
+    title: "Your wallet. Your funds.",
+    description:
+      "Your capital stays in your own smart account at all times. We can never access, move, or withdraw your funds. You hold the keys.",
+    icon: Lock,
+  },
+  {
+    title: "See every decision.",
+    description:
+      "Every allocation, every rebalance, every move comes with an explanation. You always know where your money is and why it\u2019s there.",
+    icon: Eye,
+  },
+  {
+    title: "Safety over yield. Always.",
+    description:
+      "Protocol concentration limits, risk-adjusted allocation, and conservative defaults. We\u2019d rather miss 1% upside than expose you to unnecessary risk.",
+    icon: ShieldCheck,
+  },
+  {
+    title: "Built for Avalanche.",
+    description:
+      "Not a multi-chain afterthought. Snow Mind is purpose-built for Avalanche\u2019s lending ecosystem, starting with Benqi, Aave V3, and Euler V2.",
+    icon: Snowflake,
+  },
+];
 
-function Section({
-  children,
-  className = "",
-  id,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  id?: string;
-}) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-80px" });
+export default function LandingPage() {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [cardsVisible, setCardsVisible] = useState(false);
+  const [featuresVisible, setFeaturesVisible] = useState(false);
+
+  const scrollProgressRef = useRef(0);
+  const heroRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const scrollIndicatorRef = useRef<HTMLDivElement>(null);
+  const cardsRef = useRef<HTMLDivElement>(null);
+  const featuresRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let rafId: number;
+    let progress = 0;
+
+    const handleScroll = () => {
+      progress = Math.min(1, Math.max(0, window.scrollY / window.innerHeight));
+
+      if (window.innerWidth >= 768) {
+        scrollProgressRef.current = progress;
+      } else {
+        scrollProgressRef.current = 0;
+      }
+    };
+
+    const updateVisuals = () => {
+      if (heroRef.current) {
+        const heroOpacity = Math.max(0, 1 - progress / 0.3);
+        const heroScale = 1 - Math.min(progress / 0.3, 1) * 0.03;
+        heroRef.current.style.opacity = String(heroOpacity);
+        heroRef.current.style.transform = `scale(${heroScale})`;
+      }
+
+      if (overlayRef.current) {
+        overlayRef.current.style.opacity = String(
+          Math.max(0, (progress - 0.8) / 0.2),
+        );
+      }
+
+      if (scrollIndicatorRef.current) {
+        scrollIndicatorRef.current.style.opacity = String(
+          Math.max(0, 1 - progress / 0.15),
+        );
+      }
+
+      rafId = requestAnimationFrame(updateVisuals);
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    rafId = requestAnimationFrame(updateVisuals);
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cardsRef.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setCardsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.2 },
+    );
+    observer.observe(cardsRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!featuresRef.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setFeaturesVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.2 },
+    );
+    observer.observe(featuresRef.current);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <motion.section
-      ref={ref}
-      id={id}
-      className={className}
-      initial="hidden"
-      animate={inView ? "visible" : "hidden"}
-      variants={stagger}
-    >
-      {children}
-    </motion.section>
-  );
-}
+    <div>
+      {/* Fixed header */}
+      <header className="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-5 py-4 md:px-10 md:py-5">
+        <Link href="/" className="flex items-center gap-2.5">
+          <Image
+            src="/logo.png"
+            alt="Snow Mind"
+            width={120}
+            height={38}
+            className="h-[38px] w-auto"
+            priority
+          />
+          <span className="font-sans font-bold text-xl text-[#E84142] tracking-[-0.02em]">
+            SnowMind
+          </span>
+        </Link>
 
-function Reveal({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <motion.div className={className} variants={fadeUp} transition={{ duration: 0.6, ease: [0.25, 0.1, 0.25, 1] }}>
-      {children}
-    </motion.div>
-  );
-}
-
-/* ── Comparison table rows ──────────────────────────────────
-
-/* ── Comparison table rows ────────────────────────────────── */
-const COMPARISON = [
-  { feature: "Network", competitors: "Base, Ethereum", snowmind: "Avalanche Native" },
-  { feature: "Minimum", competitors: "$100K+", snowmind: "From $5K" },
-  { feature: "Optimizer", competitors: "Rule-based / Greedy", snowmind: "MILP (Globally Optimal)" },
-  { feature: "Gas cost", competitors: "High (ETH L1/L2)", snowmind: "~$0.01 (Avalanche)" },
-  { feature: "Custody", competitors: "Varies", snowmind: "100% Non-custodial" },
-  { feature: "Smart Account", competitors: "Older versions", snowmind: "ZeroDev Kernel v3.1" },
-] as const;
-
-export default function MarketingPage() {
-  return (
-    <main className="relative">
-      {/* ─── Hero ─────────────────────────────────────────── */}
-      <section className="relative min-h-screen w-full overflow-hidden bg-[#0f172a]">
-        <MountainHero />
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-40 bg-gradient-to-b from-[#0f172a]/70 to-transparent" />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-56 bg-gradient-to-t from-void to-transparent" />
-
-        <div className="relative z-[2] flex min-h-screen flex-col items-center justify-center px-6 text-center">
-          {/* Chip badge */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
+        <nav className="hidden md:flex items-center gap-8">
+          <Link
+            href="#how-it-works"
+            className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
           >
-            <span className="chip">
-              <Sparkles className="h-3 w-3" />
-              Powered by Avalanche
+            How It Works
+          </Link>
+          <Link
+            href="#docs"
+            className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
+          >
+            Docs
+          </Link>
+          <Link
+            href="/dashboard"
+            className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
+          >
+            Launch App
+          </Link>
+        </nav>
+
+        <button
+          className="md:hidden flex flex-col gap-[5px] p-1 z-30"
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-label="Toggle menu"
+          aria-expanded={menuOpen}
+        >
+          <span
+            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm origin-center transition-all duration-300"
+            style={
+              menuOpen
+                ? { transform: "translateY(7px) rotate(45deg)" }
+                : undefined
+            }
+          />
+          <span
+            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm transition-all duration-300"
+            style={menuOpen ? { opacity: 0 } : undefined}
+          />
+          <span
+            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm origin-center transition-all duration-300"
+            style={
+              menuOpen
+                ? { transform: "translateY(-7px) rotate(-45deg)" }
+                : undefined
+            }
+          />
+        </button>
+      </header>
+
+      {/* Mobile dropdown menu */}
+      <div
+        className="fixed top-[68px] left-4 right-4 z-50 md:hidden bg-white/95 backdrop-blur-xl rounded-xl flex flex-col items-center gap-1 border border-[#E8E2DA] shadow-lg overflow-hidden transition-all duration-300"
+        style={{
+          maxHeight: menuOpen ? 250 : 0,
+          opacity: menuOpen ? 1 : 0,
+          padding: menuOpen ? "16px" : "0 16px",
+        }}
+      >
+        <Link
+          href="#how-it-works"
+          onClick={() => setMenuOpen(false)}
+          className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
+        >
+          How It Works
+        </Link>
+        <Link
+          href="#docs"
+          onClick={() => setMenuOpen(false)}
+          className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
+        >
+          Docs
+        </Link>
+        <Link
+          href="/dashboard"
+          onClick={() => setMenuOpen(false)}
+          className="w-full text-center py-3 mt-1 bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base rounded-lg hover:bg-[#D63031] transition-colors"
+        >
+          Launch App
+        </Link>
+      </div>
+
+      {/* ═══ HERO SCROLL ZONE (200vh for scroll-lock transition) ═══ */}
+      <div style={{ height: "200vh" }}>
+        <div className="sticky top-0 h-screen w-full overflow-hidden">
+          {/* GLSL Hills — full-screen background */}
+          <GLSLHills scrollProgressRef={scrollProgressRef} />
+
+          {/* Hero content — fades out with scroll */}
+          <div
+            ref={heroRef}
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center text-center pointer-events-none px-6"
+          >
+            <h1 className="hero-fadein-1 font-sans font-bold text-[40px] md:text-[64px] text-[#1A1715] tracking-[-0.02em] leading-[1.1]">
+              Earn more. Risk less.
+            </h1>
+
+            <p className="hero-fadein-2 font-sans font-normal text-[15px] md:text-[18px] text-[#5C5550] max-w-[520px] leading-[1.6] mt-5">
+          Your AI agent that finds the best yield on Avalanche. Safely and
+          automatically.
+            </p>
+
+            <button
+              className="hero-fadein-3 pointer-events-auto bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base px-10 py-4 rounded-[10px] mt-8 hover:bg-[#D63031] hover:scale-[1.02] transition-all duration-200 cursor-pointer"
+              style={{ boxShadow: "0 4px 24px rgba(232, 65, 66, 0.3)" }}
+              onClick={() => console.log("Create Agent clicked")}
+            >
+              Create Agent
+            </button>
+
+            <a
+              href="#how-it-works"
+              className="hero-fadein-4 pointer-events-auto text-[#5C5550] font-sans font-medium text-sm mt-4 hover:underline hover:underline-offset-[3px] transition-all duration-200 cursor-pointer"
+            >
+              Learn how it works &rarr;
+            </a>
+          </div>
+
+          {/* Cream transition overlay — fades in at end of scroll */}
+          <div
+            ref={overlayRef}
+            className="absolute inset-0 z-15 pointer-events-none bg-[#F5F0EB]"
+            style={{ opacity: 0 }}
+          />
+
+          {/* Scroll indicator */}
+          <div
+            ref={scrollIndicatorRef}
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 pointer-events-none scroll-indicator"
+          >
+            <span className="font-sans text-xs text-[#8A837C] tracking-[0.08em] uppercase">
+              Scroll
             </span>
-          </motion.div>
-
-          <motion.h1
-            className="mt-6 max-w-3xl font-display text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-6xl"
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-          >
-            Autonomous yield,{" "}
-            <span className="gradient-text-hero">mathematically optimal</span>
-          </motion.h1>
-
-          <motion.p
-            className="mx-auto mt-5 max-w-lg text-sm leading-relaxed text-slate-400 sm:text-base"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.35 }}
-          >
-            Deposit stablecoins into your own smart account. Our MILP solver
-            maximizes risk-adjusted returns across Avalanche protocols — 24/7,
-            non-custodial.
-          </motion.p>
-
-          <motion.div
-            className="mt-8 flex items-center gap-3"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.5 }}
-          >
-            <Link href="/dashboard" className="glacier-btn">
-              Launch App
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link href="#how-it-works" className="ghost-btn">
-              How it works
-            </Link>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* ─── Stats bar ────────────────────────────────────── */}
-      <section className="relative border-b border-white/[0.04] bg-void">
-        <div className="mx-auto grid max-w-5xl grid-cols-2 sm:grid-cols-4">
-          {[
-            { value: "From $5K", label: "Minimum deposit" },
-            { value: "<$0.01", label: "Gas per rebalance" },
-            { value: "24/7", label: "Autonomous" },
-            { value: "100%", label: "Non-custodial" },
-          ].map((s, i) => (
-            <div
-              key={s.label}
-              className={`px-6 py-8 text-center ${i > 0 ? "border-l border-white/[0.04]" : ""}`}
-            >
-              <p className="font-mono text-lg font-bold text-glacier sm:text-xl">
-                {s.value}
-              </p>
-              <p className="mt-1 text-[11px] font-medium tracking-wide text-slate-500 uppercase">
-                {s.label}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ─── How It Works ─────────────────────────────────── */}
-      <Section id="how-it-works" className="relative bg-void py-24 sm:py-32">
-        <div className="pointer-events-none absolute inset-0 dot-grid opacity-40" />
-        <div className="relative mx-auto max-w-5xl px-6">
-          <Reveal>
-            <p className="section-label text-center">THE PROCESS</p>
-          </Reveal>
-          <Reveal>
-            <h2 className="mt-3 text-center font-display text-2xl font-bold text-white sm:text-3xl lg:text-4xl">
-              Three steps to optimized yield
-            </h2>
-          </Reveal>
-          <Reveal>
-            <p className="mx-auto mt-3 max-w-md text-center text-sm text-slate-500">
-              Set it once. Our AI handles the rest, continuously optimizing your positions.
-            </p>
-          </Reveal>
-
-          {/* Step connector line (desktop) */}
-          <div className="relative mt-16">
-            <div className="absolute top-10 right-8 left-8 hidden h-px bg-gradient-to-r from-transparent via-glacier/15 to-transparent sm:block" />
-
-            <motion.div
-              className="grid gap-8 sm:grid-cols-3"
-              variants={stagger}
-              initial="hidden"
-              whileInView="visible"
-              viewport={{ once: true, margin: "-80px" }}
-            >
-              {[
-                {
-                  icon: Wallet,
-                  num: "01",
-                  title: "Connect & Deposit",
-                  text: "Connect your wallet. SnowMind creates a non-custodial smart account. Deposit USDC and set your risk profile.",
-                },
-                {
-                  icon: Brain,
-                  num: "02",
-                  title: "AI Optimizes",
-                  text: "Our MILP solver runs every 30 minutes, calculating the optimal split across Benqi and Aave V3 on Avalanche.",
-                },
-                {
-                  icon: TrendingUp,
-                  num: "03",
-                  title: "Yield Compounds",
-                  text: "Funds rebalance automatically when profitable. You watch your yield grow. Gas costs are sponsored.",
-                },
-              ].map((step) => (
-                <motion.div key={step.num} variants={fadeUp} transition={{ duration: 0.5, ease: [0.25, 0.1, 0.25, 1] }}>
-                  <CrystalCard className="relative h-full">
-                    <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg border border-glacier/15 bg-glacier/5">
-                      <step.icon className="h-4 w-4 text-glacier" />
-                    </div>
-                    <span className="font-mono text-[10px] text-glacier/30">
-                      {step.num}
-                    </span>
-                    <h3 className="mt-1.5 font-display text-base font-semibold text-white">
-                      {step.title}
-                    </h3>
-                    <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
-                      {step.text}
-                    </p>
-                  </CrystalCard>
-                </motion.div>
-              ))}
-            </motion.div>
+            <ChevronDown className="w-5 h-5 text-[#8A837C]" />
           </div>
         </div>
-      </Section>
+      </div>
 
-      {/* ─── Protocol Showcase ────────────────────────────── */}
-      <Section className="border-t border-white/[0.04] bg-void py-24 sm:py-32">
-        <div className="mx-auto max-w-5xl px-6">
-          <Reveal>
-            <p className="section-label text-center">PROTOCOLS</p>
-          </Reveal>
-          <Reveal>
-            <h2 className="mt-3 text-center font-display text-2xl font-bold text-white sm:text-3xl lg:text-4xl">
-              Where your yield comes from
-            </h2>
-          </Reveal>
-          <Reveal>
-            <p className="mx-auto mt-3 max-w-md text-center text-sm text-slate-500">
-              Diversified across battle-tested DeFi protocols on Avalanche.
-            </p>
-          </Reveal>
+      {/* ═══ HOW IT WORKS ═══ */}
+      <section
+        id="how-it-works"
+        className="bg-[#F5F0EB] py-12 md:py-20 px-6"
+      >
+        <div className="max-w-[1100px] mx-auto text-center">
+          <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
+            HOW IT WORKS
+          </p>
+          <h2 className="font-sans font-bold text-[28px] md:text-[36px] text-[#1A1715] mt-3">
+            Three steps. That&apos;s it.
+          </h2>
 
-          <motion.div
-            className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-            variants={stagger}
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, margin: "-60px" }}
-          >
-            {Object.values(PROTOCOL_CONFIG).map((p) => (
-              <motion.div
-                key={p.id}
-                variants={fadeUp}
-                transition={{ duration: 0.45, ease: [0.25, 0.1, 0.25, 1] }}
-              >
-                <CrystalCard className="relative h-full">
-                  {p.isComingSoon && (
-                    <span className="absolute top-4 right-4 rounded-full bg-amber/10 px-2 py-0.5 text-[10px] font-medium text-amber">
-                      Soon
-                    </span>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: p.color }}
-                    />
-                    <h3 className="font-display text-base font-semibold text-white">
-                      {p.name}
-                    </h3>
-                  </div>
-                  <p className="mt-1 text-[11px] text-slate-500">{p.description}</p>
+          <div ref={cardsRef} className="relative mt-14">
+            {/* Connecting dashed line — desktop only */}
+            <div className="hidden md:block absolute top-1/2 left-[16.67%] right-[16.67%] -translate-y-1/2 z-0 border-t border-dashed border-[#E8E2DA]" />
 
-                  <div className="mt-4 flex items-center gap-4">
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-500">
-                        Risk
+            {/* Cards */}
+            <div className="relative z-10 grid grid-cols-1 md:grid-cols-3 gap-6">
+              {steps.map((step, i) => {
+                const Icon = step.icon;
+                return (
+                  <div
+                    key={step.num}
+                    className={cardsVisible ? "card-visible" : "card-hidden"}
+                    style={{
+                      animationDelay: cardsVisible
+                        ? `${i * 150}ms`
+                        : undefined,
+                    }}
+                  >
+                    <div
+                      className="relative bg-[#FAFAF8] border border-[#E8E2DA] rounded-2xl p-8 overflow-hidden text-left transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(26,23,21,0.08)]"
+                      style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
+                    >
+                      <span className="absolute top-4 left-6 font-sans font-bold text-[48px] text-[#E84142] opacity-20 select-none leading-none">
+                        {step.num}
                       </span>
-                      <p className="font-mono text-base font-bold" style={{ color: p.color }}>
-                        {p.riskScore}/10
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-500">
-                        Max Alloc.
-                      </span>
-                      <p className="font-mono text-base font-bold text-arctic">
-                        {(p.maxAllocationPct * 100).toFixed(0)}%
-                      </p>
+                      <div className="relative pt-10">
+                        <Icon className="w-6 h-6 text-[#E84142] mb-4" />
+                        <h3 className="font-sans font-bold text-[22px] text-[#1A1715]">
+                          {step.title}
+                        </h3>
+                        <p className="font-sans font-normal text-[15px] text-[#5C5550] leading-[1.6] mt-2">
+                          {step.description}
+                        </p>
+                      </div>
                     </div>
                   </div>
-
-                  {p.auditBadge && (
-                    <div className="mt-3 flex items-center gap-1 text-[10px] text-mint/60">
-                      <Shield className="h-3 w-3" /> {p.auditBadge}
-                    </div>
-                  )}
-
-                  <div className="mt-3 rounded-md bg-glacier/[0.04] px-2 py-1 text-center text-[10px] font-medium text-glacier/40">
-                    Avalanche C-Chain
-                  </div>
-                </CrystalCard>
-              </motion.div>
-            ))}
-          </motion.div>
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </Section>
+      </section>
 
-      {/* ─── Competitive Differentiation ──────────────────── */}
-      <Section className="border-t border-white/[0.04] bg-void py-24 sm:py-32">
-        <div className="mx-auto max-w-4xl px-6">
-          <Reveal>
-            <p className="section-label text-center">COMPARISON</p>
-          </Reveal>
-          <Reveal>
-            <h2 className="mt-3 text-center font-display text-2xl font-bold text-white sm:text-3xl lg:text-4xl">
-              Why SnowMind?
-            </h2>
-          </Reveal>
+      {/* ═══ WHY SNOW MIND ═══ */}
+      <section className="bg-[#FAFAF8] py-12 md:py-20 px-6">
+        <div className="max-w-[1100px] mx-auto text-center">
+          <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
+            WHY SNOW MIND
+          </p>
+          <h2 className="font-sans font-bold text-[28px] md:text-[36px] text-[#1A1715] mt-3">
+            Built different. On purpose.
+          </h2>
 
-          <Reveal>
-            <div className="mt-12 overflow-hidden rounded-xl border border-white/[0.04]">
-              {/* Header row */}
-              <div className="grid grid-cols-3 border-b border-white/[0.04] bg-white/[0.015]">
-                <div className="px-5 py-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                  Feature
-                </div>
-                <div className="border-l border-white/[0.04] px-5 py-3 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                  Others
-                </div>
-                <div className="border-l border-white/[0.04] px-5 py-3 text-[11px] font-medium uppercase tracking-wider text-glacier/50">
-                  SnowMind
-                </div>
-              </div>
-
-              {/* Data rows */}
-              {COMPARISON.map((row, i) => (
+          <div
+            ref={featuresRef}
+            className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-14"
+          >
+            {features.map((feature, i) => {
+              const Icon = feature.icon;
+              return (
                 <div
-                  key={row.feature}
-                  className={`grid grid-cols-3 ${i < COMPARISON.length - 1 ? "border-b border-white/[0.04]" : ""}`}
+                  key={feature.title}
+                  className={
+                    featuresVisible ? "card-visible" : "card-hidden"
+                  }
+                  style={{
+                    animationDelay: featuresVisible
+                      ? `${i * 100}ms`
+                      : undefined,
+                  }}
                 >
-                  <div className="px-5 py-3.5 text-[13px] font-medium text-white">
-                    {row.feature}
-                  </div>
-                  <div className="border-l border-white/[0.04] px-5 py-3.5 text-[13px] text-slate-500">
-                    {row.competitors}
-                  </div>
-                  <div className="flex items-center gap-1.5 border-l border-white/[0.04] px-5 py-3.5 text-[13px] font-medium text-mint">
-                    <Check className="h-3 w-3 shrink-0" />
-                    {row.snowmind}
+                  <div className="bg-[#F5F0EB] rounded-2xl p-7 text-left transition-all duration-200 hover:-translate-y-1">
+                    <Icon className="w-7 h-7 text-[#E84142] mb-4" />
+                    <h3 className="font-sans font-bold text-[18px] text-[#1A1715]">
+                      {feature.title}
+                    </h3>
+                    <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.6] mt-2">
+                      {feature.description}
+                    </p>
                   </div>
                 </div>
-              ))}
-            </div>
-          </Reveal>
-        </div>
-      </Section>
-
-      {/* ─── Risk & Security ──────────────────────────────── */}
-      <Section id="security" className="border-t border-white/[0.04] bg-void py-24 sm:py-32">
-        <div className="mx-auto max-w-5xl px-6">
-          <Reveal>
-            <p className="section-label text-center">SECURITY</p>
-          </Reveal>
-          <Reveal>
-            <h2 className="mt-3 text-center font-display text-2xl font-bold text-white sm:text-3xl lg:text-4xl">
-              Built for the paranoid
-            </h2>
-          </Reveal>
-          <Reveal>
-            <p className="mx-auto mt-3 max-w-md text-center text-sm text-slate-500">
-              Non-custodial architecture with multiple layers of protection.
-            </p>
-          </Reveal>
-
-          <motion.div
-            className="mt-12 grid gap-4 sm:grid-cols-3"
-            variants={stagger}
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, margin: "-60px" }}
-          >
-            {([
-              {
-                icon: Lock,
-                title: "Scoped Session Keys",
-                text: "Our AI can only supply/withdraw to approved protocols. No transfers. No access to other contracts. Revoke anytime.",
-              },
-              {
-                icon: Shield,
-                title: "MILP Concentration Caps",
-                text: "Hard constraint: no more than 60% in any single protocol. Automatic diversification, always.",
-              },
-              {
-                icon: Eye,
-                title: "Rate Validation",
-                text: "Every rate is TWAP-smoothed and cross-validated against DefiLlama. Flash loan attacks don't move us.",
-              },
-            ] as const).map((card) => (
-              <motion.div key={card.title} variants={fadeUp} transition={{ duration: 0.5, ease: [0.25, 0.1, 0.25, 1] }}>
-                <CrystalCard className="h-full">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-glacier/10 bg-glacier/[0.04]">
-                    <card.icon className="h-4 w-4 text-glacier" />
-                  </div>
-                  <h3 className="mt-4 font-display text-sm font-semibold text-white">
-                    {card.title}
-                  </h3>
-                  <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
-                    {card.text}
-                  </p>
-                </CrystalCard>
-              </motion.div>
-            ))}
-          </motion.div>
-        </div>
-      </Section>
-
-      {/* ─── CTA ──────────────────────────────────────────── */}
-      <section className="relative overflow-hidden border-t border-white/[0.04]">
-        {/* Gradient mesh background */}
-        <div className="absolute inset-0 gradient-mesh" />
-
-        {/* Faint snowflake decoration */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-[0.03]">
-          <NeuralSnowflake className="h-[400px] w-[400px]" />
-        </div>
-
-        <div className="relative z-10 py-24 sm:py-32">
-          <div className="mx-auto max-w-xl px-6 text-center">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.6 }}
-            >
-              <h2 className="font-display text-2xl font-bold text-white sm:text-3xl lg:text-4xl">
-                Start earning smarter today.
-              </h2>
-              <p className="mt-4 text-sm text-slate-400">
-                Avalanche&apos;s first autonomous yield optimizer. From $5K.
-              </p>
-              <div className="mt-8">
-                <Link
-                  href="/dashboard"
-                  className="glacier-btn"
-                >
-                  Launch App
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              </div>
-            </motion.div>
+              );
+            })}
           </div>
         </div>
       </section>
-    </main>
+
+      {/* ═══ FOOTER ═══ */}
+      <footer className="bg-[#1A1715] py-8 md:py-12 px-6">
+        <div className="max-w-[1100px] mx-auto">
+          {/* Top row */}
+          <div className="flex flex-col md:flex-row items-center md:items-center justify-between gap-6">
+            <Image
+              src="/logo.png"
+              alt="Snow Mind"
+              width={100}
+              height={30}
+              className="h-[30px] w-auto brightness-0 invert opacity-80"
+            />
+            <nav className="flex items-center gap-8">
+              <a
+                href="#how-it-works"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                How It Works
+              </a>
+              <a
+                href="#docs"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                Docs
+              </a>
+              <a
+                href="https://x.com/mark_nakatani"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                Twitter
+              </a>
+            </nav>
+          </div>
+
+          {/* Divider + bottom row */}
+          <div
+            className="mt-8 pt-6 flex flex-col md:flex-row items-center justify-between gap-4"
+            style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}
+          >
+            <span className="font-sans font-normal text-[13px] text-[#8A837C]">
+              &copy; 2026 Snow Mind. All rights reserved.
+            </span>
+            <span className="font-sans font-medium text-[13px] text-[#5C5550] italic">
+              Earn more. Risk less.
+            </span>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }
