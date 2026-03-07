@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, History, AlertCircle, RefreshCw, Loader2, Layers } from "lucide-react";
+import { ArrowUpRight, History, AlertCircle, RefreshCw, Layers } from "lucide-react";
 import { motion } from "framer-motion";
 import {
   BarChart,
@@ -15,7 +15,6 @@ import {
 import { formatUsd, formatPct } from "@/lib/format";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { usePortfolio } from "@/hooks/usePortfolio";
-import { useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import type { ProtocolAllocation } from "@snowmind/shared-types";

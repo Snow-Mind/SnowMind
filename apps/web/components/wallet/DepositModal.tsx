@@ -16,8 +16,8 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { PROTOCOL_CONFIG, EXPLORER, CONTRACTS, type ProtocolId } from "@/lib/constants";
 import { formatUsd, formatPct } from "@/lib/format";
 import { toast } from "sonner";
-import { parseUnits, encodeFunctionData } from "viem";
-import { useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { parseUnits } from "viem";
+import { useWriteContract } from "wagmi";
 
 type Step = "input" | "preview" | "depositing" | "done";
 

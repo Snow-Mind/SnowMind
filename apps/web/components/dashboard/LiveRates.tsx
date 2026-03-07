@@ -1,6 +1,5 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { Activity, RefreshCw, TrendingUp, Clock, Loader2 } from "lucide-react";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatPct, formatTvl } from "@/lib/format";

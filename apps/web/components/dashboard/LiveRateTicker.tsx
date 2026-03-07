@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { PROTOCOL_CONFIG, type ProtocolId } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
@@ -7,9 +8,19 @@ import { formatPct } from "@/lib/format";
 export default function LiveRateTicker() {
   const { data: rates, dataUpdatedAt } = useProtocolRates();
 
-  const ago = dataUpdatedAt
-    ? `${Math.round((Date.now() - dataUpdatedAt) / 1000)}s ago`
-    : null;
+  const [ago, setAgo] = useState<string | null>(null);
+  const [prevUpdatedAt, setPrevUpdatedAt] = useState<number | undefined>(undefined);
+  if (dataUpdatedAt !== prevUpdatedAt) {
+    setPrevUpdatedAt(dataUpdatedAt);
+    if (!dataUpdatedAt) setAgo(null);
+  }
+  useEffect(() => {
+    if (!dataUpdatedAt) return;
+    const tick = () => setAgo(`${Math.round((Date.now() - dataUpdatedAt) / 1000)}s ago`);
+    const init = setTimeout(tick, 0);
+    const id = setInterval(tick, 1000);
+    return () => { clearTimeout(init); clearInterval(id); };
+  }, [dataUpdatedAt]);
 
   return (
     <div className="flex items-center gap-4 text-xs text-muted-foreground">

@@ -120,7 +120,6 @@ export default function SmartAccountSetup({
   txHashes,
 }: SmartAccountSetupProps) {
   const config = stepConfig[step];
-  const Icon = config.icon;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

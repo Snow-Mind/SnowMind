@@ -8,12 +8,8 @@ import NeuralSnowflake from "@/components/snow/NeuralSnowflake";
 import CrystalCard from "@/components/snow/CrystalCard";
 import {
   Shield,
-  Cpu,
-  RefreshCw,
-  Layers,
   Lock,
   Eye,
-  Zap,
   ArrowRight,
   Wallet,
   Brain,
@@ -66,25 +62,7 @@ function Reveal({ children, className = "" }: { children: React.ReactNode; class
   );
 }
 
-/* ── CountUp ──────────────────────────────────────────────── */
-function CountUp({ value, suffix = "" }: { value: string; suffix?: string }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true });
-  return (
-    <span ref={ref} className="metric-value text-2xl">
-      {inView ? value : "—"}
-      {suffix}
-    </span>
-  );
-}
-
-/* ── Protocol orbit positions (CSS transform origin offsets) ── */
-const PROTOCOLS = [
-  { name: "Benqi", apy: "4.1%", alloc: 40, pos: "top" },
-  { name: "Aave V3", apy: "3.8%", alloc: 35, pos: "right" },
-  { name: "Euler V2", apy: "—", alloc: 0, pos: "bottom", soon: true },
-  { name: "Fluid", apy: "—", alloc: 0, pos: "left", soon: true },
-] as const;
+/* ── Comparison table rows ──────────────────────────────────
 
 /* ── Comparison table rows ────────────────────────────────── */
 const COMPARISON = [

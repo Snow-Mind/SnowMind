@@ -15,10 +15,7 @@ export default function RebalanceCountdown({
   const [remaining, setRemaining] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!lastRebalance) {
-      setRemaining(null);
-      return;
-    }
+    if (!lastRebalance) return;
 
     function tick() {
       const next =

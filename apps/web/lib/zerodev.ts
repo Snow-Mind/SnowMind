@@ -96,6 +96,7 @@ function getPublicClient(): PublicClient {
 
 // ── 1. Create smart account (sudo — user is the owner) ───────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function createSmartAccount(walletClient: any) {
   const publicClient = getPublicClient()
 
@@ -141,6 +142,7 @@ export async function createSmartAccount(walletClient: any) {
 // ── 2. Approve all protocols in ONE batched UserOp ───────────────────────────
 
 export async function approveAllProtocols(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelClient: any,
   contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; EULER_VAULT: `0x${string}` }
 ): Promise<{ txHash: string; explorerUrl: string }> {
@@ -186,7 +188,9 @@ export async function approveAllProtocols(
 // Returns serialized string — NOT a private key. Backend stores and uses this.
 
 export async function grantAndSerializeSessionKey(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelAccount: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelClient: any,
   contracts: {
     AAVE_POOL:    `0x${string}`
@@ -330,7 +334,9 @@ export async function grantAndSerializeSessionKey(
 // ── 4. Revoke session key (user-initiated) ───────────────────────────────────
 
 export async function revokeSessionKey(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelClient: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   permissionPlugin: any
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const txHash = await kernelClient.uninstallPlugin({ plugin: permissionPlugin })
@@ -340,6 +346,7 @@ export async function revokeSessionKey(
 // ── 5. Emergency: withdraw all from specific protocol (user-signed, no session key)
 
 export async function emergencyWithdrawAll(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelClient: any,
   smartAccountAddress: `0x${string}`,
   contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; USDC: `0x${string}` },

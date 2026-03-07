@@ -79,7 +79,7 @@ export default function SnowCanvas() {
 
     let width = (canvas.width = window.innerWidth);
     let height = (canvas.height = window.innerHeight);
-    let particles = createParticles(width, height);
+    const particles = createParticles(width, height);
 
     const onResize = () => {
       width = canvas.width = window.innerWidth;

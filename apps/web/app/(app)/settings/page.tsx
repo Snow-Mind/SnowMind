@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Shield, Bell, Sliders, Wallet, ExternalLink, Loader2 } from "lucide-react";
+import { Bell, Sliders, Wallet, ExternalLink } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";

@@ -3,7 +3,6 @@
  * TODO: Replace all consumers with real API calls via usePortfolio / useRebalanceHistory hooks.
  */
 import type {
-  ProtocolAllocation,
   Portfolio,
   RebalanceStatusResponse,
 } from "@snowmind/shared-types";

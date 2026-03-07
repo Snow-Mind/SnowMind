@@ -17,7 +17,8 @@ interface SmartAccountState {
   isDeployed: boolean;
   setupStep: SetupStep;
   error: string | null;
-  kernelClient: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  kernelClient: Record<string, any> | null;
   txHashes: SetupTxHashes;
 }
 

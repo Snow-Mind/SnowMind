@@ -113,8 +113,9 @@ interface RebalanceHistoryProps {
   total: number;
 }
 
-export default function RebalanceHistory({ history, total }: RebalanceHistoryProps) {
-  const columns = useMemo(buildColumns, []);
+export default function RebalanceHistory({ history }: RebalanceHistoryProps) {
+  const columns = useMemo(() => buildColumns(), []);
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table callbacks are stable
   const table = useReactTable({
     data: history,
     columns,

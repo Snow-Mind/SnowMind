@@ -136,16 +136,22 @@ export default function AppLayout({
   }, [ready, authenticated, router]);
 
   // Show setup wizard when smart account is being created
-  useEffect(() => {
-    if (authenticated && smartAccount.setupStep === "creating") {
+  const shouldOpenSetup = authenticated && smartAccount.setupStep === "creating";
+  const shouldAutoClose = smartAccount.setupStep === "ready";
+  const [prevShouldOpen, setPrevShouldOpen] = useState(false);
+  if (shouldOpenSetup !== prevShouldOpen) {
+    setPrevShouldOpen(shouldOpenSetup);
+    if (shouldOpenSetup) {
       setSetupOpen(true);
     }
-    if (smartAccount.setupStep === "ready") {
+  }
+  useEffect(() => {
+    if (shouldAutoClose) {
       // Auto-close after a short delay to let user see the success
       const timer = setTimeout(() => setSetupOpen(false), 2000);
       return () => clearTimeout(timer);
     }
-  }, [authenticated, smartAccount.setupStep]);
+  }, [shouldAutoClose]);
 
   // Don't render until auth is ready
   if (!ready) {

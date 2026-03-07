@@ -1,7 +1,6 @@
 "use client";
 
 import { usePrivy, useLogout, useWallets } from "@privy-io/react-auth";
-import { useCallback } from "react";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 
 export function useAuth() {
