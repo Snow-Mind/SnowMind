@@ -3,7 +3,7 @@ import {
   createKernelAccountClient,
   createZeroDevPaymasterClient,
 } from "@zerodev/sdk"
-import { KERNEL_V3_1, ENTRYPOINT_ADDRESS_V07 } from "@zerodev/sdk/constants"
+import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants"
 import {
   createPublicClient,
   http,
@@ -14,6 +14,7 @@ import {
 import { avalancheFuji } from "viem/chains"
 
 const CHAIN       = avalancheFuji
+const ENTRYPOINT  = getEntryPoint("0.7")
 const BUNDLER_URL = `https://api.pimlico.io/v2/avalanche-fuji/rpc?apikey=${process.env.PIMLICO_API_KEY}`
 
 const AAVE_ABI = [
@@ -63,7 +64,7 @@ async function getKernelClient(serializedPermission) {
   // Kernel doc: "deserializePermissionAccount reconstructs full kernel client"
   const permissionAccount = await deserializePermissionAccount(
     publicClient,
-    ENTRYPOINT_ADDRESS_V07,
+    ENTRYPOINT,
     KERNEL_V3_1,
     serializedPermission,
   )

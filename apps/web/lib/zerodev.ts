@@ -6,13 +6,13 @@ import {
   createKernelAccountClient,
   createZeroDevPaymasterClient,
 } from "@zerodev/sdk"
-import { KERNEL_V3_1, ENTRYPOINT_ADDRESS_V07 } from "@zerodev/sdk/constants"
+import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants"
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator"
 import {
   toPermissionValidator,
   serializePermissionAccount,
-  toECDSASigner,          // CORRECT: permissions/signers, NOT ecdsa-validator
 } from "@zerodev/permissions"
+import { toECDSASigner } from "@zerodev/permissions/signers"
 import {
   toCallPolicy,
   toGasPolicy,
@@ -33,6 +33,7 @@ import { avalancheFuji } from "viem/chains"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 
 const CHAIN = avalancheFuji
+const ENTRYPOINT = getEntryPoint("0.7")
 const BUNDLER_URL = `https://api.pimlico.io/v2/avalanche-fuji/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`
 const PAYMASTER_URL = BUNDLER_URL  // Pimlico v2 endpoint handles both
 
@@ -101,7 +102,7 @@ export async function createSmartAccount(walletClient: any) {
   // Sudo validator: user's wallet is the owner (full control)
   const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
     signer: walletClient,
-    entryPoint: ENTRYPOINT_ADDRESS_V07,
+    entryPoint: ENTRYPOINT,
     kernelVersion: KERNEL_V3_1,           // ← constant, NOT string "0.3.1"
   })
 
@@ -109,7 +110,7 @@ export async function createSmartAccount(walletClient: any) {
   // Kernel doc: "same owner + same index = same address, always"
   const kernelAccount = await createKernelAccount(publicClient, {
     plugins: { sudo: ecdsaValidator },
-    entryPoint: ENTRYPOINT_ADDRESS_V07,
+    entryPoint: ENTRYPOINT,
     kernelVersion: KERNEL_V3_1,
     index: 0n,                            // ← CRITICAL: BigInt 0, not 0
   })
@@ -283,7 +284,7 @@ export async function grantAndSerializeSessionKey(
 
   // Compose all policies — ALL must pass for every UserOp
   const permissionPlugin = await toPermissionValidator(publicClient, {
-    entryPoint:    ENTRYPOINT_ADDRESS_V07,
+    entryPoint:    ENTRYPOINT,
     kernelVersion: KERNEL_V3_1,
     signer:        sessionKeySigner,
     policies:      [callPolicy, gasPolicy, rateLimitPolicy, timestampPolicy],
@@ -299,7 +300,7 @@ export async function grantAndSerializeSessionKey(
       sudo:    kernelAccount.kernelPluginManager?.sudoValidator,
       regular: permissionPlugin,
     },
-    entryPoint:    ENTRYPOINT_ADDRESS_V07,
+    entryPoint:    ENTRYPOINT,
     kernelVersion: KERNEL_V3_1,
     index: 0n,
   })
