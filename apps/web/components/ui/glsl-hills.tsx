@@ -3,18 +3,32 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
+interface GLSLHillsProps {
+  width?: string;
+  height?: string;
+  cameraZ?: number;
+  cameraZEnd?: number;
+  planeSize?: number;
+  speed?: number;
+  scrollProgressRef?: { current: number };
+}
+
 const GLSLHills = ({
   width = "100vw",
   height = "100vh",
   cameraZ = 125,
+  cameraZEnd = 50,
   planeSize = 256,
   speed = 0.5,
-}) => {
+  scrollProgressRef,
+}: GLSLHillsProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
+
+    let currentZ = cameraZ;
 
     const uniforms = {
       time: { value: 0 },
@@ -159,6 +173,7 @@ const GLSLHills = ({
       10000,
     );
     const clock = new THREE.Clock();
+    const lookAtTarget = new THREE.Vector3(0, 28, 0);
     let animationId: number;
 
     const resize = () => {
@@ -170,20 +185,27 @@ const GLSLHills = ({
       renderer.setSize(window.innerWidth, window.innerHeight);
     };
 
-    const render = () => {
-      uniforms.time.value += clock.getDelta() * speed;
-      renderer.render(scene, camera);
-    };
-
     const renderLoop = () => {
-      render();
+      const delta = clock.getDelta();
+
+      if (scrollProgressRef) {
+        const progress = scrollProgressRef.current;
+        const targetZ = cameraZ + progress * (cameraZEnd - cameraZ);
+        const lerpFactor = 1 - Math.pow(0.05, delta);
+        currentZ += (targetZ - currentZ) * lerpFactor;
+        camera.position.z = currentZ;
+        camera.lookAt(lookAtTarget);
+      }
+
+      uniforms.time.value += delta * speed;
+      renderer.render(scene, camera);
       animationId = requestAnimationFrame(renderLoop);
     };
 
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0xf5f0eb, 1);
     camera.position.set(0, 16, cameraZ);
-    camera.lookAt(new THREE.Vector3(0, 28, 0));
+    camera.lookAt(lookAtTarget);
     scene.add(mesh);
     window.addEventListener("resize", resize);
     resize();
@@ -196,7 +218,7 @@ const GLSLHills = ({
       (mesh.material as THREE.RawShaderMaterial).dispose();
       renderer.dispose();
     };
-  }, [cameraZ, planeSize, speed]);
+  }, [cameraZ, cameraZEnd, planeSize, speed, scrollProgressRef]);
 
   return (
     <div ref={containerRef} style={{ position: "relative", width, height }}>

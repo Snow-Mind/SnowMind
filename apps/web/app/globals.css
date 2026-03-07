@@ -541,3 +541,40 @@
   opacity: 0;
   animation: hero-fadein 0.7s ease-out 1.1s forwards;
 }
+
+/* ── Card entrance animation ─────────────────────────────── */
+
+@keyframes card-entrance {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-hidden {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.card-visible {
+  animation: card-entrance 0.6s ease-out forwards;
+}
+
+/* ── Scroll indicator bounce ─────────────────────────────── */
+
+@keyframes scroll-bounce {
+  0%, 100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(8px);
+  }
+}
+
+.scroll-indicator {
+  animation: scroll-bounce 2s ease-in-out infinite;
+}
