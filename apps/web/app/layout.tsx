@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { Toaster } from "@/components/ui/sonner";
-import SnowCanvas from "@/components/snow/SnowCanvas";
 
 export const dynamic = "force-dynamic";
 
@@ -24,19 +23,21 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
-        <link rel="preconnect" href="https://api.fontshare.com" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           rel="preconnect"
           href="https://fonts.gstatic.com"
           crossOrigin="anonymous"
         />
+        <link
+          href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap"
+          rel="stylesheet"
+        />
       </head>
-      <body className="bg-void text-arctic font-body antialiased min-h-screen">
+      <body className="bg-[#F5F0EB] text-[#1A1715] font-sans antialiased min-h-screen">
         <Providers>
-          <SnowCanvas />
           <div className="relative z-10">{children}</div>
           <Toaster />
         </Providers>
