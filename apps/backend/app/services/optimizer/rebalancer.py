@@ -1,0 +1,534 @@
+"""Cost-aware rebalance orchestrator — full pipeline from rates to on-chain execution.
+
+Transaction ordering: withdrawals FIRST, then deposits (ensure funds are available).
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from uuid import UUID
+
+from web3 import AsyncWeb3, AsyncHTTPProvider, Web3
+
+from app.core.config import get_settings
+from app.core.database import get_supabase
+from app.services.execution.session_key import (
+    get_active_session_key,
+    revoke_session_key,
+)
+from app.services.execution.userop_builder import UserOpBuilder
+from app.services.optimizer.milp_solver import (
+    OptimizerInput,
+    ProtocolInput,
+    compute_delta,
+    compute_weighted_apy,
+    solve,
+)
+from app.services.optimizer.rate_fetcher import RateFetcher
+from app.services.optimizer.rate_validator import RateValidator, apply_max_move_cap
+from app.services.optimizer.risk_scorer import RiskScorer
+from app.services.protocols import get_adapter
+
+logger = logging.getLogger("snowmind")
+
+MAX_UINT256 = 2**256 - 1
+
+# ── Registry ABI (logRebalance on SnowMindRegistry) ────────────────
+REGISTRY_ABI = [
+    {
+        "name": "logRebalance",
+        "type": "function",
+        "inputs": [
+            {"name": "fromProtocol", "type": "address"},
+            {"name": "toProtocol", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable",
+    }
+]
+
+
+class Rebalancer:
+    """Decides whether to rebalance and executes the on-chain moves."""
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self.userop_builder = UserOpBuilder()
+        self.rate_fetcher = RateFetcher()
+        self.rate_validator = RateValidator()
+        self.risk_scorer = RiskScorer()
+        self.w3 = AsyncWeb3(AsyncHTTPProvider(self.settings.AVALANCHE_RPC_URL))
+        self._protocol_addresses: dict[str, str] = {
+            "aave_v3": self.settings.AAVE_V3_POOL,
+            "benqi": self.settings.BENQI_POOL,
+            "euler_v2": self.settings.EULER_VAULT,
+        }
+
+    # ── Full pipeline (cron entry-point) ────────────────────────────
+
+    async def check_and_rebalance(
+        self,
+        account_id: str,
+        smart_account_address: str,
+    ) -> dict:
+        """
+        Full pipeline:
+          1. Fetch TWAP rates
+          2. Validate rates — halt if any anomaly
+          3. Compute risk scores per protocol
+          4. Get current allocations from DB
+          5. Run MILP solver
+          6. Check if rebalance is needed (delta + yield gate)
+          7. Check time since last rebalance (> 6 h)
+          8. If all conditions met → execute
+          9. Log result regardless
+         10. Return log dict
+        """
+        db = get_supabase()
+
+        # 1. Fetch live spot rates
+        spot_rates_raw = await self.rate_fetcher.fetch_active_rates()
+
+        if not spot_rates_raw:
+            return await self._log(db, smart_account_address, "skipped",
+                                   reason="No spot rates available")
+
+        # 2. Validate with TWAP + DefiLlama + velocity check
+        spot_rates = {pid: rate.apy for pid, rate in spot_rates_raw.items()}
+        validated_rates = await self.rate_validator.validate_all(spot_rates)
+        if validated_rates is None:
+            return await self._log(db, smart_account_address, "skipped",
+                                   reason="Rate validation failed (sanity/velocity/DefiLlama)")
+
+        # Rebuild ProtocolRate-like mapping with TWAP-smoothed APYs
+        twap_rates = {}
+        for pid, twap_apy in validated_rates.items():
+            if pid in spot_rates_raw:
+                from app.services.protocols.base import ProtocolRate
+                orig = spot_rates_raw[pid]
+                twap_rates[pid] = ProtocolRate(
+                    protocol_id=pid,
+                    apy=twap_apy,
+                    tvl_usd=orig.tvl_usd,
+                    utilization_rate=orig.utilization_rate,
+                    fetched_at=orig.fetched_at,
+                )
+
+        if not twap_rates:
+            return await self._log(db, smart_account_address, "skipped",
+                                   reason="No validated TWAP rates available")
+
+        # 3. Compute risk scores
+        protocol_inputs: list[ProtocolInput] = []
+        for pid, rate in twap_rates.items():
+            risk = self.risk_scorer.compute_risk_score(
+                pid,
+                utilization_rate=(
+                    float(rate.utilization_rate)
+                    if rate.utilization_rate is not None
+                    else None
+                ),
+                protocol_apy=rate.apy,
+            )
+            protocol_inputs.append(
+                ProtocolInput(
+                    protocol_id=pid,
+                    apy=rate.apy,
+                    risk_score=risk,
+                )
+            )
+
+        # 4. Get current allocations from DB
+        alloc_rows = (
+            db.table("allocations")
+            .select("protocol_id, amount_usd")
+            .eq("account_address", smart_account_address.lower())
+            .execute()
+        )
+        current: dict[str, Decimal] = {}
+        total_usd = Decimal("0")
+        for row in alloc_rows.data:
+            amt = Decimal(str(row["amount_usd"]))
+            current[row["protocol_id"]] = amt
+            total_usd += amt
+
+        if total_usd <= 0:
+            return await self._log(db, smart_account_address, "skipped",
+                                   reason="No deposited balance")
+
+        # 5. Run MILP solver
+        inp = OptimizerInput(
+            total_amount_usd=total_usd,
+            protocols=protocol_inputs,
+            current_allocations=current,
+        )
+        result = solve(inp)
+
+        # 6. Check rebalance gate
+        if not result.is_rebalance_needed:
+            return await self._log(
+                db, smart_account_address, "skipped",
+                reason="Rebalance not worth it",
+                proposed=result.allocations,
+            )
+
+        # 7. Check time since last rebalance
+        last = (
+            db.table("rebalance_logs")
+            .select("created_at")
+            .eq("account_address", smart_account_address.lower())
+            .eq("status", "executed")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if last.data:
+            last_ts = datetime.fromisoformat(last.data[0]["created_at"])
+            min_gap = timedelta(hours=self.settings.MIN_REBALANCE_INTERVAL_HOURS)
+            if datetime.now(timezone.utc) - last_ts < min_gap:
+                return await self._log(
+                    db, smart_account_address, "skipped",
+                    reason=f"Last rebalance too recent ({last_ts.isoformat()})",
+                    proposed=result.allocations,
+                )
+
+        # 7b. Apply max move cap (30% of total per single rebalance)
+        current_dec = current
+        proposed_dec = result.allocations
+        capped = apply_max_move_cap(current_dec, proposed_dec, total_usd)
+
+        # 8. Execute
+        try:
+            tx_hash = await self.execute_rebalance(
+                account_id=account_id,
+                smart_account_address=smart_account_address,
+                target_allocations=capped,
+            )
+        except Exception as exc:
+            logger.exception("Rebalance execution failed for %s", smart_account_address)
+            return await self._log(db, smart_account_address, "failed",
+                                   reason=str(exc),
+                                   proposed=result.allocations)
+
+        if tx_hash is None:
+            return await self._log(db, smart_account_address, "skipped",
+                                   reason="No concrete moves generated",
+                                   proposed=result.allocations)
+
+        # 9. Log success
+        return await self._log(
+            db, smart_account_address, "executed",
+            proposed=result.allocations,
+            tx_hash=tx_hash,
+            apr_improvement=result.expected_apy - compute_weighted_apy(
+                current,
+                {p.protocol_id: p.apy for p in protocol_inputs},
+            ),
+        )
+
+    # ── Get current allocations (DB + on-chain verification) ────────
+
+    async def _get_current_allocations(
+        self,
+        account_id: str,
+        smart_account_address: str,
+    ) -> dict[str, Decimal]:
+        """Read allocations from DB, cross-check with on-chain balances."""
+        db = get_supabase()
+        alloc_rows = (
+            db.table("allocations")
+            .select("protocol_id, amount_usd")
+            .eq("account_address", smart_account_address.lower())
+            .execute()
+        )
+        current: dict[str, Decimal] = {}
+        for row in alloc_rows.data:
+            current[row["protocol_id"]] = Decimal(str(row["amount_usd"]))
+
+        # On-chain verification: read actual balances and prefer them
+        usdc = self.settings.USDC_ADDRESS
+        for pid in list(current.keys()):
+            try:
+                adapter = get_adapter(pid)
+                balance_wei = await adapter.get_user_balance(
+                    smart_account_address, usdc,
+                )
+                # Convert to USD (USDC = 6 decimals)
+                balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                if abs(balance_usd - current[pid]) > Decimal("1"):
+                    logger.warning(
+                        "Balance mismatch for %s/%s: DB=%s, on-chain=%s — using on-chain",
+                        smart_account_address, pid, current[pid], balance_usd,
+                    )
+                    current[pid] = balance_usd
+            except Exception as exc:
+                logger.warning("On-chain balance check failed for %s: %s", pid, exc)
+
+        return current
+
+    # ── Execute rebalance ───────────────────────────────────────────
+
+    async def execute_rebalance(
+        self,
+        account_id: str,
+        smart_account_address: str,
+        target_allocations: dict[str, Decimal],
+    ) -> str | None:
+        """
+        Execute a full rebalance:
+          1. Get current allocations (DB + on-chain balance check)
+          2. Compute withdrawals/deposits from deltas
+          3. Build protocol-specific calldata (Benqi qiTokens, Aave MAX_UINT, etc.)
+          4. Order: withdrawals FIRST, registry logs, deposits SECOND
+          5. Sign with session key, batch into single UserOp, submit
+          6. Update allocations in DB
+        Returns tx_hash, or None if nothing to do.
+        """
+        db = get_supabase()
+
+        # Step 1: Get current allocations
+        current = await self._get_current_allocations(account_id, smart_account_address)
+
+        # Step 2: Compute what needs to happen
+        withdrawals: list[tuple[str, Decimal]] = []  # (protocol_id, usd_amount)
+        deposits: list[tuple[str, Decimal]] = []
+
+        for protocol_id, target_usd in target_allocations.items():
+            current_usd = current.get(protocol_id, Decimal("0"))
+            delta = target_usd - current_usd
+            if delta < Decimal("-1"):
+                withdrawals.append((protocol_id, abs(delta)))
+            elif delta > Decimal("1"):
+                deposits.append((protocol_id, delta))
+
+        # Check for protocols being fully exited (in current but not in target)
+        for protocol_id, current_usd in current.items():
+            if protocol_id not in target_allocations and current_usd > Decimal("1"):
+                withdrawals.append((protocol_id, current_usd))
+
+        if not withdrawals and not deposits:
+            return None
+
+        usdc = self.settings.USDC_ADDRESS
+        calls: list[dict] = []
+
+        # Step 3a: WITHDRAWALS FIRST (ensure funds are available)
+        for protocol_id, amount_usd in withdrawals:
+            adapter = get_adapter(protocol_id)
+            amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
+
+            if protocol_id == "benqi":
+                # Benqi: convert USDC amount to qiToken units, then redeem
+                qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
+                calldata = adapter.build_withdraw_calldata(usdc, qi_amount, smart_account_address)
+            elif protocol_id == "aave_v3":
+                # Aave: use MAX_UINT for full exit, exact amount otherwise
+                is_full_exit = abs(current.get(protocol_id, Decimal("0")) - amount_usd) < Decimal("1")
+                amt = MAX_UINT256 if is_full_exit else amount_wei
+                calldata = adapter.build_withdraw_calldata(usdc, amt, smart_account_address)
+            else:
+                # Euler / generic: pass amount directly
+                calldata = adapter.build_withdraw_calldata(usdc, amount_wei, smart_account_address)
+
+            calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
+
+        # Step 3b: REGISTRY LOGS (between withdrawals and deposits)
+        for w_pid, w_amount in withdrawals:
+            from_addr = self._protocol_addresses.get(w_pid, "")
+            if not from_addr:
+                continue
+            w_wei = int(Decimal(str(w_amount)) * Decimal("1e6"))
+            for d_pid, _ in deposits:
+                to_addr = self._protocol_addresses.get(d_pid, "")
+                if not to_addr:
+                    continue
+                log_call = self._encode_registry_log(from_addr, to_addr, w_wei)
+                calls.append(log_call)
+
+        # Step 3c: DEPOSITS SECOND
+        for protocol_id, amount_usd in deposits:
+            adapter = get_adapter(protocol_id)
+            amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
+
+            # All adapters use the same build_supply_calldata interface:
+            #   Benqi → mint(uint256)  |  Aave → supply(asset,amount,onBehalfOf,0)
+            #   Euler → deposit(assets,receiver)
+            calldata = adapter.build_supply_calldata(usdc, amount_wei, smart_account_address)
+            calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
+
+        # Step 4: Get session key and build batched UserOp
+        session_key = get_active_session_key(db, UUID(account_id))
+        if not session_key:
+            raise ValueError(f"No active session key for account {account_id}")
+
+        tx_hash = await self.userop_builder.build_and_send_userop(
+            smart_account_address=smart_account_address,
+            calls=calls,
+            session_key_hex=session_key,
+        )
+
+        # Step 5: Update allocations in DB
+        await self._update_allocations_db(
+            db, smart_account_address, target_allocations,
+        )
+
+        return tx_hash
+
+    # ── Emergency withdrawal ────────────────────────────────────────
+
+    async def execute_emergency_withdrawal(
+        self,
+        account_id: str,
+        smart_account_address: str,
+    ) -> str:
+        """
+        Emergency: withdraw ALL positions across every protocol in a single tx.
+        Revokes session keys after execution.
+
+        - Backend path: revoke + withdraw all in one tx if possible.
+        - Frontend path: user can do this directly via their EOA (MetaMask).
+        """
+        db = get_supabase()
+        current = await self._get_current_allocations(account_id, smart_account_address)
+        usdc = self.settings.USDC_ADDRESS
+        calls: list[dict] = []
+
+        for protocol_id, amount_usd in current.items():
+            if amount_usd < Decimal("1"):
+                continue
+            adapter = get_adapter(protocol_id)
+
+            if protocol_id == "benqi":
+                # Get actual qiToken balance (more accurate than estimated)
+                qi_balance = await adapter.pool.functions.balanceOf(
+                    self.w3.to_checksum_address(smart_account_address)
+                ).call()
+                calldata = adapter.build_withdraw_calldata(usdc, qi_balance, smart_account_address)
+
+            elif protocol_id == "aave_v3":
+                # Aave: use MAX_UINT for full withdrawal
+                calldata = adapter.build_withdraw_calldata(usdc, MAX_UINT256, smart_account_address)
+
+            elif protocol_id == "euler_v2":
+                # Euler: get share balance and redeem all
+                balance_wei = await adapter.get_user_balance(smart_account_address, usdc)
+                calldata = adapter.build_withdraw_calldata(usdc, balance_wei, smart_account_address)
+
+            else:
+                amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
+                calldata = adapter.build_withdraw_calldata(usdc, amount_wei, smart_account_address)
+
+            calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
+
+        if not calls:
+            raise ValueError("No positions to withdraw")
+
+        session_key = get_active_session_key(db, UUID(account_id))
+        if not session_key:
+            raise ValueError(f"No active session key for account {account_id}")
+
+        tx_hash = await self.userop_builder.build_and_send_userop(
+            smart_account_address=smart_account_address,
+            calls=calls,
+            session_key_hex=session_key,
+        )
+
+        # Revoke session keys + mark account inactive
+        revoke_session_key(db, UUID(account_id))
+        db.table("accounts").update(
+            {"is_active": False}
+        ).eq("id", account_id).execute()
+
+        # Clear allocations
+        db.table("allocations").delete().eq(
+            "account_address", smart_account_address.lower()
+        ).execute()
+
+        logger.info(
+            "Emergency withdrawal executed for %s: tx=%s",
+            smart_account_address, tx_hash,
+        )
+        return tx_hash
+
+    # ── Registry log encoding ───────────────────────────────────────
+
+    def _encode_registry_log(
+        self,
+        from_protocol_address: str,
+        to_protocol_address: str,
+        amount_wei: int,
+    ) -> dict:
+        """Encode a logRebalance call for the SnowMindRegistry contract."""
+        registry = Web3().eth.contract(abi=REGISTRY_ABI)
+        log_calldata = registry.encode_abi(
+            "logRebalance",
+            args=[
+                Web3.to_checksum_address(from_protocol_address),
+                Web3.to_checksum_address(to_protocol_address),
+                amount_wei,
+            ],
+        )
+        return {
+            "to": self.settings.REGISTRY_CONTRACT_ADDRESS,
+            "data": log_calldata,
+            "value": 0,
+        }
+
+    # ── DB helpers ──────────────────────────────────────────────────
+
+    async def _update_allocations_db(
+        self,
+        db,
+        smart_account_address: str,
+        target_allocations: dict[str, Decimal],
+    ) -> None:
+        """Upsert allocation rows to reflect the new target state."""
+        addr = smart_account_address.lower()
+
+        # Delete old rows and insert fresh ones
+        db.table("allocations").delete().eq("account_address", addr).execute()
+
+        rows = [
+            {
+                "account_address": addr,
+                "protocol_id": pid,
+                "amount_usd": str(amt.quantize(Decimal("0.01"))),
+            }
+            for pid, amt in target_allocations.items()
+            if amt > Decimal("1")
+        ]
+        if rows:
+            db.table("allocations").insert(rows).execute()
+
+    async def _log(
+        self,
+        db,
+        account_address: str,
+        status: str,
+        reason: str | None = None,
+        proposed: dict | None = None,
+        tx_hash: str | None = None,
+        apr_improvement: Decimal | None = None,
+    ) -> dict:
+        row = {
+            "account_address": account_address.lower(),
+            "status": status,
+            "skip_reason": reason,
+            "proposed_allocations": (
+                {k: str(v) for k, v in proposed.items()} if proposed else None
+            ),
+            "tx_hash": tx_hash,
+            "apr_improvement": str(apr_improvement) if apr_improvement is not None else None,
+        }
+        try:
+            db.table("rebalance_logs").insert(row).execute()
+        except Exception as exc:
+            logger.warning("Failed to log rebalance: %s", exc)
+        logger.info(
+            "Rebalance %s for %s: %s",
+            status, account_address, reason or tx_hash or "OK",
+        )
+        return row

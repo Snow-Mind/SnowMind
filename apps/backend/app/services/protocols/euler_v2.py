@@ -1,0 +1,149 @@
+"""Euler V2 adapter — ERC-4626 vault interface (Coming Soon on Avalanche)."""
+
+from __future__ import annotations
+
+import time
+from decimal import Decimal
+
+from web3 import AsyncWeb3, AsyncHTTPProvider
+
+from app.core.config import get_settings
+from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata
+
+# ── ERC-4626 + MockEulerVault ABI ────────────────────────────────────────────
+EULER_V2_ABI = [
+    {
+        "name": "deposit",
+        "type": "function",
+        "inputs": [
+            {"name": "assets", "type": "uint256"},
+            {"name": "receiver", "type": "address"},
+        ],
+        "outputs": [{"name": "shares", "type": "uint256"}],
+        "stateMutability": "nonpayable",
+    },
+    {
+        "name": "redeem",
+        "type": "function",
+        "inputs": [
+            {"name": "shares", "type": "uint256"},
+            {"name": "receiver", "type": "address"},
+            {"name": "owner", "type": "address"},
+        ],
+        "outputs": [{"name": "assets", "type": "uint256"}],
+        "stateMutability": "nonpayable",
+    },
+    {
+        "name": "convertToAssets",
+        "type": "function",
+        "inputs": [{"name": "shares", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "totalAssets",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "interestRatePerSecond",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+]
+
+SECONDS_PER_YEAR = Decimal("31557600")
+MANTISSA = Decimal("1e18")
+
+
+class EulerV2Adapter(BaseProtocolAdapter):
+    protocol_id = "euler_v2"
+    name = "Euler V2"
+    BASE_RISK_SCORE = 5.0  # "Euler v2: 5 (newer, add with caution)"
+    is_active = False       # Coming soon — not included in MILP for MVP
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        self.w3 = AsyncWeb3(AsyncHTTPProvider(settings.AVALANCHE_RPC_URL))
+        self.vault_address: str | None = (
+            settings.EULER_VAULT if settings.IS_TESTNET else None
+        )
+        self.vault = None
+        if self.vault_address:
+            self.vault = self.w3.eth.contract(
+                address=self.w3.to_checksum_address(self.vault_address),
+                abi=EULER_V2_ABI,
+            )
+
+    # ── Rate reading ──────────────────────────────────────────────────────────
+
+    async def get_rate(self) -> ProtocolRate:
+        if not self.vault:
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=Decimal("0"),
+                tvl_usd=Decimal("0"),
+                utilization_rate=None,
+                fetched_at=time.time(),
+            )
+
+        rate_per_sec_raw = await self.vault.functions.interestRatePerSecond().call()
+        rate_per_sec = Decimal(str(rate_per_sec_raw)) / MANTISSA
+        apy = (1 + rate_per_sec) ** SECONDS_PER_YEAR - 1
+
+        total_assets_raw = await self.vault.functions.totalAssets().call()
+        tvl = Decimal(str(total_assets_raw)) / Decimal("1e6")  # USDC 6 decimals
+
+        return ProtocolRate(
+            protocol_id=self.protocol_id,
+            apy=apy,
+            tvl_usd=tvl,
+            utilization_rate=None,
+            fetched_at=time.time(),
+        )
+
+    # ── Calldata builders ─────────────────────────────────────────────────────
+
+    def build_supply_calldata(
+        self, asset: str, amount: int, on_behalf_of: str
+    ) -> TransactionCalldata:
+        """ERC-4626: deposit(uint256 assets, address receiver)"""
+        if not self.vault:
+            raise RuntimeError("Euler V2 vault not configured")
+        data = self.vault.encode_abi(
+            "deposit",
+            args=[amount, self.w3.to_checksum_address(on_behalf_of)],
+        )
+        return TransactionCalldata(to=self.vault_address, data=data, value=0)
+
+    def build_withdraw_calldata(
+        self, asset: str, amount: int, to: str
+    ) -> TransactionCalldata:
+        """ERC-4626: redeem(uint256 shares, address receiver, address owner)"""
+        if not self.vault:
+            raise RuntimeError("Euler V2 vault not configured")
+        to_addr = self.w3.to_checksum_address(to)
+        data = self.vault.encode_abi("redeem", args=[amount, to_addr, to_addr])
+        return TransactionCalldata(to=self.vault_address, data=data, value=0)
+
+    # ── Balance ───────────────────────────────────────────────────────────────
+
+    async def get_user_balance(self, user_address: str, asset: str) -> int:
+        """Returns underlying USDC amount by converting shares → assets."""
+        if not self.vault:
+            return 0
+        shares = await self.vault.functions.balanceOf(
+            self.w3.to_checksum_address(user_address)
+        ).call()
+        return await self.vault.functions.convertToAssets(shares).call()

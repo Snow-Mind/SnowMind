@@ -1,0 +1,511 @@
+/* ── Fonts ───────────────────────────────────────────────── */
+@import url('https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Tailwind v4 ─────────────────────────────────────────── */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── Theme (Tailwind v4 CSS-first config) ────────────────── */
+@theme inline {
+  /* shadcn required mappings */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Radius */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+
+  /* SnowMind Colors → `bg-void`, `text-glacier`, etc. */
+  --color-void: var(--void);
+  --color-void-2: var(--void-2);
+  --color-glacier: var(--glacier);
+  --color-glacier-dim: var(--glacier-dim);
+  --color-arctic: var(--arctic);
+  --color-frost: var(--frost);
+  --color-frost-dim: var(--frost-dim);
+  --color-mint: var(--mint);
+  --color-crimson: var(--crimson);
+  --color-amber: var(--amber);
+
+  /* SnowMind Fonts → `font-display`, `font-body`, `font-mono` */
+  --font-sans: 'DM Sans', sans-serif;
+  --font-display: 'Clash Display', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* SnowMind Shadows → `shadow-glow-sm`, etc. */
+  --shadow-glow-sm: 0 0 20px rgba(0, 196, 255, 0.10);
+  --shadow-glow-md: 0 0 40px rgba(0, 196, 255, 0.15);
+  --shadow-glow-lg: 0 0 80px rgba(0, 196, 255, 0.25);
+
+  /* SnowMind Animations → `animate-snow-fall`, etc. */
+  --animate-snow-fall: snow-fall 20s linear infinite;
+  --animate-crystal-pulse: crystal-pulse 3s ease-in-out infinite;
+  --animate-aurora-shift: aurora-shift 8s ease-in-out infinite;
+  --animate-shimmer: shimmer 2s ease-in-out infinite;
+  --animate-count-up: count-up 0.6s ease-out;
+}
+
+/* ── Design Tokens (dark-first — :root IS the dark palette) ── */
+:root {
+  --radius: 0.625rem;
+
+  /* shadcn semantic vars → SnowMind palette */
+  --background: #050A14;
+  --foreground: #E8F4FF;
+  --card: #090F1E;
+  --card-foreground: #E8F4FF;
+  --popover: #0D1529;
+  --popover-foreground: #E8F4FF;
+  --primary: #00C4FF;
+  --primary-foreground: #050A14;
+  --secondary: #0D1529;
+  --secondary-foreground: #E8F4FF;
+  --muted: #0D1529;
+  --muted-foreground: #8899AA;
+  --accent: rgba(0, 196, 255, 0.08);
+  --accent-foreground: #E8F4FF;
+  --destructive: #FF4444;
+  --border: rgba(0, 196, 255, 0.12);
+  --input: rgba(0, 196, 255, 0.15);
+  --ring: #00C4FF;
+  --chart-1: #00C4FF;
+  --chart-2: #7C3AED;
+  --chart-3: #00FF88;
+  --chart-4: #F59E0B;
+  --chart-5: #FF4444;
+  --sidebar: #090F1E;
+  --sidebar-foreground: #E8F4FF;
+  --sidebar-primary: #00C4FF;
+  --sidebar-primary-foreground: #050A14;
+  --sidebar-accent: rgba(0, 196, 255, 0.08);
+  --sidebar-accent-foreground: #E8F4FF;
+  --sidebar-border: rgba(0, 196, 255, 0.12);
+  --sidebar-ring: #00C4FF;
+
+  /* SnowMind core tokens */
+  --void: #050A14;
+  --void-2: #090F1E;
+  --glacier: #00C4FF;
+  --glacier-dim: #0099CC;
+  --arctic: #E8F4FF;
+  --frost: #7C3AED;
+  --frost-dim: #6D28D9;
+  --mint: #00FF88;
+  --crimson: #FF4444;
+  --amber: #F59E0B;
+  --ice-card: rgba(232, 244, 255, 0.04);
+  --ice-card-hover: rgba(0, 196, 255, 0.06);
+  --border-frost: rgba(0, 196, 255, 0.12);
+  --border-frost-hover: rgba(0, 196, 255, 0.30);
+  --glow-glacier: 0 0 40px rgba(0, 196, 255, 0.15);
+  --glow-glacier-strong: 0 0 80px rgba(0, 196, 255, 0.25);
+}
+
+/* .dark mirrors :root for shadcn compat */
+.dark {
+  --background: #050A14;
+  --foreground: #E8F4FF;
+  --card: #090F1E;
+  --card-foreground: #E8F4FF;
+  --popover: #0D1529;
+  --popover-foreground: #E8F4FF;
+  --primary: #00C4FF;
+  --primary-foreground: #050A14;
+  --secondary: #0D1529;
+  --secondary-foreground: #E8F4FF;
+  --muted: #0D1529;
+  --muted-foreground: #8899AA;
+  --accent: rgba(0, 196, 255, 0.08);
+  --accent-foreground: #E8F4FF;
+  --destructive: #FF4444;
+  --border: rgba(0, 196, 255, 0.12);
+  --input: rgba(0, 196, 255, 0.15);
+  --ring: #00C4FF;
+  --chart-1: #00C4FF;
+  --chart-2: #7C3AED;
+  --chart-3: #00FF88;
+  --chart-4: #F59E0B;
+  --chart-5: #FF4444;
+  --sidebar: #090F1E;
+  --sidebar-foreground: #E8F4FF;
+  --sidebar-primary: #00C4FF;
+  --sidebar-primary-foreground: #050A14;
+  --sidebar-accent: rgba(0, 196, 255, 0.08);
+  --sidebar-accent-foreground: #E8F4FF;
+  --sidebar-border: rgba(0, 196, 255, 0.12);
+  --sidebar-ring: #00C4FF;
+}
+
+/* ── Base ─────────────────────────────────────────────────── */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    background-color: var(--void);
+    color: var(--arctic);
+    font-family: var(--font-body);
+  }
+}
+
+/* ── SnowMind Utility Classes ────────────────────────────── */
+.crystal-card {
+  background: rgba(232, 244, 255, 0.03);
+  border: 1px solid rgba(0, 196, 255, 0.08);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 0.875rem;
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.crystal-card:hover {
+  background: rgba(0, 196, 255, 0.04);
+  border-color: rgba(0, 196, 255, 0.18);
+  box-shadow: 0 0 32px rgba(0, 196, 255, 0.06), 0 8px 32px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+}
+
+/* Noise texture overlay for depth */
+.noise-overlay {
+  position: relative;
+}
+.noise-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+/* Dot grid pattern for sections */
+.dot-grid {
+  background-image: radial-gradient(rgba(0, 196, 255, 0.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Subtle animated gradient mesh */
+.gradient-mesh {
+  background:
+    radial-gradient(ellipse 50% 50% at 20% 30%, rgba(0, 196, 255, 0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 60% at 80% 60%, rgba(124, 58, 237, 0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 40% at 50% 80%, rgba(0, 255, 136, 0.02) 0%, transparent 70%);
+}
+
+.glacier-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: var(--glacier);
+  color: var(--void);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  padding: 0.625rem 1.5rem;
+  border-radius: 0.625rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 0 1px rgba(0, 196, 255, 0.2), 0 1px 3px rgba(0, 0, 0, 0.2);
+  letter-spacing: -0.01em;
+}
+.glacier-btn:hover {
+  background: #1ad0ff;
+  box-shadow: 0 0 0 1px rgba(0, 196, 255, 0.4), 0 0 24px rgba(0, 196, 255, 0.2), 0 4px 16px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px);
+}
+.glacier-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 0 0 1px rgba(0, 196, 255, 0.2), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(232, 244, 255, 0.03);
+  border: 1px solid rgba(232, 244, 255, 0.10);
+  color: var(--arctic);
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.8125rem;
+  padding: 0.625rem 1.5rem;
+  border-radius: 0.625rem;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: -0.01em;
+}
+.ghost-btn:hover {
+  background: rgba(232, 244, 255, 0.06);
+  border-color: rgba(232, 244, 255, 0.20);
+  transform: translateY(-1px);
+}
+
+.metric-value {
+  font-family: var(--font-mono);
+  color: var(--glacier);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: rgba(0, 196, 255, 0.5);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #d0f0ff 0%, var(--glacier) 50%, #80d4ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Large hero gradient — more dramatic */
+.gradient-text-hero {
+  background: linear-gradient(135deg, #ffffff 0%, #b0e8ff 30%, var(--glacier) 60%, #7C3AED 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Highlight chip / badge */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  border-radius: 9999px;
+  border: 1px solid rgba(0, 196, 255, 0.15);
+  background: rgba(0, 196, 255, 0.06);
+  color: var(--glacier);
+}
+
+/* Atmospheric section overlays */
+.atmosphere-mist {
+  position: relative;
+}
+.atmosphere-mist::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(0, 196, 255, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 20% 50%, rgba(124, 58, 237, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 50%, rgba(0, 196, 255, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+.atmosphere-mist > * {
+  position: relative;
+  z-index: 1;
+}
+
+.atmosphere-aurora {
+  position: relative;
+}
+.atmosphere-aurora::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 100% 60% at 50% -10%, rgba(0, 196, 255, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 50% at 0% 50%, rgba(124, 58, 237, 0.04) 0%, transparent 40%),
+    radial-gradient(ellipse 50% 50% at 100% 50%, rgba(0, 196, 255, 0.04) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 0;
+}
+.atmosphere-aurora > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Mountain-themed section divider — soft glacier glow line */
+.ridge-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(0,196,255,0.2) 30%, rgba(0,196,255,0.35) 50%, rgba(0,196,255,0.2) 70%, transparent 100%);
+  border: none;
+  margin: 0;
+}
+
+/* Frost glass overlay — heavier backdrop for sections over mountain */
+.frost-glass {
+  background: rgba(5, 10, 20, 0.6);
+  backdrop-filter: blur(32px) saturate(120%);
+  -webkit-backdrop-filter: blur(32px) saturate(120%);
+  border: 1px solid rgba(0, 196, 255, 0.08);
+}
+
+/* ── Keyframe Animations ─────────────────────────────────── */
+@keyframes snow-fall {
+  0% {
+    transform: translateY(0) translateX(0);
+    opacity: 1;
+  }
+  25% {
+    transform: translateY(-25vh) translateX(10px);
+  }
+  50% {
+    transform: translateY(-50vh) translateX(-5px);
+    opacity: 0.6;
+  }
+  75% {
+    transform: translateY(-75vh) translateX(8px);
+  }
+  100% {
+    transform: translateY(-100vh) translateX(0);
+    opacity: 0;
+  }
+}
+
+@keyframes crystal-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 0.85;
+  }
+}
+
+@keyframes aurora-shift {
+  0%, 100% {
+    filter: hue-rotate(0deg);
+  }
+  50% {
+    filter: hue-rotate(30deg);
+  }
+}
+
+@keyframes count-up {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* ── Hero Orbit Animation ─────────────────────────────────── */
+@keyframes orbit {
+  0%   { transform: rotate(0deg) translateX(var(--orbit-radius)) rotate(0deg); }
+  100% { transform: rotate(360deg) translateX(var(--orbit-radius)) rotate(-360deg); }
+}
+.orbit-card {
+  animation: orbit var(--orbit-duration, 20s) linear infinite;
+}
+
+/* Data flow line animation */
+@keyframes dash-flow {
+  0%   { stroke-dashoffset: 40; }
+  100% { stroke-dashoffset: 0; }
+}
+
+/* CTA aurora gradient */
+.aurora-gradient {
+  background: linear-gradient(
+    135deg,
+    rgba(0, 196, 255, 0.15) 0%,
+    rgba(124, 58, 237, 0.12) 35%,
+    rgba(0, 196, 255, 0.10) 65%,
+    rgba(124, 58, 237, 0.08) 100%
+  );
+  background-size: 400% 400%;
+  animation: aurora-bg-shift 8s ease-in-out infinite;
+}
+@keyframes aurora-bg-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 196, 255, 0.15);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 196, 255, 0.3);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 196, 255, 0.15) transparent;
+}
+
+/* ── Selection ────────────────────────────────────────────── */
+::selection {
+  background: rgba(0, 196, 255, 0.2);
+  color: #E8F4FF;
+}
+
+/* ── Focus rings ──────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid rgba(0, 196, 255, 0.4);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

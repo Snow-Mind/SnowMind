@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Next.js
+.next/
+out/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+.pytest_cache/
+
+# Build outputs
+dist/
+
+# Turbo
+.turbo/
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+kernel-smart-account-architecture.md
+snow-mind-technical-spec.txt
+snowmind-deep-dive.md
+temp.md
+link.md
+
+# Foundry cache/broadcast
+contracts/cache/
+contracts/broadcast/
