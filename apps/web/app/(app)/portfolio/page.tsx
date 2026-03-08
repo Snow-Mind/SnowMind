@@ -22,16 +22,16 @@ import type { ProtocolAllocation } from "@snowmind/shared-types";
 function derivePositions(allocations: ProtocolAllocation[]) {
   return allocations.map((a) => {
     const meta = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
-    const deposited = Number(a.amountUsd) / 1e6;
-    const yieldEarned = deposited * a.apy * (15 / 365); // estimated ~15 days
+    const deposited = Number(a.amountUsdc);
+    const yieldEarned = deposited * a.currentApy * (15 / 365); // estimated ~15 days
     return {
-      protocol: meta?.name ?? a.protocolId,
+      protocol: a.name || meta?.name || a.protocolId,
       token: a.protocolId === "benqi" ? "qiUSDC" : "aUSDC",
       deposited,
       currentValue: deposited + yieldEarned,
       yield: yieldEarned,
-      apy: a.apy * 100,
-      allocation: a.percentage,
+      apy: a.currentApy * 100,
+      allocation: a.allocationPct * 100,
       color: meta?.color ?? "#8899AA",
     };
   });
@@ -61,12 +61,12 @@ export default function PortfolioPage() {
 
   const allocations = portfolio?.allocations ?? [];
   const positions = derivePositions(allocations);
-  const totalDeposited = portfolio ? Number(portfolio.totalDeposited) / 1e6 : 0;
-  const totalYield = portfolio ? Number(portfolio.totalYield) / 1e6 : 0;
+  const totalDeposited = portfolio ? Number(portfolio.totalDepositedUsd) : 0;
+  const totalYield = portfolio ? Number(portfolio.totalYieldUsd) : 0;
   const totalValue = positions.reduce((s, p) => s + p.currentValue, 0);
 
   const blendedApy =
-    allocations.reduce((s, a) => s + a.apy * (a.percentage / 100), 0) * 100;
+    allocations.reduce((s, a) => s + a.currentApy * a.allocationPct, 0) * 100;
 
   // Build APY comparison from live rates
   const apyComparison = ratesData

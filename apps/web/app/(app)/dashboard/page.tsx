@@ -25,7 +25,7 @@ import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
-import { useRebalanceHistory } from "@/hooks/useRebalanceHistory";
+import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
@@ -33,14 +33,14 @@ import { EXPLORER } from "@/lib/constants";
 import type { Portfolio } from "@snowmind/shared-types";
 
 function deriveOverviewStats(p: Portfolio) {
-  const totalDep = Number(p.totalDeposited) / 1e6;
-  const totalYld = Number(p.totalYield) / 1e6;
+  const totalDep = Number(p.totalDepositedUsd);
+  const totalYld = Number(p.totalYieldUsd);
   const blendedApy =
-    p.allocations.reduce((s, a) => s + a.apy * (a.percentage / 100), 0) * 100;
+    p.allocations.reduce((s, a) => s + a.currentApy * a.allocationPct, 0) * 100;
 
-  const hoursAgo = p.lastRebalance
+  const hoursAgo = p.lastRebalanceAt
     ? Math.floor(
-        (Date.now() - new Date(p.lastRebalance).getTime()) / (1000 * 60 * 60),
+        (Date.now() - new Date(p.lastRebalanceAt).getTime()) / (1000 * 60 * 60),
       )
     : null;
 
@@ -176,6 +176,10 @@ export default function DashboardPage() {
   const {
     data: rebalanceData,
     isLoading: rebalanceLoading,
+  } = useRebalanceStatus(address);
+
+  const {
+    data: historyData,
   } = useRebalanceHistory(address);
 
   // Subscribe to realtime rebalance events
@@ -264,8 +268,8 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
-        {portfolio?.lastRebalance && (
-          <RebalanceCountdown lastRebalance={portfolio.lastRebalance} />
+        {portfolio?.lastRebalanceAt && (
+          <RebalanceCountdown lastRebalance={portfolio.lastRebalanceAt} />
         )}
       </div>
 
@@ -307,13 +311,13 @@ export default function DashboardPage() {
       {/* Live Tx Feed + Allocation */}
       <div className="grid gap-4 lg:grid-cols-5">
         <div className="lg:col-span-2">
-          <LiveTxFeed history={rebalanceData?.history ?? []} />
+          <LiveTxFeed history={historyData?.logs ?? []} />
         </div>
         <div className="lg:col-span-3">
           <ErrorBoundary name="allocation-chart">
             <AllocationChart
               allocations={portfolio?.allocations ?? []}
-              totalDeposited={portfolio ? Number(portfolio.totalDeposited) / 1e6 : 0}
+              totalDeposited={portfolio ? Number(portfolio.totalDepositedUsd) : 0}
             />
           </ErrorBoundary>
         </div>
@@ -321,8 +325,8 @@ export default function DashboardPage() {
 
       {/* Rebalance History */}
       <RebalanceHistory
-        history={rebalanceData?.history ?? []}
-        total={rebalanceData?.total ?? 0}
+        history={historyData?.logs ?? []}
+        total={historyData?.total ?? 0}
       />
 
       {/* Quick actions */}

@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.models.base import CamelModel
+
 ProtocolId = Literal["benqi", "aave_v3", "euler_v2"]
 
 
@@ -19,7 +21,7 @@ class AllocationRecord(BaseModel):
     apy_at_allocation: Decimal | None = None
 
 
-class AllocationResponse(BaseModel):
+class AllocationResponse(CamelModel):
     """Subset returned to the frontend."""
     protocol_id: str
     name: str
@@ -28,7 +30,7 @@ class AllocationResponse(BaseModel):
     current_apy: Decimal
 
 
-class PortfolioResponse(BaseModel):
+class PortfolioResponse(CamelModel):
     total_deposited_usd: Decimal
     total_yield_usd: Decimal
     allocations: list[AllocationResponse]

@@ -24,10 +24,10 @@ export default function AllocationChart({
   const data = allocations.map((a) => {
     const meta = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
     return {
-      name: meta?.name ?? a.protocolId,
-      value: a.percentage,
-      amountUsd: Number(a.amountUsd) / 1e6,
-      apy: a.apy * 100,
+      name: a.name || meta?.name || a.protocolId,
+      value: a.allocationPct * 100,
+      amountUsd: Number(a.amountUsdc),
+      apy: a.currentApy * 100,
       color: meta?.color ?? "#8899AA",
       riskScore: meta?.riskScore ?? 0,
     };

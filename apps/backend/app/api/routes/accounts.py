@@ -32,26 +32,37 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 # ── Request body ───────────────────────────────────────────
 
 class RegisterAccountRequest(BaseModel):
-    address: str = Field(..., description="Checksummed smart-account address")
-    owner_address: str = Field(..., description="Checksummed EOA owner")
+    # Accept BOTH camelCase (frontend) and snake_case (direct callers)
+    address: str | None = Field(None, alias="smartAccountAddress", description="Smart-account address")
+    owner_address: str | None = Field(None, alias="ownerAddress", description="EOA owner")
+
+    # Also allow snake_case direct fields
+    smart_account_address: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+    def resolved_address(self) -> str:
+        return self.address or self.smart_account_address or ""
+
+    def resolved_owner(self) -> str:
+        return self.owner_address or ""
+
     session_key_data: dict | None = Field(
         None,
+        alias="sessionKeyData",
         description="Optional session-key blob to encrypt & store",
     )
 
 
-# ── POST /accounts ────────────────────────────────────────
+# ── POST /accounts  AND  /accounts/register ───────────────
 
-@router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("30/minute")
-async def register_account(
-    request: Request,
+async def _do_register(
     req: RegisterAccountRequest,
-    db: Client = Depends(get_db),
-):
-    """Register a new smart account (and optionally store its session key)."""
-    address = validate_eth_address(req.address)
-    owner_address = validate_eth_address(req.owner_address)
+    db: Client,
+) -> AccountResponse:
+    """Shared implementation for both registration endpoints."""
+    address = validate_eth_address(req.resolved_address())
+    owner_address = validate_eth_address(req.resolved_owner())
     # Upsert: if account already exists, just return it
     result = (
         db.table("accounts")
@@ -80,6 +91,28 @@ async def register_account(
         is_active=account["is_active"],
         created_at=account["created_at"],
     )
+
+
+@router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")
+async def register_account(
+    request: Request,
+    req: RegisterAccountRequest,
+    db: Client = Depends(get_db),
+):
+    """Register a new smart account (and optionally store its session key)."""
+    return await _do_register(req, db)
+
+
+@router.post("/register", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")
+async def register_account_alias(
+    request: Request,
+    req: RegisterAccountRequest,
+    db: Client = Depends(get_db),
+):
+    """Alias of POST /accounts for frontend compatibility."""
+    return await _do_register(req, db)
 
 
 # ── GET /accounts/{address} ───────────────────────────────
@@ -139,16 +172,9 @@ async def get_account(
     )
 
 
-# ── DELETE /accounts/{address}/session-key ───────────────
+# ── DELETE / POST /accounts/{address}/session-key ────────
 
-@router.delete("/{address}/session-key")
-@limiter.limit("10/minute")
-async def revoke_account_session_key(
-    request: Request,
-    address: str,
-    db: Client = Depends(get_db),
-):
-    """Revoke (deactivate) the active session key for an account."""
+async def _do_revoke(address: str, db: Client) -> dict:
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
@@ -159,9 +185,30 @@ async def revoke_account_session_key(
     )
     if not acct.data:
         raise HTTPException(status_code=404, detail="Account not found")
-
     count = revoke_session_key(db, acct.data[0]["id"])
-    return {"revoked": count}
+    return {"revoked": count, "success": True}
+
+
+@router.delete("/{address}/session-key")
+@limiter.limit("10/minute")
+async def revoke_account_session_key(
+    request: Request,
+    address: str,
+    db: Client = Depends(get_db),
+):
+    """Revoke (deactivate) the active session key for an account."""
+    return await _do_revoke(address, db)
+
+
+@router.post("/{address}/session-key/revoke")
+@limiter.limit("10/minute")
+async def revoke_account_session_key_post(
+    request: Request,
+    address: str,
+    db: Client = Depends(get_db),
+):
+    """POST alias for session-key revocation (frontend compat)."""
+    return await _do_revoke(address, db)
 
 
 # ── PUT /accounts/{address}/risk-profile ─────────────────
@@ -201,6 +248,6 @@ async def update_risk_profile(
     ).eq("id", acct.data[0]["id"]).execute()
 
     return {
-        "risk_tolerance": req.risk_tolerance,
-        "lambda_value": LAMBDA_MAP[req.risk_tolerance],
+        "riskTolerance": req.risk_tolerance,
+        "lambdaValue": LAMBDA_MAP[req.risk_tolerance],
     }

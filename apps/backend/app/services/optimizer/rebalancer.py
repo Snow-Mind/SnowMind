@@ -1,4 +1,4 @@
-"""Cost-aware rebalance orchestrator — full pipeline from rates to on-chain execution.
+﻿"""Cost-aware rebalance orchestrator â€” full pipeline from rates to on-chain execution.
 
 Transaction ordering: withdrawals FIRST, then deposits (ensure funds are available).
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger("snowmind")
 
 MAX_UINT256 = 2**256 - 1
 
-# ── Registry ABI (logRebalance on SnowMindRegistry) ────────────────
+# â”€â”€ Registry ABI (logRebalance on SnowMindRegistry) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 REGISTRY_ABI = [
     {
         "name": "logRebalance",
@@ -67,7 +67,7 @@ class Rebalancer:
             "euler_v2": self.settings.EULER_VAULT,
         }
 
-    # ── Full pipeline (cron entry-point) ────────────────────────────
+    # â”€â”€ Full pipeline (cron entry-point) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def check_and_rebalance(
         self,
@@ -77,13 +77,13 @@ class Rebalancer:
         """
         Full pipeline:
           1. Fetch TWAP rates
-          2. Validate rates — halt if any anomaly
+          2. Validate rates â€” halt if any anomaly
           3. Compute risk scores per protocol
           4. Get current allocations from DB
           5. Run MILP solver
           6. Check if rebalance is needed (delta + yield gate)
           7. Check time since last rebalance (> 6 h)
-          8. If all conditions met → execute
+          8. If all conditions met â†’ execute
           9. Log result regardless
          10. Return log dict
         """
@@ -93,14 +93,14 @@ class Rebalancer:
         spot_rates_raw = await self.rate_fetcher.fetch_active_rates()
 
         if not spot_rates_raw:
-            return await self._log(db, smart_account_address, "skipped",
+            return await self._log(db, account_id, "skipped",
                                    reason="No spot rates available")
 
         # 2. Validate with TWAP + DefiLlama + velocity check
         spot_rates = {pid: rate.apy for pid, rate in spot_rates_raw.items()}
         validated_rates = await self.rate_validator.validate_all(spot_rates)
         if validated_rates is None:
-            return await self._log(db, smart_account_address, "skipped",
+            return await self._log(db, account_id, "skipped",
                                    reason="Rate validation failed (sanity/velocity/DefiLlama)")
 
         # Rebuild ProtocolRate-like mapping with TWAP-smoothed APYs
@@ -118,7 +118,7 @@ class Rebalancer:
                 )
 
         if not twap_rates:
-            return await self._log(db, smart_account_address, "skipped",
+            return await self._log(db, account_id, "skipped",
                                    reason="No validated TWAP rates available")
 
         # 3. Compute risk scores
@@ -144,19 +144,19 @@ class Rebalancer:
         # 4. Get current allocations from DB
         alloc_rows = (
             db.table("allocations")
-            .select("protocol_id, amount_usd")
-            .eq("account_address", smart_account_address.lower())
+            .select("protocol_id, amount_usdc")
+            .eq("account_id", account_id)
             .execute()
         )
         current: dict[str, Decimal] = {}
         total_usd = Decimal("0")
         for row in alloc_rows.data:
-            amt = Decimal(str(row["amount_usd"]))
+            amt = Decimal(str(row["amount_usdc"]))
             current[row["protocol_id"]] = amt
             total_usd += amt
 
         if total_usd <= 0:
-            return await self._log(db, smart_account_address, "skipped",
+            return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
         # 5. Run MILP solver
@@ -179,7 +179,7 @@ class Rebalancer:
         last = (
             db.table("rebalance_logs")
             .select("created_at")
-            .eq("account_address", smart_account_address.lower())
+            .eq("account_id", account_id)
             .eq("status", "executed")
             .order("created_at", desc=True)
             .limit(1)
@@ -209,18 +209,18 @@ class Rebalancer:
             )
         except Exception as exc:
             logger.exception("Rebalance execution failed for %s", smart_account_address)
-            return await self._log(db, smart_account_address, "failed",
+            return await self._log(db, account_id, "failed",
                                    reason=str(exc),
                                    proposed=result.allocations)
 
         if tx_hash is None:
-            return await self._log(db, smart_account_address, "skipped",
+            return await self._log(db, account_id, "skipped",
                                    reason="No concrete moves generated",
                                    proposed=result.allocations)
 
         # 9. Log success
         return await self._log(
-            db, smart_account_address, "executed",
+            db, account_id, "executed",
             proposed=result.allocations,
             tx_hash=tx_hash,
             apr_improvement=result.expected_apy - compute_weighted_apy(
@@ -229,7 +229,7 @@ class Rebalancer:
             ),
         )
 
-    # ── Get current allocations (DB + on-chain verification) ────────
+    # â”€â”€ Get current allocations (DB + on-chain verification) â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def _get_current_allocations(
         self,
@@ -240,13 +240,13 @@ class Rebalancer:
         db = get_supabase()
         alloc_rows = (
             db.table("allocations")
-            .select("protocol_id, amount_usd")
-            .eq("account_address", smart_account_address.lower())
+            .select("protocol_id, amount_usdc")
+            .eq("account_id", account_id)
             .execute()
         )
         current: dict[str, Decimal] = {}
         for row in alloc_rows.data:
-            current[row["protocol_id"]] = Decimal(str(row["amount_usd"]))
+            current[row["protocol_id"]] = Decimal(str(row["amount_usdc"]))
 
         # On-chain verification: read actual balances and prefer them
         usdc = self.settings.USDC_ADDRESS
@@ -260,7 +260,7 @@ class Rebalancer:
                 balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
                 if abs(balance_usd - current[pid]) > Decimal("1"):
                     logger.warning(
-                        "Balance mismatch for %s/%s: DB=%s, on-chain=%s — using on-chain",
+                        "Balance mismatch for %s/%s: DB=%s, on-chain=%s â€” using on-chain",
                         smart_account_address, pid, current[pid], balance_usd,
                     )
                     current[pid] = balance_usd
@@ -269,7 +269,7 @@ class Rebalancer:
 
         return current
 
-    # ── Execute rebalance ───────────────────────────────────────────
+    # â”€â”€ Execute rebalance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def execute_rebalance(
         self,
@@ -354,8 +354,8 @@ class Rebalancer:
             amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
 
             # All adapters use the same build_supply_calldata interface:
-            #   Benqi → mint(uint256)  |  Aave → supply(asset,amount,onBehalfOf,0)
-            #   Euler → deposit(assets,receiver)
+            #   Benqi â†’ mint(uint256)  |  Aave â†’ supply(asset,amount,onBehalfOf,0)
+            #   Euler â†’ deposit(assets,receiver)
             calldata = adapter.build_supply_calldata(usdc, amount_wei, smart_account_address)
             calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
 
@@ -372,12 +372,12 @@ class Rebalancer:
 
         # Step 5: Update allocations in DB
         await self._update_allocations_db(
-            db, smart_account_address, target_allocations,
+            db, account_id, target_allocations,
         )
 
         return tx_hash
 
-    # ── Emergency withdrawal ────────────────────────────────────────
+    # â”€â”€ Emergency withdrawal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def execute_emergency_withdrawal(
         self,
@@ -444,7 +444,7 @@ class Rebalancer:
 
         # Clear allocations
         db.table("allocations").delete().eq(
-            "account_address", smart_account_address.lower()
+            "account_id", account_id
         ).execute()
 
         logger.info(
@@ -453,7 +453,7 @@ class Rebalancer:
         )
         return tx_hash
 
-    # ── Registry log encoding ───────────────────────────────────────
+    # â”€â”€ Registry log encoding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _encode_registry_log(
         self,
@@ -477,25 +477,25 @@ class Rebalancer:
             "value": 0,
         }
 
-    # ── DB helpers ──────────────────────────────────────────────────
+    # â”€â”€ DB helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def _update_allocations_db(
         self,
         db,
-        smart_account_address: str,
+        account_id: str,
         target_allocations: dict[str, Decimal],
     ) -> None:
         """Upsert allocation rows to reflect the new target state."""
-        addr = smart_account_address.lower()
-
         # Delete old rows and insert fresh ones
-        db.table("allocations").delete().eq("account_address", addr).execute()
+        db.table("allocations").delete().eq("account_id", account_id).execute()
 
+        total = sum(target_allocations.values())
         rows = [
             {
-                "account_address": addr,
+                "account_id": account_id,
                 "protocol_id": pid,
-                "amount_usd": str(amt.quantize(Decimal("0.01"))),
+                "amount_usdc": str(amt.quantize(Decimal("0.000001"))),
+                "allocation_pct": str((amt / total).quantize(Decimal("0.0001"))) if total else "0",
             }
             for pid, amt in target_allocations.items()
             if amt > Decimal("1")
@@ -506,7 +506,7 @@ class Rebalancer:
     async def _log(
         self,
         db,
-        account_address: str,
+        account_id: str,
         status: str,
         reason: str | None = None,
         proposed: dict | None = None,
@@ -514,7 +514,7 @@ class Rebalancer:
         apr_improvement: Decimal | None = None,
     ) -> dict:
         row = {
-            "account_address": account_address.lower(),
+            "account_id": account_id,
             "status": status,
             "skip_reason": reason,
             "proposed_allocations": (
@@ -529,6 +529,6 @@ class Rebalancer:
             logger.warning("Failed to log rebalance: %s", exc)
         logger.info(
             "Rebalance %s for %s: %s",
-            status, account_address, reason or tx_hash or "OK",
+            status, account_id, reason or tx_hash or "OK",
         )
         return row

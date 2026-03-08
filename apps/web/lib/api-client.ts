@@ -3,6 +3,7 @@ import type {
   GetPortfolioResponse,
   RunOptimizerResponse,
   RebalanceStatusResponse,
+  RebalanceHistoryResponse,
   HealthResponse,
   RegisterAccountRequest,
   RegisterAccountResponse,
@@ -62,7 +63,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Health
-  health: () => request<HealthResponse>("/health"),
+  health: () => request<HealthResponse>("/api/v1/health"),
 
   // Accounts
   registerAccount: (data: RegisterAccountRequest) =>
@@ -77,12 +78,13 @@ export const api = {
 
   // Protocol Rates
   getCurrentRates: () =>
-    request<ProtocolRateResponse[]>("/api/v1/rates"),
+    request<ProtocolRateResponse[]>("/api/v1/optimizer/rates"),
 
   // Optimizer
   runOptimizer: (address: string) =>
-    request<RunOptimizerResponse>(`/api/v1/optimizer/${encodeURIComponent(address)}`, {
+    request<RunOptimizerResponse>("/api/v1/optimizer/run", {
       method: "POST",
+      body: JSON.stringify({ account_address: address }),
     }),
 
   previewOptimization: (
@@ -100,6 +102,11 @@ export const api = {
       `/api/v1/rebalance/${encodeURIComponent(address)}/status?limit=${limit}&offset=${page * limit}`,
     ),
 
+  getRebalanceHistory: (address: string, page = 0, limit = 20) =>
+    request<RebalanceHistoryResponse>(
+      `/api/v1/rebalance/${encodeURIComponent(address)}/history?limit=${limit}&offset=${page * limit}`,
+    ),
+
   triggerRebalance: (address: string) =>
     request<{ success: boolean; message: string }>(
       `/api/v1/rebalance/${encodeURIComponent(address)}/trigger`,
@@ -107,7 +114,7 @@ export const api = {
     ),
 
   withdrawAll: (address: string) =>
-    request<{ success: boolean; txHashes: string[] }>(
+    request<{ status: string; txHash: string | null }>(
       `/api/v1/rebalance/${encodeURIComponent(address)}/withdraw-all`,
       { method: "POST" },
     ),

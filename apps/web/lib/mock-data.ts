@@ -5,41 +5,43 @@
 import type {
   Portfolio,
   RebalanceStatusResponse,
+  RebalanceHistoryResponse,
 } from "@snowmind/shared-types";
 import { PROTOCOL_CONFIG } from "./constants";
 
 // ── Portfolio snapshot ─────────────────────────────────────
 export const MOCK_PORTFOLIO: Portfolio = {
-  smartAccountAddress: "0xABCDef0123456789AbCdEf0123456789AbCdEf01",
-  totalDeposited: "25000000000", // 25,000 USDC (6 decimals)
-  totalYield: "312480000", // $312.48
+  totalDepositedUsd: "25000",
+  totalYieldUsd: "312.48",
   allocations: [
     {
       protocolId: "benqi",
-      amountUsd: "13750000000",
-      percentage: 55,
-      apy: 0.0492,
+      name: "Benqi",
+      amountUsdc: "13750",
+      allocationPct: 0.55,
+      currentApy: 0.0492,
     },
     {
       protocolId: "aave_v3",
-      amountUsd: "11250000000",
-      percentage: 45,
-      apy: 0.0468,
+      name: "Aave V3",
+      amountUsdc: "11250",
+      allocationPct: 0.45,
+      currentApy: 0.0468,
     },
   ],
-  lastRebalance: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2h ago
+  lastRebalanceAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2h ago
 };
 
 // ── Overview stats (derived) ───────────────────────────────
 export function deriveOverviewStats(p: Portfolio) {
-  const totalDep = Number(p.totalDeposited) / 1e6;
-  const totalYld = Number(p.totalYield) / 1e6;
+  const totalDep = Number(p.totalDepositedUsd);
+  const totalYld = Number(p.totalYieldUsd);
   const blendedApy =
-    p.allocations.reduce((s, a) => s + a.apy * (a.percentage / 100), 0) * 100;
+    p.allocations.reduce((s, a) => s + a.currentApy * a.allocationPct, 0) * 100;
 
-  const hoursAgo = p.lastRebalance
+  const hoursAgo = p.lastRebalanceAt
     ? Math.floor(
-        (Date.now() - new Date(p.lastRebalance).getTime()) / (1000 * 60 * 60)
+        (Date.now() - new Date(p.lastRebalanceAt).getTime()) / (1000 * 60 * 60)
       )
     : null;
 
@@ -55,90 +57,64 @@ export function deriveOverviewStats(p: Portfolio) {
 
 // ── Rebalance history ──────────────────────────────────────
 export const MOCK_REBALANCE_STATUS: RebalanceStatusResponse = {
-  smartAccountAddress: MOCK_PORTFOLIO.smartAccountAddress,
-  lastRebalance: MOCK_PORTFOLIO.lastRebalance,
+  smartAccountAddress: "0xABCDef0123456789AbCdEf0123456789AbCdEf01",
+  lastRebalance: MOCK_PORTFOLIO.lastRebalanceAt,
   status: "idle",
+  lastLog: null,
+};
+
+export const MOCK_REBALANCE_HISTORY: RebalanceHistoryResponse = {
   total: 5,
-  history: [
+  logs: [
     {
       id: "reb-001",
-      timestamp: "2024-01-15T14:32:00Z",
-      fromAllocations: [
-        { protocolId: "aave_v3", amountUsd: "13000000000", percentage: 52, apy: 0.046 },
-        { protocolId: "benqi", amountUsd: "12000000000", percentage: 48, apy: 0.048 },
-      ],
-      toAllocations: [
-        { protocolId: "aave_v3", amountUsd: "11250000000", percentage: 45, apy: 0.0468 },
-        { protocolId: "benqi", amountUsd: "13750000000", percentage: 55, apy: 0.0492 },
-      ],
+      status: "executed",
+      proposedAllocations: { aave_v3: "11250", benqi: "13750" },
+      executedAllocations: { aave_v3: "11250", benqi: "13750" },
       gasCostUsd: 0.12,
-      status: "completed",
       txHash: "0xabc123",
       aprImprovement: 0.24,
+      createdAt: "2024-01-15T14:32:00Z",
     },
     {
       id: "reb-002",
-      timestamp: "2024-01-15T08:15:00Z",
-      fromAllocations: [
-        { protocolId: "aave_v3", amountUsd: "12200000000", percentage: 48.8, apy: 0.047 },
-        { protocolId: "benqi", amountUsd: "12800000000", percentage: 51.2, apy: 0.045 },
-      ],
-      toAllocations: [
-        { protocolId: "aave_v3", amountUsd: "13000000000", percentage: 52, apy: 0.046 },
-        { protocolId: "benqi", amountUsd: "12000000000", percentage: 48, apy: 0.048 },
-      ],
+      status: "executed",
+      proposedAllocations: { aave_v3: "13000", benqi: "12000" },
+      executedAllocations: { aave_v3: "13000", benqi: "12000" },
       gasCostUsd: 0.1,
-      status: "completed",
       txHash: "0xdef456",
       aprImprovement: 0.18,
+      createdAt: "2024-01-15T08:15:00Z",
     },
     {
       id: "reb-003",
-      timestamp: "2024-01-14T22:48:00Z",
-      fromAllocations: [
-        { protocolId: "aave_v3", amountUsd: "14500000000", percentage: 58, apy: 0.044 },
-        { protocolId: "benqi", amountUsd: "10500000000", percentage: 42, apy: 0.049 },
-      ],
-      toAllocations: [
-        { protocolId: "aave_v3", amountUsd: "12200000000", percentage: 48.8, apy: 0.047 },
-        { protocolId: "benqi", amountUsd: "12800000000", percentage: 51.2, apy: 0.045 },
-      ],
+      status: "executed",
+      proposedAllocations: { aave_v3: "12200", benqi: "12800" },
+      executedAllocations: { aave_v3: "12200", benqi: "12800" },
       gasCostUsd: 0.15,
-      status: "completed",
       txHash: "0x789ghi",
       aprImprovement: 0.31,
+      createdAt: "2024-01-14T22:48:00Z",
     },
     {
       id: "reb-004",
-      timestamp: "2024-01-14T16:10:00Z",
-      fromAllocations: [
-        { protocolId: "aave_v3", amountUsd: "12500000000", percentage: 50, apy: 0.043 },
-        { protocolId: "benqi", amountUsd: "12500000000", percentage: 50, apy: 0.05 },
-      ],
-      toAllocations: [
-        { protocolId: "aave_v3", amountUsd: "14500000000", percentage: 58, apy: 0.044 },
-        { protocolId: "benqi", amountUsd: "10500000000", percentage: 42, apy: 0.049 },
-      ],
-      gasCostUsd: 0.11,
       status: "skipped",
+      proposedAllocations: { aave_v3: "14500", benqi: "10500" },
+      executedAllocations: null,
+      gasCostUsd: 0.11,
       txHash: null,
       aprImprovement: null,
+      createdAt: "2024-01-14T16:10:00Z",
     },
     {
       id: "reb-005",
-      timestamp: "2024-01-14T10:05:00Z",
-      fromAllocations: [
-        { protocolId: "aave_v3", amountUsd: "13000000000", percentage: 52, apy: 0.042 },
-        { protocolId: "benqi", amountUsd: "12000000000", percentage: 48, apy: 0.051 },
-      ],
-      toAllocations: [
-        { protocolId: "aave_v3", amountUsd: "12500000000", percentage: 50, apy: 0.043 },
-        { protocolId: "benqi", amountUsd: "12500000000", percentage: 50, apy: 0.05 },
-      ],
+      status: "executed",
+      proposedAllocations: { aave_v3: "12500", benqi: "12500" },
+      executedAllocations: { aave_v3: "12500", benqi: "12500" },
       gasCostUsd: 0.09,
-      status: "completed",
       txHash: "0xjkl012",
       aprImprovement: 0.15,
+      createdAt: "2024-01-14T10:05:00Z",
     },
   ],
 };

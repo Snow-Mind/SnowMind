@@ -48,6 +48,11 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
       const hashes: SetupTxHashes = { deployment: null };
 
       // Grant session key and serialize (best-effort — don't block account creation)
+      let sessionKeyData: {
+        serializedPermission: string;
+        sessionKeyAddress: string;
+        expiresAt: number;
+      } | null = null;
       try {
         const sessionKeyResult = await grantAndSerializeSessionKey(
           kernelAccount,
@@ -64,6 +69,7 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
             maxOpsPerDay:  20,
           },
         );
+        sessionKeyData = sessionKeyResult;
         hashes.sessionKey = sessionKeyResult.sessionKeyAddress;
         setState((prev) => ({ ...prev, txHashes: { ...prev.txHashes, sessionKey: sessionKeyResult.sessionKeyAddress } }));
       } catch {
@@ -89,6 +95,13 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
         await api.registerAccount({
           ownerAddress: wallet.address as string,
           smartAccountAddress,
+          ...(sessionKeyData && {
+            sessionKeyData: {
+              serializedPermission: sessionKeyData.serializedPermission,
+              sessionKeyAddress: sessionKeyData.sessionKeyAddress,
+              expiresAt: sessionKeyData.expiresAt,
+            },
+          }),
         });
         // We don't get a tx hash from the backend registration API directly,
         // but the backend emits the on-chain registration tx.

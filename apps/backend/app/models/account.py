@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.models.base import CamelModel
+
 
 # ── Request models ──────────────────────────────────────────
 
@@ -26,7 +28,7 @@ class SessionKeyCreate(BaseModel):
 # ── Response models ─────────────────────────────────────────
 
 
-class AccountResponse(BaseModel):
+class AccountResponse(CamelModel):
     id: UUID
     address: str
     owner_address: str
@@ -34,7 +36,7 @@ class AccountResponse(BaseModel):
     created_at: datetime
 
 
-class SessionKeyStatusResponse(BaseModel):
+class SessionKeyStatusResponse(CamelModel):
     key_address: str
     is_active: bool
     expires_at: datetime

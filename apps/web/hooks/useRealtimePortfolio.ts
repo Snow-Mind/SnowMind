@@ -1,18 +1,23 @@
-import { createClient } from "@supabase/supabase-js"
+"use client";
+
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { toast } from "sonner"
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!   // anon key ONLY on frontend
-)
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+let supabase: SupabaseClient | null = null
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+}
 
 export function useRealtimePortfolio(accountId: string | undefined) {
   const qc = useQueryClient()
 
   useEffect(() => {
-    if (!accountId) return
+    if (!accountId || !supabase) return
 
     const channel = supabase
       .channel(`portfolio-${accountId}`)
@@ -20,14 +25,14 @@ export function useRealtimePortfolio(accountId: string | undefined) {
         event:  "INSERT",
         schema: "public",
         table:  "rebalance_logs",
-        filter: `account_id=eq.${accountId}`,
       }, (payload: { new: Record<string, unknown> }) => {
         // Immediately refetch portfolio data on new rebalance
         qc.invalidateQueries({ queryKey: ["portfolio", accountId] })
-        qc.invalidateQueries({ queryKey: ["history",   accountId] })
+        qc.invalidateQueries({ queryKey: ["rebalance-history", accountId] })
+        qc.invalidateQueries({ queryKey: ["rebalance-status", accountId] })
 
         const status = payload.new.status
-        if (status === "completed") {
+        if (status === "executed") {
           toast.success("Rebalance executed — portfolio updated", {
             duration: 5000,
           })
@@ -37,6 +42,6 @@ export function useRealtimePortfolio(accountId: string | undefined) {
       })
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    return () => { supabase!.removeChannel(channel) }
   }, [accountId, qc])
 }

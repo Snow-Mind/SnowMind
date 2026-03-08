@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from supabase import Client
@@ -49,21 +50,21 @@ class TWAPOracle:
         4. Compute a linearly time-weighted average: more-recent snapshots
            get slightly higher weight.
         """
-        cutoff_epoch = time.time() - self.window * 60
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=self.window)).isoformat()
 
         rows = (
             self._db.table("rate_snapshots")
-            .select("apy, fetched_at")
+            .select("apy, snapshot_at")
             .eq("protocol_id", protocol_id)
-            .gte("fetched_at", cutoff_epoch)
-            .order("fetched_at", desc=False)
+            .gte("snapshot_at", cutoff)
+            .order("snapshot_at", desc=False)
             .execute()
         )
 
-        snapshots: list[tuple[float, Decimal]] = [
-            (float(r["fetched_at"]), Decimal(str(r["apy"])))
-            for r in (rows.data or [])
-        ]
+        snapshots: list[tuple[float, Decimal]] = []
+        for r in (rows.data or []):
+            ts = datetime.fromisoformat(r["snapshot_at"]).timestamp()
+            snapshots.append((ts, Decimal(str(r["apy"]))))
 
         if len(snapshots) < 2:
             return None  # not enough data — wait for more reads
@@ -119,7 +120,7 @@ class TWAPOracle:
             self._db.table("rate_snapshots")
             .select("apy")
             .eq("protocol_id", protocol_id)
-            .order("fetched_at", desc=True)
+            .order("snapshot_at", desc=True)
             .limit(min_reads)
             .execute()
         )
@@ -152,7 +153,7 @@ class TWAPOracle:
             self._db.table("rate_snapshots")
             .select("apy")
             .eq("protocol_id", protocol_id)
-            .order("fetched_at", desc=True)
+            .order("snapshot_at", desc=True)
             .limit(3)
             .execute()
         )
@@ -185,7 +186,7 @@ class TWAPOracle:
             {
                 "protocol_id": protocol_id,
                 "apy": str(apy),
-                "fetched_at": time.time(),
+                "snapshot_at": datetime.now(timezone.utc).isoformat(),
                 "source": source,
             }
         ).execute()

@@ -25,28 +25,25 @@ function timeAgo(iso: string): string {
 type ActionType = "deposit" | "withdraw" | "rebalance";
 
 function inferAction(entry: RebalanceLogEntry): ActionType {
-  const fromTotal = entry.fromAllocations.reduce((s, a) => s + a.percentage, 0);
-  const toTotal = entry.toAllocations.reduce((s, a) => s + a.percentage, 0);
-  if (fromTotal === 0 && toTotal > 0) return "deposit";
-  if (toTotal === 0 && fromTotal > 0) return "withdraw";
+  const hasProposed = entry.proposedAllocations && Object.keys(entry.proposedAllocations).length > 0;
+  const hasExecuted = entry.executedAllocations && Object.keys(entry.executedAllocations).length > 0;
+  if (!hasProposed && hasExecuted) return "deposit";
+  if (hasProposed && !hasExecuted) return "withdraw";
   return "rebalance";
 }
 
 function primaryProtocol(entry: RebalanceLogEntry): string {
-  const allocs =
-    entry.toAllocations.length > 0
-      ? entry.toAllocations
-      : entry.fromAllocations;
-  if (allocs.length === 0) return "Unknown";
-  const top = [...allocs].sort((a, b) => b.percentage - a.percentage)[0];
-  const cfg = PROTOCOL_CONFIG[top.protocolId as ProtocolId];
-  return cfg?.name ?? top.protocolId;
+  const allocs = entry.executedAllocations || entry.proposedAllocations || {};
+  const entries = Object.entries(allocs);
+  if (entries.length === 0) return "Unknown";
+  const top = entries.sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+  const cfg = PROTOCOL_CONFIG[top[0] as ProtocolId];
+  return cfg?.name ?? top[0];
 }
 
 function estimateAmount(entry: RebalanceLogEntry): string {
-  const allocs = entry.toAllocations.length > 0 ? entry.toAllocations : entry.fromAllocations;
-  // Sum amounts from allocations (amountUsd is a string in the type)
-  const total = allocs.reduce((s, a) => s + Number(a.amountUsd ?? 0), 0);
+  const allocs = entry.executedAllocations || entry.proposedAllocations || {};
+  const total = Object.values(allocs).reduce<number>((s, v) => s + Number(v ?? 0), 0);
   if (total > 0) return `${formatUsd(total)} USDC`;
   return "USDC";
 }
@@ -87,7 +84,7 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
             const action = inferAction(entry);
             const cfg = ACTION_CONFIG[action];
             const Icon = cfg.icon;
-            const isConfirmed = entry.status === "completed";
+            const isConfirmed = entry.status === "executed";
 
             return (
               <div
@@ -116,7 +113,7 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
                       {estimateAmount(entry)}
                     </span>
                     <span className="text-[10px] text-muted-foreground">
-                      · {timeAgo(entry.timestamp)}
+                      · {timeAgo(entry.createdAt)}
                     </span>
                   </div>
                 </div>

@@ -18,17 +18,17 @@ export const IS_TESTNET = process.env.NEXT_PUBLIC_CHAIN_ID === '43113' || CHAIN_
 
 // Fuji Testnet Addresses (verify at docs.aave.com before use)
 export const CONTRACTS = {
-  // Our deployed contracts
-  REGISTRY:    process.env.NEXT_PUBLIC_REGISTRY_ADDRESS as `0x${string}`,
+  // Our deployed contracts (Fuji 43113)
+  REGISTRY:    (process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ?? '0xf842428ad92689741cafb0029f4d76361b2d02d4') as `0x${string}`,
 
   // Aave V3 on Fuji
   AAVE_POOL:   '0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29' as `0x${string}`,
   AAVE_FAUCET: '0xA70D8aD6d26931d0188c642A66de3B6202cDc5FA' as `0x${string}`,
 
   // MockBenqi on Fuji (real Benqi is mainnet-only)
-  BENQI_POOL:  process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS as `0x${string}`,
+  BENQI_POOL:  (process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS ?? '0x6ac240d13b85a698ee407617e51f9baab9e395a9') as `0x${string}`,
   // MockEuler, shown as coming soon
-  EULER_VAULT: process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS as `0x${string}`,
+  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x372193056e6c57040548ce833ee406509a457632') as `0x${string}`,
 
   // Test tokens
   USDC:        '0x5425890298aed601595a70AB815c96711a31Bc65' as `0x${string}`,

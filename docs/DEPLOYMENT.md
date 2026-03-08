@@ -23,9 +23,16 @@ Production deployment for the SnowMind AI yield optimizer.
 2. Under **Settings → API**, copy:
    - `SUPABASE_URL` (Project URL)
    - `SUPABASE_SERVICE_KEY` (service_role key — never expose publicly)
-3. Run the SQL migrations in **SQL Editor** to create tables:
-   - `accounts`, `allocations`, `rebalance_logs`, `protocol_configs`
-4. Enable **Row Level Security** on all tables.
+3. Run the SQL schema from `apps/backend/supabase_schema.sql` in the **SQL Editor**. This creates:
+   - `accounts` — smart account registry (including `risk_tolerance` column)
+   - `allocations` — per-protocol USDC allocations
+   - `rebalance_logs` — rebalance event history
+   - `rate_snapshots` — TWAP rate data from on-chain reads
+   - `session_keys` — encrypted session key storage
+   - `session_key_audit` — audit trail for session key operations
+   - `scheduler_locks` — cron scheduler deduplication locks
+   - `protocol_health` — circuit-breaker protocol health state
+4. Enable **Row Level Security** on all tables (the schema does this automatically).
 
 ---
 
@@ -44,19 +51,31 @@ railway link          # Select the snowmind-backend service
 
 Set these in **Railway → Service → Variables**:
 
-| Variable | Description |
-|----------|-------------|
-| `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_SERVICE_KEY` | Supabase service role key |
-| `PIMLICO_API_KEY` | Pimlico bundler API key |
-| `ZERODEV_PROJECT_ID` | ZeroDev project ID |
-| `AVALANCHE_RPC_URL` | Avalanche RPC endpoint |
-| `SESSION_KEY_ENCRYPTION_KEY` | 32-byte AES key, hex-encoded |
-| `JWT_SECRET` | Random 256-bit secret for JWT signing |
-| `BACKEND_API_KEY` | Shared secret for frontend→backend auth |
-| `IS_TESTNET` | `true` for Fuji, `false` for mainnet |
-| `DEBUG` | `false` in production |
-| `ALLOWED_ORIGINS` | JSON array: `["https://snowmind.vercel.app","https://snowmind.app"]` |
+| Variable | Description | Fuji Default |
+|----------|-------------|------|
+| `SUPABASE_URL` | Supabase project URL | *(from Supabase dashboard)* |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key (never expose publicly) | *(from Supabase dashboard)* |
+| `PIMLICO_API_KEY` | Pimlico bundler API key | *(from pimlico.io)* |
+| `ZERODEV_PROJECT_ID` | ZeroDev project ID | *(from dashboard.zerodev.app)* |
+| `AVALANCHE_RPC_URL` | Avalanche C-Chain RPC | `https://api.avax-test.network/ext/bc/C/rpc` |
+| `AVALANCHE_CHAIN_ID` | Chain ID | `43113` |
+| `REGISTRY_CONTRACT_ADDRESS` | SnowMindRegistry | `0xf842428ad92689741cafb0029f4d76361b2d02d4` |
+| `AAVE_V3_POOL` | Aave V3 Pool on Fuji | `0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29` |
+| `BENQI_POOL` | MockBenqiPool on Fuji | `0x6ac240d13b85a698ee407617e51f9baab9e395a9` |
+| `EULER_VAULT` | MockEulerVault on Fuji | `0x372193056e6c57040548ce833ee406509a457632` |
+| `USDC_ADDRESS` | Test USDC on Fuji | `0x5425890298aed601595a70AB815c96711a31Bc65` |
+| `ENTRYPOINT_V07` | ERC-4337 EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
+| `SESSION_KEY_ENCRYPTION_KEY` | 32-byte AES-256 hex key (generate: `openssl rand -hex 32`) | *(generate fresh)* |
+| `JWT_SECRET` | Random 256-bit secret (generate: `openssl rand -hex 32`) | *(generate fresh)* |
+| `BACKEND_API_KEY` | Shared secret for frontend→backend auth | *(generate fresh)* |
+| `DEPLOYER_PRIVATE_KEY` | Testnet deployer PK (only for MockBenqi accrual) | *(optional)* |
+| `IS_TESTNET` | `true` for Fuji, `false` for mainnet | `true` |
+| `DEBUG` | `false` in production | `false` |
+| `ALLOWED_ORIGINS` | JSON array of frontend URLs | `["https://snowmind.vercel.app"]` |
+| `REBALANCE_CHECK_INTERVAL` | Seconds between optimizer runs | `1800` |
+| `MAX_PROTOCOL_ALLOCATION` | Max % per protocol | `0.60` |
+| `MIN_REBALANCE_THRESHOLD` | Min delta to trigger rebalance | `0.05` |
+| `MIN_BALANCE_USD` | Min account balance to optimize | `5000.0` |
 
 ### Manual deploy
 
@@ -88,13 +107,20 @@ vercel link           # Link to your Vercel project
 
 Set these in **Vercel → Project → Settings → Environment Variables**:
 
-| Variable | Scope | Value |
-|----------|-------|-------|
-| `NEXT_PUBLIC_PRIVY_APP_ID` | All | Your Privy app ID |
-| `NEXT_PUBLIC_ZERODEV_PROJECT_ID` | All | ZeroDev project ID |
-| `NEXT_PUBLIC_AVALANCHE_RPC_URL` | All | Avalanche RPC URL |
+| Variable | Scope | Fuji Value |
+|----------|-------|------|
+| `NEXT_PUBLIC_PRIVY_APP_ID` | All | *(from privy.io dashboard)* |
+| `NEXT_PUBLIC_ZERODEV_PROJECT_ID` | All | *(from dashboard.zerodev.app)* |
+| `NEXT_PUBLIC_AVALANCHE_RPC_URL` | All | `https://api.avax-test.network/ext/bc/C/rpc` |
 | `NEXT_PUBLIC_BACKEND_URL` | Production | `https://<railway-domain>` |
-| `NEXT_PUBLIC_CHAIN_ID` | All | `43113` (Fuji) or `43114` (mainnet) |
+| `NEXT_PUBLIC_CHAIN_ID` | All | `43113` |
+| `NEXT_PUBLIC_BACKEND_API_KEY` | All | *(same as `BACKEND_API_KEY` in Railway)* |
+| `NEXT_PUBLIC_PIMLICO_API_KEY` | All | *(from pimlico.io)* |
+| `NEXT_PUBLIC_SUPABASE_URL` | All | *(Supabase project URL)* |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | All | *(Supabase anon key — NOT service key)* |
+| `NEXT_PUBLIC_REGISTRY_ADDRESS` | All | `0xf842428ad92689741cafb0029f4d76361b2d02d4` |
+| `NEXT_PUBLIC_BENQI_POOL_ADDRESS` | All | `0x6ac240d13b85a698ee407617e51f9baab9e395a9` |
+| `NEXT_PUBLIC_EULER_VAULT_ADDRESS` | All | `0x372193056e6c57040548ce833ee406509a457632` |
 
 ### Manual deploy
 
@@ -128,7 +154,7 @@ Set in **Settings → Secrets and variables → Actions**:
 | `VERCEL_TOKEN` | Vercel personal access token |
 
 The deploy pipeline:
-1. **test-backend**: Runs `pytest` with 70% coverage gate
+1. **test-backend**: Runs `pytest` with 15% coverage gate
 2. **test-frontend**: Lints and builds the Next.js app
 3. **deploy-backend**: `railway up` (runs after test-backend passes)
 4. **deploy-frontend**: `vercel deploy --prod` (runs after test-frontend passes)
@@ -184,3 +210,54 @@ railway logs --service snowmind-backend | grep RATE_ANOMALY
 ### Funds are always safe
 
 If both services go down, user funds remain deposited in their current protocols (Benqi/Aave), continuing to earn yield. No action is needed — funds are in the user's own smart account.
+
+---
+
+## 8. Fuji Testnet Contract Addresses (Quick Reference)
+
+| Contract | Address | Notes |
+|----------|---------|-------|
+| **SnowMindRegistry** | `0xf842428ad92689741cafb0029f4d76361b2d02d4` | Deployed by us |
+| **MockBenqiPool** | `0x6ac240d13b85a698ee407617e51f9baab9e395a9` | Deployed by us |
+| **MockEulerVault** | `0x372193056e6c57040548ce833ee406509a457632` | Deployed by us |
+| **Aave V3 Pool** | `0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29` | Official Aave Fuji |
+| **USDC (Fuji)** | `0x5425890298aed601595a70AB815c96711a31Bc65` | Official test USDC |
+| **Aave Faucet** | `0xA70D8aD6d26931d0188c642A66de3B6202cDc5FA` | Mint test tokens |
+| **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | ERC-4337 singleton |
+
+All contracts are verified on [testnet.snowtrace.io](https://testnet.snowtrace.io).
+
+---
+
+## 9. Session Key Security (MVP)
+
+SnowMind uses **Option 1: Encrypted in database** for MVP.
+
+- Session keys are AES-256-GCM encrypted before storage in the `session_keys` table
+- The encryption key comes from the `SESSION_KEY_ENCRYPTION_KEY` env var (32 bytes, hex-encoded)
+- Keys are decrypted **only in-memory** when needed, never persisted in plaintext
+- The `session_key_audit` table logs all key operations (creation, usage, revocation)
+- RLS policy on `session_keys` denies all read access from the anon key — only the service role can read them
+
+**Generate the encryption key:** `openssl rand -hex 32`
+
+**Post-MVP roadmap:** Migrate to AWS KMS or Google Cloud KMS for hardware-backed key management.
+
+---
+
+## 10. Database Migrations
+
+All SQL migrations live in `apps/backend/db/migrations/`. Files are numbered sequentially:
+
+```
+db/migrations/
+├── 001_initial_schema.sql      # Full schema bootstrap
+└── README.md                   # Migration instructions
+```
+
+To apply migrations:
+1. Open the Supabase SQL Editor
+2. Run each migration file in order
+3. Verify tables exist: `SELECT tablename FROM pg_tables WHERE schemaname = 'public';`
+
+The full schema is also available at `apps/backend/supabase_schema.sql` for reference.

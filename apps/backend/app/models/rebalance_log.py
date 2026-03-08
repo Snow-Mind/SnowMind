@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.models.base import CamelModel
+
 RebalanceStatus = Literal["executed", "skipped", "failed"]
 
 
@@ -25,7 +27,7 @@ class RebalanceLog(BaseModel):
     created_at: datetime
 
 
-class RebalanceLogResponse(BaseModel):
+class RebalanceLogResponse(CamelModel):
     """Subset for frontend consumption."""
     id: UUID
     status: RebalanceStatus
@@ -37,6 +39,6 @@ class RebalanceLogResponse(BaseModel):
     created_at: datetime
 
 
-class RebalanceHistoryResponse(BaseModel):
+class RebalanceHistoryResponse(CamelModel):
     logs: list[RebalanceLogResponse]
     total: int

@@ -8,6 +8,7 @@ export type {
   OptimizerPreviewResponse,
   RebalanceLogEntry,
   RebalanceStatusResponse,
+  RebalanceHistoryResponse,
   HealthResponse,
   SessionKeyStatusResponse,
   AccountDetailResponse,

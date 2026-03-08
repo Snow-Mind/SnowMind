@@ -5,13 +5,21 @@ import type { Portfolio, ProtocolAllocation, ProtocolId } from "./portfolio";
 export interface RegisterAccountRequest {
   ownerAddress: string;
   smartAccountAddress: string;
+  sessionKeyData?: {
+    serializedPermission: string;
+    sessionKeyAddress: string;
+    expiresAt: number;
+  };
 }
 
 // --- Responses ---
 
 export interface RegisterAccountResponse {
-  success: boolean;
-  smartAccountAddress: string;
+  id: string;
+  address: string;
+  ownerAddress: string;
+  isActive: boolean;
+  createdAt: string;
 }
 
 export interface GetPortfolioResponse extends Portfolio {}
@@ -31,7 +39,7 @@ export interface ProtocolRateResponse {
   currentApy: number;
   tvlUsd: number;
   riskScore: number;
-  lastUpdated: string;
+  lastUpdated: number;
 }
 
 export interface OptimizerPreviewResponse {
@@ -52,26 +60,31 @@ export interface OptimizerPreviewResponse {
 
 export interface RebalanceLogEntry {
   id: string;
-  timestamp: string;
-  fromAllocations: ProtocolAllocation[];
-  toAllocations: ProtocolAllocation[];
-  gasCostUsd: number;
   status: string;
-  txHash: string | null;
+  proposedAllocations: Record<string, unknown> | null;
+  executedAllocations: Record<string, unknown> | null;
   aprImprovement: number | null;
+  gasCostUsd: number | null;
+  txHash: string | null;
+  createdAt: string;
 }
 
 export interface RebalanceStatusResponse {
   smartAccountAddress: string;
   lastRebalance: string | null;
-  status: "idle" | "pending" | "executing" | "completed" | "failed";
-  history: RebalanceLogEntry[];
+  status: "idle" | "pending" | "executing" | "completed" | "failed" | "executed" | "skipped";
+  lastLog: RebalanceLogEntry | null;
+}
+
+export interface RebalanceHistoryResponse {
+  logs: RebalanceLogEntry[];
   total: number;
 }
 
 export interface HealthResponse {
   status: string;
-  service: string;
+  timestamp: string;
+  version: string;
 }
 
 export interface SessionKeyStatusResponse {

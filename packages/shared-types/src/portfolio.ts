@@ -2,21 +2,21 @@ export type ProtocolId = "benqi" | "aave_v3" | "euler_v2" | "fluid";
 
 export interface ProtocolAllocation {
   protocolId: ProtocolId;
-  /** Amount in wei (as string to handle BigInt) */
-  amountUsd: string;
-  /** Percentage of total portfolio (0-100) */
-  percentage: number;
+  name: string;
+  /** Amount in USDC (decimal string) */
+  amountUsdc: string;
+  /** Percentage of total portfolio (0.0 - 1.0) */
+  allocationPct: number;
   /** Current APY as a decimal (e.g. 0.045 = 4.5%) */
-  apy: number;
+  currentApy: number;
 }
 
 export interface Portfolio {
-  smartAccountAddress: string;
-  /** Total deposited in wei (as string) */
-  totalDeposited: string;
-  /** Total yield earned in wei (as string) */
-  totalYield: string;
+  /** Total deposited in USD (decimal string) */
+  totalDepositedUsd: string;
+  /** Total yield earned in USD (decimal string) */
+  totalYieldUsd: string;
   allocations: ProtocolAllocation[];
   /** ISO timestamp of last rebalance, or null */
-  lastRebalance: string | null;
+  lastRebalanceAt: string | null;
 }

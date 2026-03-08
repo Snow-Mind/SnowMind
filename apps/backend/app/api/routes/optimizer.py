@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import require_api_key
 from app.core.validators import validate_eth_address
+from app.models.base import CamelModel
 from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
 from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.optimizer.milp_solver import (
@@ -34,7 +35,7 @@ _risk_scorer = RiskScorer()
 
 # ── Response schemas ─────────────────────────────────────────────────────────
 
-class ProtocolRateResponse(BaseModel):
+class ProtocolRateResponse(CamelModel):
     protocol_id: str
     name: str
     is_active: bool
@@ -45,14 +46,15 @@ class ProtocolRateResponse(BaseModel):
     last_updated: float
 
 
-class AllocationItem(BaseModel):
+class AllocationItem(CamelModel):
     protocol_id: str
     current_pct: Decimal
     proposed_pct: Decimal
     proposed_amount_usd: Decimal
+    apy: Decimal = Decimal("0")
 
 
-class OptimizerPreviewOutput(BaseModel):
+class OptimizerPreviewOutput(CamelModel):
     smart_account_address: str
     proposed_allocations: list[AllocationItem]
     expected_apy: Decimal
@@ -123,6 +125,8 @@ async def run_optimizer_preview(
     if not acct.data:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    account_id = acct.data[0]["id"]
+
     # Map risk tolerance to lambda
     risk_aversion_map = {
         "conservative": Decimal("0.8"),
@@ -144,14 +148,14 @@ async def run_optimizer_preview(
     # Current allocations from DB
     alloc_rows = (
         db.table("allocations")
-        .select("protocol_id, amount_usd")
-        .eq("account_address", address.lower())
+        .select("protocol_id, amount_usdc")
+        .eq("account_id", account_id)
         .execute()
     )
     current: dict[str, Decimal] = {}
     total_usd = Decimal("0")
     for row in alloc_rows.data:
-        amt = Decimal(str(row["amount_usd"]))
+        amt = Decimal(str(row["amount_usdc"]))
         current[row["protocol_id"]] = amt
         total_usd += amt
 
@@ -186,12 +190,14 @@ async def run_optimizer_preview(
     # Build response items
     proposed: list[AllocationItem] = []
     for pid, amount_usd in result.allocations.items():
+        rate = valid_rates.get(pid)
         proposed.append(
             AllocationItem(
                 protocol_id=pid,
                 current_pct=current.get(pid, Decimal("0")) / total_usd if total_usd else Decimal("0"),
                 proposed_pct=amount_usd / total_usd if total_usd else Decimal("0"),
                 proposed_amount_usd=amount_usd,
+                apy=rate.apy if rate else Decimal("0"),
             )
         )
 
@@ -215,6 +221,24 @@ async def run_optimizer_preview(
 
 
 # ── POST /{address}/execute — run optimiser AND submit on-chain ──────────────
+
+# ── POST /{address}/preview — convenience alias (address in path) ────────────
+
+@router.post("/{address}/preview", response_model=OptimizerPreviewOutput)
+@limiter.limit("10/minute")
+async def preview_by_address(
+    request: Request,
+    address: str,
+    db: Client = Depends(get_db),
+    risk_tolerance: str = "moderate",
+):
+    """Same as /run but accepts the address as a path segment."""
+    return await run_optimizer_preview(
+        request,
+        RunOptimizerRequest(account_address=address, risk_tolerance=risk_tolerance),
+        db,
+    )
+
 
 @router.post("/{address}/execute")
 @limiter.limit("5/minute")

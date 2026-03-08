@@ -16,6 +16,7 @@ import type { RebalanceLogEntry } from "@snowmind/shared-types";
 type HistoryRow = RebalanceLogEntry;
 
 const STATUS_BADGE: Record<string, { icon: typeof Check; label: string; cls: string }> = {
+  executed:  { icon: Check, label: "Executed", cls: "border-mint/30 bg-mint/10 text-mint" },
   completed: { icon: Check, label: "Executed", cls: "border-mint/30 bg-mint/10 text-mint" },
   skipped:   { icon: SkipForward, label: "Skipped", cls: "border-amber/30 bg-amber/10 text-amber" },
   failed:    { icon: X, label: "Failed", cls: "border-crimson/30 bg-crimson/10 text-crimson" },
@@ -26,25 +27,25 @@ function protocolName(id: string) {
 }
 
 function describeMove(row: HistoryRow): string {
-  const from = row.fromAllocations;
-  const to = row.toAllocations;
+  const proposed = row.proposedAllocations ?? {};
+  const executed = row.executedAllocations ?? {};
   const changes: string[] = [];
-  for (const ta of to) {
-    const fa = from.find((f) => f.protocolId === ta.protocolId);
-    if (!fa) continue;
-    const diff = ta.percentage - fa.percentage;
-    if (Math.abs(diff) < 0.5) continue;
+  for (const [pid, val] of Object.entries(executed)) {
+    const proposedVal = Number(proposed[pid] ?? 0);
+    const executedVal = Number(val ?? 0);
+    const diff = executedVal - proposedVal;
+    if (Math.abs(diff) < 1) continue;
     const dir = diff > 0 ? "+" : "";
-    changes.push(`${protocolName(ta.protocolId)} ${dir}${diff.toFixed(1)}%`);
+    changes.push(`${protocolName(pid)} ${dir}${formatUsd(diff)}`);
   }
-  return changes.join(", ") || "No change";
+  return changes.join(", ") || "Rebalanced";
 }
 
 const columnHelper = createColumnHelper<HistoryRow>();
 
 function buildColumns(): ColumnDef<HistoryRow, unknown>[] {
   return [
-    columnHelper.accessor("timestamp", {
+    columnHelper.accessor("createdAt", {
       header: "Date",
       cell: (info) => {
         const d = new Date(info.getValue());
@@ -67,7 +68,7 @@ function buildColumns(): ColumnDef<HistoryRow, unknown>[] {
       header: "Gas",
       cell: (info) => (
         <span className="font-mono text-xs text-muted-foreground">
-          {formatUsd(info.getValue())}
+          {formatUsd(info.getValue() ?? 0)}
         </span>
       ),
     }) as ColumnDef<HistoryRow, unknown>,
@@ -75,7 +76,7 @@ function buildColumns(): ColumnDef<HistoryRow, unknown>[] {
       header: "Status",
       cell: (info) => {
         const val = info.getValue();
-        const badge = STATUS_BADGE[val] ?? STATUS_BADGE.completed;
+        const badge = STATUS_BADGE[val] ?? STATUS_BADGE.executed;
         const Icon = badge.icon;
         return (
           <span

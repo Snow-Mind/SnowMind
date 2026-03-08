@@ -35,7 +35,7 @@ async def health_detailed(request: Request):
     active_accounts = 0
     try:
         db = get_db()
-        result = db.table("accounts").select("id", count="exact").eq("status", "active").execute()
+        result = db.table("accounts").select("id", count="exact").eq("is_active", True).execute()
         active_accounts = result.count or 0
     except Exception as exc:
         db_status = f"error: {exc}"
@@ -56,10 +56,9 @@ async def health_detailed(request: Request):
     cb_states = protocol_circuit_breaker.get_all_states()
     protocols_info = {}
     for pid in ACTIVE_ADAPTERS:
-        state = cb_states.get(pid)
+        state_str = cb_states.get(pid, "closed")
         protocols_info[pid] = {
-            "circuit_breaker": state["state"] if state else "closed",
-            "failures": state["failure_count"] if state else 0,
+            "circuit_breaker": state_str,
         }
 
     return {
