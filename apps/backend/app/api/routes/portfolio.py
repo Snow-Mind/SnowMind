@@ -8,14 +8,13 @@ from supabase import Client
 
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.allocation import AllocationResponse, PortfolioResponse
 from app.models.rebalance_log import RebalanceHistoryResponse, RebalanceLogResponse
 
 logger = logging.getLogger("snowmind")
 
-router = APIRouter(dependencies=[Depends(require_privy_auth)])
+router = APIRouter()  # All portfolio reads are public
 
 # Protocol display names
 _NAMES = {"benqi": "Benqi", "aave_v3": "Aave V3", "euler_v2": "Euler V2"}

@@ -18,7 +18,7 @@ from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryRespo
 
 logger = logging.getLogger("snowmind")
 
-router = APIRouter(dependencies=[Depends(require_privy_auth)])
+router = APIRouter()  # Auth applied per-endpoint
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -54,6 +54,7 @@ async def trigger_rebalance(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Manually trigger a rebalance check for one account."""
     account = await _lookup_account(db, address)
@@ -165,6 +166,7 @@ async def withdraw_all(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Withdraw all funds from every active protocol back to the smart account."""
     account = await _lookup_account(db, address)

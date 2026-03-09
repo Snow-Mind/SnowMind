@@ -25,7 +25,7 @@ from app.services.optimizer.risk_scorer import RiskScorer
 
 logger = logging.getLogger("snowmind")
 
-router = APIRouter(dependencies=[Depends(require_privy_auth)])
+router = APIRouter()  # Auth applied per-endpoint
 
 _rate_fetcher = RateFetcher()
 _risk_scorer = RiskScorer()
@@ -104,6 +104,7 @@ async def run_optimizer_preview(
     request: Request,
     req: RunOptimizerRequest,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Run the MILP solver and return proposed allocations (no execution).
 
@@ -229,6 +230,7 @@ async def preview_by_address(
     address: str,
     db: Client = Depends(get_db),
     risk_tolerance: str = "moderate",
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Same as /run but accepts the address as a path segment."""
     return await run_optimizer_preview(
@@ -244,6 +246,7 @@ async def run_and_execute(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Run MILP solver then execute the rebalance via UserOp (internal only)."""
     address = validate_eth_address(address)

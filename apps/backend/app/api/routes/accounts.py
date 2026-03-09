@@ -24,7 +24,7 @@ from app.services.execution.session_key import (
 
 logger = logging.getLogger("snowmind")
 
-router = APIRouter(dependencies=[Depends(require_privy_auth)])
+router = APIRouter()  # Auth applied per-endpoint
 
 
 # ── Request body ───────────────────────────────────────────
@@ -97,6 +97,8 @@ async def register_account(
     request: Request,
     req: RegisterAccountRequest,
     db: Client = Depends(get_db),
+    # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
+    # _auth: dict = Depends(require_privy_auth),
 ):
     """Register a new smart account (and optionally store its session key)."""
     return await _do_register(req, db)
@@ -108,6 +110,8 @@ async def register_account_alias(
     request: Request,
     req: RegisterAccountRequest,
     db: Client = Depends(get_db),
+    # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
+    # _auth: dict = Depends(require_privy_auth),
 ):
     """Alias of POST /accounts for frontend compatibility."""
     return await _do_register(req, db)
@@ -193,6 +197,7 @@ async def revoke_account_session_key(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Revoke (deactivate) the active session key for an account."""
     return await _do_revoke(address, db)
@@ -204,6 +209,7 @@ async def revoke_account_session_key_post(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """POST alias for session-key revocation (frontend compat)."""
     return await _do_revoke(address, db)
@@ -225,6 +231,8 @@ async def update_risk_profile(
     address: str,
     req: RiskProfileRequest,
     db: Client = Depends(get_db),
+    # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
+    # _auth: dict = Depends(require_privy_auth),
 ):
     """Update the risk tolerance for an account."""
     address = validate_eth_address(address)
