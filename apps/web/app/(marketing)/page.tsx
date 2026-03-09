@@ -159,7 +159,7 @@ export default function LandingPage() {
       <header className="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-5 py-4 md:px-10 md:py-5">
         <Link href="/" className="flex items-center gap-2.5">
           <Image
-            src="/logo.png"
+            src="/snowmind-logo.png"
             alt="Snow Mind"
             width={120}
             height={38}
@@ -415,11 +415,11 @@ export default function LandingPage() {
           {/* Top row */}
           <div className="flex flex-col md:flex-row items-center md:items-center justify-between gap-6">
             <Image
-              src="/logo.png"
+              src="/snowmind-logo.png"
               alt="Snow Mind"
               width={100}
               height={30}
-              className="h-[30px] w-auto brightness-0 invert opacity-80"
+              className="h-[30px] w-auto"
             />
             <nav className="flex items-center gap-8">
               <a
