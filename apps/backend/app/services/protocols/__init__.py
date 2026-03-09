@@ -1,7 +1,5 @@
 """Protocol adapter registry."""
 
-from __future__ import annotations
-
 import logging
 
 from .base import BaseProtocolAdapter

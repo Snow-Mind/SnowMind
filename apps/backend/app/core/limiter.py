@@ -1,7 +1,5 @@
 """Shared rate-limiter instance for per-endpoint slowapi limits."""
 
-from __future__ import annotations
-
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 

@@ -4,8 +4,6 @@ All paths accept a smart-account **address** (not a UUID account_id) so the
 frontend can use the address it already has from ZeroDev.
 """
 
-from __future__ import annotations
-
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request

@@ -1,7 +1,5 @@
 """Input validation utilities for API boundaries."""
 
-from __future__ import annotations
-
 from web3 import Web3
 
 

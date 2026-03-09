@@ -1,7 +1,5 @@
 """ERC-4337 UserOperation construction and Pimlico bundler submission."""
 
-from __future__ import annotations
-
 import logging
 
 from eth_abi import encode

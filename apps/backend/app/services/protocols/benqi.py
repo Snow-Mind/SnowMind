@@ -1,7 +1,5 @@
 """Benqi protocol adapter — real qiToken mint/redeem via web3.py."""
 
-from __future__ import annotations
-
 import asyncio
 import time
 from decimal import Decimal

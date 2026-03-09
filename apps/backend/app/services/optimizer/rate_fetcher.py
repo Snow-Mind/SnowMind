@@ -1,7 +1,5 @@
 """On-chain APY rate fetcher with TWAP smoothing."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

@@ -6,8 +6,6 @@ States:
   HALF_OPEN → auto-reset after cooldown, next call tests the protocol
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from enum import Enum

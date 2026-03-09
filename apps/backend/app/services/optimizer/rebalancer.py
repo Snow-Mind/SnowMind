@@ -3,8 +3,6 @@
 Transaction ordering: withdrawals FIRST, then deposits (ensure funds are available).
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal

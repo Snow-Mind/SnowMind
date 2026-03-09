@@ -1,7 +1,5 @@
 """Abstract base for protocol adapters."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from decimal import Decimal

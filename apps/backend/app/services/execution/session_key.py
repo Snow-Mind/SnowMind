@@ -5,8 +5,6 @@ plaintext keys are marked with the ``_sensitive`` suffix or explicitly
 suppress logging output.
 """
 
-from __future__ import annotations
-
 import base64
 import logging
 import os

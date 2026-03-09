@@ -1,7 +1,5 @@
 """Optimizer routes — rate display, dry-run preview, and execute."""
 
-from __future__ import annotations
-
 import logging
 import time
 from decimal import Decimal

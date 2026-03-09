@@ -1,7 +1,5 @@
 """Shared Pydantic base model with camelCase serialization."""
 
-from __future__ import annotations
-
 from pydantic import BaseModel, ConfigDict
 
 

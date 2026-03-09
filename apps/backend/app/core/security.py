@@ -1,7 +1,5 @@
 """Authentication, authorisation, and rate-limiting primitives."""
 
-from __future__ import annotations
-
 import hmac
 import logging
 import time

@@ -6,8 +6,6 @@ Validation pipeline (per rate):
   3. DefiLlama     →  cross-validate (WARN if >2 % divergence)
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 from decimal import Decimal

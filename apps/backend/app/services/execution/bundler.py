@@ -1,7 +1,5 @@
 """Pimlico bundler client for submitting and tracking ERC-4337 UserOperations."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 

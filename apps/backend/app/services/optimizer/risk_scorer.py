@@ -4,8 +4,6 @@ MVP: deterministic rules based on base scores + utilization.
 Post-MVP: Replace with TD3-BC RL agent output.
 """
 
-from __future__ import annotations
-
 import logging
 from decimal import Decimal
 

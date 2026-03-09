@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 interface NeuralSnowflakeProps {
@@ -118,25 +119,13 @@ export default function NeuralSnowflake({
 /** Lightweight static snowflake logo for navbars/footers */
 export function NeuralSnowflakeLogo({ className }: { className?: string }) {
   return (
-    <svg
-      viewBox="0 0 200 200"
+    <Image
+      src="/snowmind-logo.png"
+      alt="SnowMind"
+      width={20}
+      height={20}
       className={cn(className)}
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <circle cx={100} cy={100} r={6} fill="none" stroke="#00C4FF" strokeWidth={2} />
-      <circle cx={100} cy={100} r={3} fill="#00C4FF" opacity={0.7} />
-      {[0, 60, 120, 180, 240, 300].map((deg, i) => {
-        const angle = ((deg - 90) * Math.PI) / 180;
-        const len = 60;
-        const endX = 100 + Math.cos(angle) * len;
-        const endY = 100 + Math.sin(angle) * len;
-        return (
-          <g key={i}>
-            <line x1={100} y1={100} x2={endX} y2={endY} stroke="#00C4FF" strokeWidth={1.5} strokeLinecap="round" />
-            <circle cx={endX} cy={endY} r={2} fill="#00C4FF" opacity={0.8} />
-          </g>
-        );
-      })}
-    </svg>
+      unoptimized
+    />
   );
 }

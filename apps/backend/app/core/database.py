@@ -1,7 +1,5 @@
 """Supabase client initialisation and FastAPI dependency."""
 
-from __future__ import annotations
-
 import logging
 
 from supabase import Client, create_client

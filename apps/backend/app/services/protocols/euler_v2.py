@@ -1,7 +1,5 @@
 """Euler V2 adapter — ERC-4626 vault interface (Coming Soon on Avalanche)."""
 
-from __future__ import annotations
-
 import time
 from decimal import Decimal
 

@@ -5,8 +5,6 @@ are excluded automatically.  A minimum of 2 snapshots is required before
 the TWAP is considered reliable.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from datetime import datetime, timedelta, timezone

@@ -1,7 +1,5 @@
 """Account registration, lookup, and session-key management."""
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timezone
 from typing import Literal

@@ -1,7 +1,5 @@
 """Production scheduler with distributed locking, retry, and graceful shutdown."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import signal

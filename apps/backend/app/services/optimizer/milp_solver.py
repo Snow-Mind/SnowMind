@@ -6,8 +6,6 @@ Formulation:
   min-alloc, min-protocols, max-protocols, big-M linkage).
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from dataclasses import dataclass, field
