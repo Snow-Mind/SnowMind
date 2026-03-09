@@ -33,6 +33,15 @@ logger = logging.getLogger("snowmind")
 
 MAX_UINT256 = 2**256 - 1
 
+# Module-level shared AsyncWeb3 instance — avoids creating new aiohttp sessions per request
+_shared_w3: AsyncWeb3 | None = None
+
+def _get_async_web3() -> AsyncWeb3:
+    global _shared_w3
+    if _shared_w3 is None:
+        _shared_w3 = AsyncWeb3(AsyncHTTPProvider(get_settings().AVALANCHE_RPC_URL))
+    return _shared_w3
+
 # -- ERC-20 balanceOf ABI -------------------------------------------------
 ERC20_BALANCE_ABI = [
     {
@@ -67,7 +76,7 @@ class Rebalancer:
         self.rate_fetcher = RateFetcher()
         self.rate_validator = RateValidator()
         self.risk_scorer = RiskScorer()
-        self.w3 = AsyncWeb3(AsyncHTTPProvider(self.settings.AVALANCHE_RPC_URL))
+        self.w3 = _get_async_web3()
         self._protocol_addresses: dict[str, str] = {
             "aave_v3": self.settings.AAVE_V3_POOL,
             "benqi": self.settings.BENQI_POOL,

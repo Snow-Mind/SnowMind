@@ -225,7 +225,14 @@ def apply_max_move_cap(
     """
     Doc: "Cap any single rebalance at 30% of total portfolio per operation."
     If proposed change exceeds 30%, scale it down proportionally.
+    Bypass: If all current allocations are zero (initial deployment), no cap.
     """
+    # Initial deployment: no existing protocol allocations → deploy fully
+    total_current = sum(current.values())
+    if total_current <= Decimal("0.01"):
+        logger.info("Initial deployment — bypassing max move cap")
+        return dict(proposed)
+
     max_move = total * Decimal("0.30")
     capped = dict(proposed)
 

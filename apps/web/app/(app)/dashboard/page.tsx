@@ -22,6 +22,7 @@ import OptimizerPreview from "@/components/dashboard/OptimizerPreview";
 import EmergencyPanel from "@/components/dashboard/EmergencyPanel";
 import RebalanceCountdown from "@/components/dashboard/RebalanceCountdown";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
+import DepositPanel from "@/components/dashboard/DepositPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -308,6 +309,23 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Deposit + Quick Actions row */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-1">
+          <ErrorBoundary name="deposit-panel">
+            <DepositPanel />
+          </ErrorBoundary>
+        </div>
+        <div className="lg:col-span-2">
+          <QuickActions
+            smartAccountAddress={smartAccountAddress}
+            rebalanceStatus={rebalanceData?.status}
+            protocolCount={portfolio?.allocations.length ?? 0}
+            onOptimized={() => refetchPortfolio()}
+          />
+        </div>
+      </div>
+
       {/* Live Tx Feed + Allocation */}
       <div className="grid gap-4 lg:grid-cols-5">
         <div className="lg:col-span-2">
@@ -327,14 +345,6 @@ export default function DashboardPage() {
       <RebalanceHistory
         history={historyData?.logs ?? []}
         total={historyData?.total ?? 0}
-      />
-
-      {/* Quick actions */}
-      <QuickActions
-        smartAccountAddress={smartAccountAddress}
-        rebalanceStatus={rebalanceData?.status}
-        protocolCount={portfolio?.allocations.length ?? 0}
-        onOptimized={() => refetchPortfolio()}
       />
 
       {/* Live Rates + Optimizer Preview */}

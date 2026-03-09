@@ -140,14 +140,66 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
   }, [wallet, storedAddress, state.setupStep, initializeAccount]);
 
   // If we have a stored address but no wallet yet, keep showing "ready"
-  // Once wallet connects, try to re-register with backend (idempotent)
+  // Once wallet connects, re-register and ensure backend has a session key
   useEffect(() => {
     if (wallet && storedAddress && state.setupStep === "ready" && !state.kernelClient) {
-      // Silently re-register to ensure backend has this account
-      api.registerAccount({
-        ownerAddress: wallet.address as string,
-        smartAccountAddress: storedAddress,
-      }).catch(() => {});
+      (async () => {
+        try {
+          // Check if backend already has an active session key
+          const detail = await api.getAccountDetail(storedAddress);
+          if (detail.sessionKey?.isActive) {
+            // Backend has a valid session key — just re-register (idempotent)
+            await api.registerAccount({
+              ownerAddress: wallet.address as string,
+              smartAccountAddress: storedAddress,
+            });
+            return;
+          }
+
+          // No session key — recreate kernel client and grant one
+          const walletClient = await toViemAccount({ wallet });
+          const { kernelAccount, kernelClient } = await createSmartAccount(walletClient);
+
+          let sessionKeyData: {
+            serializedPermission: string;
+            sessionKeyAddress: string;
+            expiresAt: number;
+          } | null = null;
+          try {
+            sessionKeyData = await grantAndSerializeSessionKey(
+              kernelAccount,
+              kernelClient,
+              {
+                AAVE_POOL:   CONTRACTS.AAVE_POOL,
+                BENQI_POOL:  CONTRACTS.BENQI_POOL,
+                EULER_VAULT: CONTRACTS.EULER_VAULT,
+                USDC:        CONTRACTS.USDC,
+              },
+              { maxAmountUSDC: 10000, durationDays: 30, maxOpsPerDay: 20 },
+            );
+          } catch {
+            console.warn("Session key re-grant failed");
+          }
+
+          await api.registerAccount({
+            ownerAddress: wallet.address as string,
+            smartAccountAddress: storedAddress,
+            ...(sessionKeyData && {
+              sessionKeyData: {
+                serializedPermission: sessionKeyData.serializedPermission,
+                sessionKeyAddress: sessionKeyData.sessionKeyAddress,
+                expiresAt: sessionKeyData.expiresAt,
+              },
+            }),
+          });
+
+          if (kernelClient) {
+            setState((prev) => ({ ...prev, kernelClient }));
+          }
+        } catch {
+          // Non-critical — backend registration is best-effort
+        }
+      })();
     }
   }, [wallet, storedAddress, state.setupStep, state.kernelClient]);
 

@@ -176,10 +176,12 @@ async def withdraw_all(
     from app.services.optimizer.rebalancer import Rebalancer
 
     rebalancer = Rebalancer()
-    tx_hash = await rebalancer.execute_rebalance(
-        account_id=account_id,
-        smart_account_address=addr,
-        target_allocations={},  # empty = withdraw everything
-    )
-
-    return {"status": "executed", "txHash": tx_hash}
+    try:
+        tx_hash = await rebalancer.execute_emergency_withdrawal(
+            account_id=account_id,
+            smart_account_address=addr,
+        )
+        return {"status": "executed", "txHash": tx_hash}
+    except ValueError as exc:
+        # "No positions to withdraw" or "No active session key"
+        return {"status": "skipped", "txHash": None, "reason": str(exc)}
