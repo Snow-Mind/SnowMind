@@ -1,42 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { Bell, Sliders, Wallet, ExternalLink } from "lucide-react";
+import { Bell, Wallet, ExternalLink } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { EXPLORER, CHAIN } from "@/lib/constants";
-import { api } from "@/lib/api-client";
-import { toast } from "sonner";
 import SessionKeyStatus from "@/components/dashboard/SessionKeyStatus";
 import EmergencyPanel from "@/components/dashboard/EmergencyPanel";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-
-type RiskTolerance = "conservative" | "moderate" | "aggressive";
-
-const RISK_PROFILES = [
-  {
-    id: "conservative" as RiskTolerance,
-    label: "Conservative",
-    description:
-      "Lower returns, maximum safety. Prefers established protocols with longest track record.",
-    lambda: "High risk aversion (λ = 0.8)",
-  },
-  {
-    id: "moderate" as RiskTolerance,
-    label: "Moderate",
-    description:
-      "Balanced approach. Optimizes for risk-adjusted yield across diversified positions.",
-    lambda: "Balanced (λ = 0.5)",
-  },
-  {
-    id: "aggressive" as RiskTolerance,
-    label: "Aggressive",
-    description:
-      "Maximizes raw yield. Accepts higher concentration in top-yielding protocols.",
-    lambda: "Low risk aversion (λ = 0.2)",
-  },
-] as const;
 
 function truncateAddress(addr: string | null | undefined): string {
   if (!addr) return "—";
@@ -56,22 +27,6 @@ export default function SettingsPage() {
   const { eoaAddress, activeWallet } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
-  const [activeRisk, setActiveRisk] = useState<RiskTolerance>("moderate");
-  const [savingRisk, setSavingRisk] = useState(false);
-
-  async function handleRiskChange(profile: RiskTolerance) {
-    if (profile === activeRisk || !smartAccountAddress) return;
-    setSavingRisk(true);
-    try {
-      await api.saveRiskProfile(smartAccountAddress, profile);
-      setActiveRisk(profile);
-      toast.success(`Risk profile updated to ${profile}`);
-    } catch {
-      toast.error("Failed to update risk profile");
-    } finally {
-      setSavingRisk(false);
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -81,69 +36,16 @@ export default function SettingsPage() {
           Settings
         </h1>
         <p className="mt-1 text-[13px] text-slate-500">
-          Configure your optimization strategy and account preferences.
+          Manage your account preferences and session key.
         </p>
       </div>
-
-      {/* Risk Strategy */}
-      <motion.div
-        className="crystal-card p-5"
-        variants={fadeUp}
-        initial="hidden"
-        animate="visible"
-        custom={0}
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E8E2DA] bg-void-2">
-            <Sliders className="h-3.5 w-3.5 text-glacier" />
-          </div>
-          <div>
-            <h2 className="text-[13px] font-medium text-arctic">
-              Risk Strategy
-            </h2>
-            <p className="text-[11px] text-slate-500">
-              Controls the risk aversion parameter (λ) in the MILP optimizer.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          {RISK_PROFILES.map((profile) => (
-            <button
-              key={profile.id}
-              onClick={() => handleRiskChange(profile.id)}
-              disabled={savingRisk}
-              className={`rounded-xl border p-4 text-left transition-all disabled:opacity-60 ${
-                activeRisk === profile.id
-                  ? "border-glacier/30 bg-glacier/[0.06] shadow-glow-sm"
-                  : "border-[#E8E2DA] bg-void-2/30 hover:border-[#D4CEC7] hover:bg-void-2/50"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <h3 className="text-[13px] font-medium text-arctic">
-                  {profile.label}
-                </h3>
-                {activeRisk === profile.id && (
-                  <span className="inline-block h-2 w-2 rounded-full bg-glacier" />
-                )}
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                {profile.description}
-              </p>
-              <p className="mt-2.5 font-mono text-[11px] text-glacier/60">
-                {profile.lambda}
-              </p>
-            </button>
-          ))}
-        </div>
-      </motion.div>
 
       {/* Session Key */}
       <motion.div
         variants={fadeUp}
         initial="hidden"
         animate="visible"
-        custom={1}
+        custom={0}
       >
         <SessionKeyStatus />
       </motion.div>
@@ -154,7 +56,7 @@ export default function SettingsPage() {
         variants={fadeUp}
         initial="hidden"
         animate="visible"
-        custom={2}
+        custom={1}
       >
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E8E2DA] bg-void-2">
@@ -204,7 +106,7 @@ export default function SettingsPage() {
         variants={fadeUp}
         initial="hidden"
         animate="visible"
-        custom={3}
+        custom={2}
       >
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E8E2DA] bg-void-2">
@@ -267,7 +169,7 @@ export default function SettingsPage() {
         variants={fadeUp}
         initial="hidden"
         animate="visible"
-        custom={4}
+        custom={3}
       >
         <EmergencyPanel />
       </motion.div>

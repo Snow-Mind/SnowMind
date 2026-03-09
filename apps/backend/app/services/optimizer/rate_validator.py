@@ -35,8 +35,8 @@ class RateValidator:
 
     # Protocol IDs to DefiLlama pool IDs on Avalanche
     DEFILLAMA_POOL_IDS = {
-        "aave_v3": "aef45e00-ce62-4fad-a98b-64b81cdb89c1",   # Aave v3 Avalanche USDC
-        "benqi":   "22c2d2ed-8c7c-44d0-a4f7-b7c38d0e5e76",   # Benqi USDC
+        "aave_v3": "747c1d2a-c668-4682-b9f9-296571049571",   # Aave v3 Avalanche USDC
+        "benqi":   "cefa9bb8-c230-459a-a855-3b94571bf081",   # Benqi USDC
     }
 
     def __init__(self):
@@ -136,9 +136,13 @@ class RateValidator:
                     )
                     resp.raise_for_status()
                     data = resp.json()
+                    points = data.get("data") or []
+                    if not points:
+                        logger.warning("DefiLlama returned empty data for %s", protocol_id)
+                        return True
                     # Latest APY from DefiLlama (as decimal, not percent)
-                    latest = data["data"][-1]["apy"] / 100
-                    defillama_apy = Decimal(str(latest))
+                    latest_apy = points[-1].get("apy", points[-1].get("apyBase", 0))
+                    defillama_apy = Decimal(str(latest_apy)) / Decimal("100")
                     self._defillama_cache[protocol_id] = (defillama_apy, time.time())
             except Exception as e:
                 logger.warning("DefiLlama check failed for %s: %s", protocol_id, e)

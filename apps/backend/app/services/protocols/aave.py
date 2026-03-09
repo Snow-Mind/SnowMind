@@ -1,17 +1,24 @@
 """Aave V3 protocol adapter — live Fuji / mainnet contract reads."""
 
+import logging
 import time
 from decimal import Decimal
 
+import httpx
 from web3 import AsyncWeb3, AsyncHTTPProvider
 from web3.contract import AsyncContract
 
 from app.core.config import get_settings
 from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata
 
+logger = logging.getLogger(__name__)
+
 # ── Mainnet fallbacks (used when IS_TESTNET is False) ───────────────
 _AAVE_V3_POOL_MAINNET = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
 _USDC_MAINNET = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6C"
+
+# DefiLlama pool UUID for Aave V3 USDC on Avalanche
+_DEFILLAMA_AAVE_POOL = "747c1d2a-c668-4682-b9f9-296571049571"
 
 # ── Minimal ABI slices ──────────────────────────────────────────────
 AAVE_POOL_ABI = [
@@ -109,19 +116,63 @@ class AaveV3Adapter(BaseProtocolAdapter):
     async def get_rate(self) -> ProtocolRate:
         """Read live currentLiquidityRate from the Aave V3 Pool contract.
         
-        Returns 0 APY gracefully if getReserveData reverts (e.g. asset not listed).
+        Falls back to DefiLlama mainnet rate when on-chain call fails (e.g. Fuji testnet).
         """
         try:
             reserve_data = await self.pool.functions.getReserveData(
                 self.w3.to_checksum_address(self.usdc_address)
             ).call()
-        except Exception as exc:
-            # getReserveData reverts when asset is not listed on this pool deployment
-            import logging
-            logging.getLogger(__name__).warning(
-                "Aave V3 getReserveData reverted for %s: %s — returning 0 APY",
-                self.usdc_address, exc,
+
+            RAY = Decimal("1e27")
+            SECONDS_PER_YEAR = Decimal("31557600")
+
+            liquidity_rate = Decimal(str(reserve_data[2])) / RAY
+            apy = (1 + liquidity_rate / SECONDS_PER_YEAR) ** SECONDS_PER_YEAR - 1
+
+            atoken_address = reserve_data[8]
+
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=apy,
+                tvl_usd=await self._get_tvl(atoken_address),
+                utilization_rate=None,
+                fetched_at=time.time(),
             )
+        except Exception as exc:
+            logger.warning(
+                "Aave V3 on-chain read failed: %s — falling back to DefiLlama", exc,
+            )
+            return await self._fetch_defillama_rate()
+
+    async def _fetch_defillama_rate(self) -> ProtocolRate:
+        """Fetch live Aave V3 Avalanche USDC rate from DefiLlama yield API."""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"https://yields.llama.fi/chart/{_DEFILLAMA_AAVE_POOL}"
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            points = data.get("data") or []
+            if not points:
+                raise ValueError("Empty data from DefiLlama")
+
+            latest = points[-1]
+            apy_pct = latest.get("apy", latest.get("apyBase", 0))
+            apy = Decimal(str(apy_pct)) / Decimal("100")
+            tvl = Decimal(str(latest.get("tvlUsd", 0)))
+
+            logger.info("Aave V3 rate from DefiLlama: %.2f%%", float(apy * 100))
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=apy,
+                tvl_usd=tvl,
+                utilization_rate=None,
+                fetched_at=time.time(),
+            )
+        except Exception as exc:
+            logger.warning("DefiLlama fallback also failed: %s — returning 0 APY", exc)
             return ProtocolRate(
                 protocol_id=self.protocol_id,
                 apy=Decimal("0"),
@@ -129,25 +180,6 @@ class AaveV3Adapter(BaseProtocolAdapter):
                 utilization_rate=None,
                 fetched_at=time.time(),
             )
-
-        RAY = Decimal("1e27")
-        SECONDS_PER_YEAR = Decimal("31557600")
-
-        # index 2 = currentLiquidityRate (RAY units)
-        liquidity_rate = Decimal(str(reserve_data[2])) / RAY
-
-        # Compound-interest APY
-        apy = (1 + liquidity_rate / SECONDS_PER_YEAR) ** SECONDS_PER_YEAR - 1
-
-        atoken_address = reserve_data[8]  # index 8 = aTokenAddress
-
-        return ProtocolRate(
-            protocol_id=self.protocol_id,
-            apy=apy,
-            tvl_usd=await self._get_tvl(atoken_address),
-            utilization_rate=None,
-            fetched_at=time.time(),
-        )
 
     async def _get_tvl(self, atoken_address: str) -> Decimal:
         atoken = self.w3.eth.contract(
