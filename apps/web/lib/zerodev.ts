@@ -224,6 +224,28 @@ export async function grantAndSerializeSessionKey(
     policyVersion: CallPolicyVersion.V0_0_4,
     permissions: [
 
+      // USDC approve — allow session key to set approvals for protocol contracts
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.AAVE_POOL },
+          null,   // amount — any (maxUint256 for efficiency)
+        ],
+      },
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.BENQI_POOL },
+          null,
+        ],
+      },
+
       // AAVE V3 — supply (USDC only, amount capped)
       {
         target: contracts.AAVE_POOL,

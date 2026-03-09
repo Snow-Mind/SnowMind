@@ -42,6 +42,15 @@ const BENQI_ABI = [
     outputs: [{ name: "", type: "uint256" }] },
 ]
 
+const ERC20_ABI = [
+  { name: "approve", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount",  type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }] },
+]
+
 const REGISTRY_ABI = [
   { name: "logRebalance", type: "function", stateMutability: "nonpayable",
     inputs: [
@@ -140,6 +149,22 @@ export async function executeRebalance({
             resolveContractKey(d.protocol, contracts),
             parseUnits(String(w.amountUSDC), 6),
           ],
+        }),
+      })
+    }
+  }
+
+  // ── APPROVE USDC for deposit targets (idempotent — no-op if already set) ──
+  const depositTargets = new Set(deposits.map(d => d.protocol))
+  for (const protocol of depositTargets) {
+    const spender = resolveContractKey(protocol, contracts)
+    if (spender) {
+      calls.push({
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI, functionName: "approve",
+          args: [spender, maxUint256],
         }),
       })
     }
