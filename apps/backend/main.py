@@ -166,7 +166,7 @@ def _validate_environment() -> None:
         errors.append("SUPABASE_URL must start with http:// or https://")
 
     # Required secrets: warn if empty (not fatal for testnet dev)
-    for var_name in ("JWT_SECRET", "BACKEND_API_KEY"):
+    for var_name in ("JWT_SECRET", "BACKEND_API_KEY", "PRIVY_APP_ID"):
         if not getattr(settings, var_name, ""):
             logger.warning("Environment variable %s is not set", var_name)
 

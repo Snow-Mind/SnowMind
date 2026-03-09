@@ -383,6 +383,171 @@
   border: 1px solid rgba(0, 196, 255, 0.08);
 }
 
+/* ══════════════════════════════════════════════════════════════
+   APP LIGHT THEME — matches landing page palette
+   Applied via .app-light class on the (app) layout wrapper.
+   Overrides SnowMind design tokens + shadcn semantics.
+   ══════════════════════════════════════════════════════════════ */
+.app-light {
+  /* Core SnowMind tokens → warm light palette */
+  --void: #F5F0EB;
+  --void-2: #FAFAF8;
+  --glacier: #E84142;
+  --glacier-dim: #D63031;
+  --arctic: #1A1715;
+  --frost: #5C5550;
+  --frost-dim: #8A837C;
+  --mint: #059669;
+  --crimson: #DC2626;
+  --amber: #D97706;
+  --ice-card: rgba(26, 23, 21, 0.02);
+  --ice-card-hover: rgba(232, 65, 66, 0.04);
+  --border-frost: #E8E2DA;
+  --border-frost-hover: rgba(232, 65, 66, 0.25);
+  --glow-glacier: 0 2px 8px rgba(0, 0, 0, 0.04);
+  --glow-glacier-strong: 0 8px 32px rgba(26, 23, 21, 0.08);
+
+  /* shadcn semantic layer */
+  --background: #F5F0EB;
+  --foreground: #1A1715;
+  --card: #FAFAF8;
+  --card-foreground: #1A1715;
+  --popover: #FAFAF8;
+  --popover-foreground: #1A1715;
+  --primary: #E84142;
+  --primary-foreground: #FAFAF8;
+  --secondary: #EDE8E3;
+  --secondary-foreground: #1A1715;
+  --muted: #EDE8E3;
+  --muted-foreground: #5C5550;
+  --accent: rgba(232, 65, 66, 0.08);
+  --accent-foreground: #1A1715;
+  --destructive: #DC2626;
+  --border: #E8E2DA;
+  --input: #E8E2DA;
+  --ring: #E84142;
+  --chart-1: #E84142;
+  --chart-2: #7C3AED;
+  --chart-3: #059669;
+  --chart-4: #D97706;
+  --chart-5: #DC2626;
+  --sidebar: #FAFAF8;
+  --sidebar-foreground: #1A1715;
+  --sidebar-primary: #E84142;
+  --sidebar-primary-foreground: #FAFAF8;
+  --sidebar-accent: rgba(232, 65, 66, 0.08);
+  --sidebar-accent-foreground: #1A1715;
+  --sidebar-border: #E8E2DA;
+  --sidebar-ring: #E84142;
+
+  /* Shadow overrides */
+  --shadow-glow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-glow-md: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-glow-lg: 0 8px 32px rgba(26, 23, 21, 0.08);
+}
+
+/* Crystal card — light variant */
+.app-light .crystal-card {
+  background: #FAFAF8;
+  border: 1px solid #E8E2DA;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.app-light .crystal-card:hover {
+  background: #FAFAF8;
+  border-color: #D4CEC7;
+  box-shadow: 0 8px 32px rgba(26, 23, 21, 0.08);
+  transform: translateY(-2px);
+}
+
+/* Glacier button — Avalanche red in light theme */
+.app-light .glacier-btn {
+  background: #E84142;
+  color: #FAFAF8;
+  box-shadow: 0 4px 24px rgba(232, 65, 66, 0.25);
+}
+.app-light .glacier-btn:hover {
+  background: #D63031;
+  box-shadow: 0 4px 24px rgba(232, 65, 66, 0.35);
+  transform: translateY(-1px);
+}
+.app-light .glacier-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(232, 65, 66, 0.2);
+}
+
+/* Ghost button — light variant */
+.app-light .ghost-btn {
+  background: rgba(26, 23, 21, 0.03);
+  border: 1px solid #E8E2DA;
+  color: #1A1715;
+}
+.app-light .ghost-btn:hover {
+  background: rgba(26, 23, 21, 0.06);
+  border-color: #D4CEC7;
+}
+
+/* Metric value — red accent in light theme */
+.app-light .metric-value {
+  color: #E84142;
+}
+
+/* Section label — warm accent */
+.app-light .section-label {
+  color: rgba(232, 65, 66, 0.6);
+}
+
+/* Gradient text — warm version */
+.app-light .gradient-text {
+  background: linear-gradient(135deg, #D63031 0%, #E84142 50%, #F0696A 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Chip — light variant */
+.app-light .chip {
+  border: 1px solid rgba(232, 65, 66, 0.15);
+  background: rgba(232, 65, 66, 0.06);
+  color: #E84142;
+}
+
+/* Ridge divider — warm */
+.app-light .ridge-divider {
+  background: linear-gradient(90deg, transparent 0%, #E8E2DA 30%, #D4CEC7 50%, #E8E2DA 70%, transparent 100%);
+}
+
+/* Frost glass — light variant */
+.app-light .frost-glass {
+  background: rgba(250, 250, 248, 0.85);
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+  border: 1px solid #E8E2DA;
+}
+
+/* Scrollbar — warm */
+.app-light ::-webkit-scrollbar-thumb {
+  background: rgba(26, 23, 21, 0.12);
+}
+.app-light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(26, 23, 21, 0.25);
+}
+.app-light * {
+  scrollbar-color: rgba(26, 23, 21, 0.12) transparent;
+}
+
+/* Selection — warm */
+.app-light ::selection {
+  background: rgba(232, 65, 66, 0.15);
+  color: #1A1715;
+}
+
+/* Focus ring — warm */
+.app-light :focus-visible {
+  outline-color: rgba(232, 65, 66, 0.4);
+}
+
 /* ── Keyframe Animations ─────────────────────────────────── */
 @keyframes snow-fall {
   0% {

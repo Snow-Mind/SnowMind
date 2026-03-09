@@ -116,8 +116,8 @@ export default function PortfolioPage() {
         <div className="grid gap-3 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="crystal-card p-4">
-              <div className="h-3 w-24 animate-pulse rounded bg-white/[0.04]" />
-              <div className="mt-3 h-6 w-32 animate-pulse rounded bg-white/[0.04]" />
+              <div className="h-3 w-24 animate-pulse rounded bg-[#E8E2DA]" />
+              <div className="mt-3 h-6 w-32 animate-pulse rounded bg-[#E8E2DA]" />
             </div>
           ))}
         </div>

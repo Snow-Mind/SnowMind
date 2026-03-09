@@ -94,7 +94,7 @@ export default function SettingsPage() {
         custom={0}
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.04] bg-void-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E8E2DA] bg-void-2">
             <Sliders className="h-3.5 w-3.5 text-glacier" />
           </div>
           <div>
@@ -116,7 +116,7 @@ export default function SettingsPage() {
               className={`rounded-xl border p-4 text-left transition-all disabled:opacity-60 ${
                 activeRisk === profile.id
                   ? "border-glacier/30 bg-glacier/[0.06] shadow-glow-sm"
-                  : "border-white/[0.04] bg-void-2/30 hover:border-white/[0.08] hover:bg-void-2/50"
+                  : "border-[#E8E2DA] bg-void-2/30 hover:border-[#D4CEC7] hover:bg-void-2/50"
               }`}
             >
               <div className="flex items-center justify-between">
@@ -157,7 +157,7 @@ export default function SettingsPage() {
         custom={2}
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.04] bg-void-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E8E2DA] bg-void-2">
             <Bell className="h-3.5 w-3.5 text-glacier" />
           </div>
           <div>
@@ -179,7 +179,7 @@ export default function SettingsPage() {
           ].map((notif) => (
             <div
               key={notif.label}
-              className="flex items-center justify-between rounded-lg border border-white/[0.04] bg-void-2/30 px-4 py-2.5"
+              className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-void-2/30 px-4 py-2.5"
             >
               <p className="text-[13px] text-arctic">{notif.label}</p>
               <div
@@ -207,7 +207,7 @@ export default function SettingsPage() {
         custom={3}
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.04] bg-void-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E8E2DA] bg-void-2">
             <Wallet className="h-3.5 w-3.5 text-glacier" />
           </div>
           <div>
@@ -219,7 +219,7 @@ export default function SettingsPage() {
         </div>
 
         <div className="mt-5 space-y-2">
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.04] bg-void-2/30 px-4 py-2.5">
+          <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-void-2/30 px-4 py-2.5">
             <p className="text-[13px] text-slate-500">EOA Wallet</p>
             <div className="flex items-center gap-2">
               <p className="font-mono text-xs text-arctic">
@@ -237,7 +237,7 @@ export default function SettingsPage() {
               )}
             </div>
           </div>
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.04] bg-void-2/30 px-4 py-2.5">
+          <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-void-2/30 px-4 py-2.5">
             <p className="text-[13px] text-slate-500">Smart Account</p>
             <div className="flex items-center gap-2">
               <p className="font-mono text-xs text-arctic">
@@ -255,7 +255,7 @@ export default function SettingsPage() {
               )}
             </div>
           </div>
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.04] bg-void-2/30 px-4 py-2.5">
+          <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-void-2/30 px-4 py-2.5">
             <p className="text-[13px] text-slate-500">Network</p>
             <p className="text-[11px] text-arctic">{CHAIN.name}</p>
           </div>

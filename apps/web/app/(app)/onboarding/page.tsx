@@ -118,10 +118,10 @@ export default function OnboardingPage() {
             <div
               className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-all ${
                 step === s
-                  ? "bg-glacier text-void shadow-[0_0_12px_rgba(0,196,255,0.4)]"
+                  ? "bg-[#E84142] text-white shadow-[0_0_12px_rgba(232,65,66,0.3)]"
                   : i < (["strategy", "deposit", "done"] as OnboardingStep[]).indexOf(step)
-                    ? "bg-glacier/20 text-glacier"
-                    : "bg-white/5 text-slate-500"
+                    ? "bg-[#E84142]/20 text-[#E84142]"
+                    : "bg-[#EDE8E3] text-[#8A837C]"
               }`}
             >
               {i < (["strategy", "deposit", "done"] as OnboardingStep[]).indexOf(step) ? (
@@ -134,8 +134,8 @@ export default function OnboardingPage() {
               <div
                 className={`h-px w-10 ${
                   i < (["strategy", "deposit", "done"] as OnboardingStep[]).indexOf(step)
-                    ? "bg-glacier/40"
-                    : "bg-white/10"
+                    ? "bg-[#E84142]/40"
+                    : "bg-[#E8E2DA]"
                 }`}
               />
             )}
@@ -154,17 +154,17 @@ export default function OnboardingPage() {
             transition={{ duration: 0.25 }}
           >
             <div className="mb-8 text-center">
-              <h1 className="font-display text-2xl font-semibold text-arctic">
+              <h1 className="font-display text-2xl font-semibold text-[#1A1715]">
                 Activate Your AI Agent
               </h1>
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-[#5C5550]">
                 Choose which protocols SnowMind will optimize across and set your risk preference.
               </p>
             </div>
 
             {/* Protocol cards */}
             <div className="mb-8 space-y-3">
-              <label className="text-xs font-medium uppercase tracking-wider text-slate-500">
+              <label className="text-xs font-medium uppercase tracking-wider text-[#8A837C]">
                 Protocols
               </label>
               {protocols.map((p) => {
@@ -177,18 +177,18 @@ export default function OnboardingPage() {
                     disabled={p.isComingSoon}
                     className={`group relative flex w-full items-center gap-4 rounded-xl border p-4 text-left transition-all ${
                       p.isComingSoon
-                        ? "cursor-not-allowed border-white/5 opacity-50"
+                        ? "cursor-not-allowed border-[#E8E2DA] opacity-50"
                         : selected
-                          ? "border-glacier/30 bg-glacier/[0.06]"
-                          : "border-white/5 bg-white/[0.02] hover:border-white/10"
+                          ? "border-[#E84142]/30 bg-[#E84142]/[0.04]"
+                          : "border-[#E8E2DA] bg-[#FAFAF8] hover:border-[#D4CEC7]"
                     }`}
                   >
                     {/* Checkbox */}
                     <div
                       className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all ${
                         selected
-                          ? "border-glacier bg-glacier text-void"
-                          : "border-white/20 bg-white/5"
+                          ? "border-[#E84142] bg-[#E84142] text-white"
+                          : "border-[#D4CEC7] bg-[#EDE8E3]"
                       }`}
                     >
                       {selected && <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -196,9 +196,9 @@ export default function OnboardingPage() {
 
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-arctic">{p.name}</span>
+                        <span className="text-sm font-semibold text-[#1A1715]">{p.name}</span>
                         {p.isComingSoon && (
-                          <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-slate-400">
+                          <span className="rounded-full bg-[#EDE8E3] px-2 py-0.5 text-[10px] text-[#8A837C]">
                             Coming Soon
                           </span>
                         )}
@@ -209,7 +209,7 @@ export default function OnboardingPage() {
                           Risk {p.riskScore}/10
                         </span>
                       </div>
-                      <p className="mt-0.5 text-xs text-slate-500">{p.description}</p>
+                      <p className="mt-0.5 text-xs text-[#5C5550]">{p.description}</p>
                     </div>
 
                     {/* Live APY */}
@@ -217,7 +217,7 @@ export default function OnboardingPage() {
                       <div className="text-sm font-semibold text-mint">
                         {apy !== undefined ? formatPct(apy * 100) : "—"}
                       </div>
-                      <div className="text-[10px] text-slate-500">APY</div>
+                      <div className="text-[10px] text-[#8A837C]">APY</div>
                     </div>
                   </button>
                 );
@@ -226,7 +226,7 @@ export default function OnboardingPage() {
 
             {/* Risk tolerance */}
             <div className="mb-8">
-              <label className="mb-3 block text-xs font-medium uppercase tracking-wider text-slate-500">
+              <label className="mb-3 block text-xs font-medium uppercase tracking-wider text-[#8A837C]">
                 Risk Preference
               </label>
               <div className="grid grid-cols-3 gap-2">
@@ -237,13 +237,13 @@ export default function OnboardingPage() {
                       onClick={() => setRiskLevel(key)}
                       className={`rounded-lg border p-3 text-center transition-all ${
                         riskLevel === key
-                          ? "border-glacier/30 bg-glacier/[0.06]"
-                          : "border-white/5 bg-white/[0.02] hover:border-white/10"
+                          ? "border-[#E84142]/30 bg-[#E84142]/[0.04]"
+                          : "border-[#E8E2DA] bg-[#FAFAF8] hover:border-[#D4CEC7]"
                       }`}
                     >
-                      <div className="text-xs font-semibold text-arctic">{meta.label}</div>
-                      <div className="mt-0.5 font-mono text-[10px] text-glacier">{meta.lambda}</div>
-                      <div className="mt-1 text-[10px] text-slate-500">{meta.desc}</div>
+                      <div className="text-xs font-semibold text-[#1A1715]">{meta.label}</div>
+                      <div className="mt-0.5 font-mono text-[10px] text-[#E84142]">{meta.lambda}</div>
+                      <div className="mt-1 text-[10px] text-[#5C5550]">{meta.desc}</div>
                     </button>
                   ),
                 )}
@@ -259,11 +259,11 @@ export default function OnboardingPage() {
               ].map(({ icon: Icon, label, desc }) => (
                 <div
                   key={label}
-                  className="rounded-lg border border-white/5 bg-white/[0.02] p-3 text-center"
+                  className="rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] p-3 text-center"
                 >
-                  <Icon className="mx-auto h-4 w-4 text-glacier" />
-                  <div className="mt-1.5 text-[11px] font-medium text-arctic">{label}</div>
-                  <div className="text-[10px] text-slate-500">{desc}</div>
+                  <Icon className="mx-auto h-4 w-4 text-[#E84142]" />
+                  <div className="mt-1.5 text-[11px] font-medium text-[#1A1715]">{label}</div>
+                  <div className="text-[10px] text-[#5C5550]">{desc}</div>
                 </div>
               ))}
             </div>
@@ -272,7 +272,7 @@ export default function OnboardingPage() {
             <button
               onClick={handleActivate}
               disabled={isSaving || selectedProtocols.size === 0}
-              className="glacier-btn flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-void transition-all disabled:opacity-50"
+              className="glacier-btn flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white transition-all disabled:opacity-50"
             >
               {isSaving ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -300,26 +300,26 @@ export default function OnboardingPage() {
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-mint/10">
                 <CheckCircle2 className="h-6 w-6 text-mint" />
               </div>
-              <h1 className="font-display text-2xl font-semibold text-arctic">
+              <h1 className="font-display text-2xl font-semibold text-[#1A1715]">
                 Agent Activated
               </h1>
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-[#5C5550]">
                 Fund your smart account with USDC to start earning optimized yield.
               </p>
             </div>
 
             {/* Smart account address card */}
-            <div className="mb-6 rounded-xl border border-glacier/20 bg-glacier/[0.04] p-5">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">
+            <div className="mb-6 rounded-xl border border-[#E84142]/20 bg-[#E84142]/[0.04] p-5">
+              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-[#8A837C]">
                 Your Smart Account
               </div>
               <div className="flex items-center gap-2">
-                <code className="flex-1 truncate font-mono text-sm text-arctic">
+                <code className="flex-1 truncate font-mono text-sm text-[#1A1715]">
                   {smartAccountAddress}
                 </code>
                 <button
                   onClick={handleCopyAddress}
-                  className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-arctic"
+                  className="rounded-lg p-2 text-[#8A837C] transition-colors hover:bg-[#EDE8E3] hover:text-[#1A1715]"
                 >
                   {copied ? (
                     <CheckCircle2 className="h-4 w-4 text-mint" />
@@ -332,7 +332,7 @@ export default function OnboardingPage() {
                     href={EXPLORER.address(smartAccountAddress)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-arctic"
+                    className="rounded-lg p-2 text-[#8A837C] transition-colors hover:bg-[#EDE8E3] hover:text-[#1A1715]"
                   >
                     <ExternalLink className="h-4 w-4" />
                   </a>
@@ -341,8 +341,8 @@ export default function OnboardingPage() {
             </div>
 
             {/* How to deposit */}
-            <div className="mb-6 rounded-xl border border-white/5 bg-white/[0.02] p-5">
-              <div className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">
+            <div className="mb-6 rounded-xl border border-[#E8E2DA] bg-[#FAFAF8] p-5">
+              <div className="mb-3 text-xs font-medium uppercase tracking-wider text-[#8A837C]">
                 How to Deposit
               </div>
               <ol className="space-y-3">
@@ -352,26 +352,26 @@ export default function OnboardingPage() {
                   "Sit back and watch your yield compound 24/7",
                 ].map((text, i) => (
                   <li key={i} className="flex items-start gap-3">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-glacier/10 text-[10px] font-bold text-glacier">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#E84142]/10 text-[10px] font-bold text-[#E84142]">
                       {i + 1}
                     </span>
-                    <span className="text-sm text-slate-300">{text}</span>
+                    <span className="text-sm text-[#5C5550]">{text}</span>
                   </li>
                 ))}
               </ol>
             </div>
 
             {/* Selected strategy recap */}
-            <div className="mb-8 rounded-xl border border-white/5 bg-white/[0.02] p-5">
-              <div className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">
+            <div className="mb-8 rounded-xl border border-[#E8E2DA] bg-[#FAFAF8] p-5">
+              <div className="mb-3 text-xs font-medium uppercase tracking-wider text-[#8A837C]">
                 Your Strategy
               </div>
               <div className="flex items-center gap-4">
                 <div>
-                  <div className="text-sm text-arctic">
+                  <div className="text-sm text-[#1A1715]">
                     {RISK_META[riskLevel].label} · {RISK_META[riskLevel].lambda}
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-[#8A837C]">
                     {Array.from(selectedProtocols)
                       .map((id) => PROTOCOL_CONFIG[id].name)
                       .join(" + ")}
@@ -389,7 +389,7 @@ export default function OnboardingPage() {
                       return formatPct(avg * 100);
                     })()}
                   </span>
-                  <span className="text-xs text-slate-500">avg APY</span>
+                  <span className="text-xs text-[#8A837C]">avg APY</span>
                 </div>
               </div>
             </div>
@@ -397,7 +397,7 @@ export default function OnboardingPage() {
             {/* Go to dashboard */}
             <button
               onClick={handleGoToDashboard}
-              className="glacier-btn flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-void transition-all"
+              className="glacier-btn flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white transition-all"
             >
               Go to Dashboard
               <ArrowRight className="h-4 w-4" />
@@ -405,7 +405,7 @@ export default function OnboardingPage() {
 
             <button
               onClick={() => setStep("strategy")}
-              className="mt-3 w-full rounded-xl border border-white/5 py-3 text-sm text-slate-400 transition-colors hover:border-white/10 hover:text-slate-300"
+              className="mt-3 w-full rounded-xl border border-[#E8E2DA] py-3 text-sm text-[#8A837C] transition-colors hover:border-[#D4CEC7] hover:text-[#5C5550]"
             >
               Back to Strategy
             </button>

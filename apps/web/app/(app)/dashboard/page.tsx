@@ -66,8 +66,8 @@ function StatsSkeleton() {
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {Array.from({ length: 4 }).map((_, i) => (
         <div key={i} className="crystal-card p-4">
-          <div className="h-2.5 w-20 animate-pulse rounded bg-white/[0.04]" />
-          <div className="mt-3 h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
+          <div className="h-2.5 w-20 animate-pulse rounded bg-[#E8E2DA]" />
+          <div className="mt-3 h-6 w-28 animate-pulse rounded bg-[#E8E2DA]" />
         </div>
       ))}
     </div>

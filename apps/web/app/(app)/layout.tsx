@@ -30,11 +30,11 @@ function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits:
   const pathname = usePathname();
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-white/[0.04] bg-void-2/60 backdrop-blur-2xl">
+    <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-[#E8E2DA] bg-[#FAFAF8]/95 backdrop-blur-xl">
       {/* Logo */}
-      <div className="flex h-14 items-center gap-2 border-b border-white/[0.04] px-5">
+      <div className="flex h-14 items-center gap-2 border-b border-[#E8E2DA] px-5">
         <NeuralSnowflakeLogo className="h-5 w-5" />
-        <span className="font-display text-sm font-semibold text-arctic">
+        <span className="font-display text-sm font-semibold text-[#E84142]">
           SnowMind
         </span>
       </div>
@@ -55,8 +55,8 @@ function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits:
                   className={cn(
                     "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-200",
                     isActive
-                      ? "bg-glacier/[0.08] text-glacier"
-                      : "text-slate-500 hover:bg-white/[0.03] hover:text-slate-300"
+                      ? "bg-[#E84142]/[0.08] text-[#E84142]"
+                      : "text-[#5C5550] hover:bg-[#EDE8E3] hover:text-[#1A1715]"
                   )}
                 >
                   <item.icon className="h-4 w-4" />
@@ -69,17 +69,17 @@ function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits:
       </nav>
 
       {/* Bottom links */}
-      <div className="border-t border-white/[0.04] px-3 py-3">
+      <div className="border-t border-[#E8E2DA] px-3 py-3">
         <Link
           href="/"
-          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-500 transition-colors hover:text-slate-300"
+          className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-[#5C5550] transition-colors hover:text-[#1A1715]"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           Back to Site
         </Link>
         <button
           onClick={onLogout}
-          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-500 transition-colors hover:text-crimson"
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-[#5C5550] transition-colors hover:text-[#DC2626]"
         >
           <LogOut className="h-3.5 w-3.5" />
           Disconnect
@@ -107,7 +107,7 @@ function TopBar({
   onLogout: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/[0.04] bg-void/70 px-6 backdrop-blur-2xl">
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[#E8E2DA] bg-[#F5F0EB]/80 px-6 backdrop-blur-xl">
       <div />
       <div className="flex items-center gap-3">
         <ConnectButton
@@ -178,8 +178,8 @@ export default function AppLayout({
   // Don't render until auth is ready
   if (!ready) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-glacier border-t-transparent" />
+      <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
       </div>
     );
   }
@@ -187,7 +187,7 @@ export default function AppLayout({
   if (!authenticated) return null;
 
   return (
-    <div className="min-h-screen bg-void text-arctic">
+    <div className="app-light min-h-screen bg-[#F5F0EB] text-[#1A1715]">
       <Sidebar onLogout={logout} hasDeposits={hasDeposits} />
       <div className="flex min-h-screen flex-1 flex-col pl-56">
         <TopBar
