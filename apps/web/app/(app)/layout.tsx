@@ -1,30 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   PieChart,
   Settings,
   LogOut,
   ExternalLink,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import ConnectButton from "@/components/wallet/ConnectButton";
 import SmartAccountSetup from "@/components/wallet/SmartAccountSetup";
 
 const NAV_ITEMS = [
+  { href: "/onboarding", label: "Activate", icon: Sparkles },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/portfolio", label: "Portfolio", icon: PieChart },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-function Sidebar({ onLogout }: { onLogout: () => void }) {
+function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits: boolean }) {
   const pathname = usePathname();
 
   return (
@@ -40,7 +42,11 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
       {/* Navigation */}
       <nav className="flex-1 px-3 py-3">
         <ul className="space-y-0.5">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => {
+            // Hide "Activate" once user has deposits; hide dashboard/portfolio/settings for fresh users
+            if (item.href === "/onboarding") return !hasDeposits;
+            return true;
+          }).map((item) => {
             const isActive = pathname === item.href;
             return (
               <li key={item.href}>
@@ -124,9 +130,13 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { authenticated, ready, login, logout, activeWallet, eoaAddress, isLoading: authLoading } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
+  const { data: portfolio } = usePortfolio(smartAccount.address ?? undefined);
   const [setupOpen, setSetupOpen] = useState(false);
+
+  const hasDeposits = Number(portfolio?.totalDepositedUsd ?? 0) > 0;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -134,6 +144,18 @@ export default function AppLayout({
       router.replace("/");
     }
   }, [ready, authenticated, router]);
+
+  // Redirect new users to onboarding after smart account is ready
+  useEffect(() => {
+    if (
+      smartAccount.setupStep === "ready" &&
+      !hasDeposits &&
+      pathname !== "/onboarding" &&
+      pathname !== "/settings"
+    ) {
+      router.replace("/onboarding");
+    }
+  }, [smartAccount.setupStep, hasDeposits, pathname, router]);
 
   // Show setup wizard when smart account is being created
   const shouldOpenSetup = authenticated && smartAccount.setupStep === "creating";
@@ -166,7 +188,7 @@ export default function AppLayout({
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar onLogout={logout} />
+      <Sidebar onLogout={logout} hasDeposits={hasDeposits} />
       <div className="flex min-h-screen flex-1 flex-col pl-56">
         <TopBar
           authenticated={authenticated}

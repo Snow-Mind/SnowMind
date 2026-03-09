@@ -67,7 +67,9 @@ Set these in **Railway → Service → Variables**:
 | `ENTRYPOINT_V07` | ERC-4337 EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 | `SESSION_KEY_ENCRYPTION_KEY` | 32-byte AES-256 hex key (generate: `openssl rand -hex 32`) | *(generate fresh)* |
 | `JWT_SECRET` | Random 256-bit secret (generate: `openssl rand -hex 32`) | *(generate fresh)* |
-| `BACKEND_API_KEY` | Shared secret for frontend→backend auth | *(generate fresh)* |
+| `BACKEND_API_KEY` | Shared secret for frontend→backend auth (fallback) | *(generate fresh)* |
+| `PRIVY_APP_ID` | Privy app ID (same as frontend `NEXT_PUBLIC_PRIVY_APP_ID`) | *(from privy.io dashboard)* |
+| `PRIVY_APP_SECRET` | Privy app secret for server-side API calls | *(from privy.io dashboard)* |
 | `DEPLOYER_PRIVATE_KEY` | Testnet deployer PK (only for MockBenqi accrual) | *(optional)* |
 | `IS_TESTNET` | `true` for Fuji, `false` for mainnet | `true` |
 | `DEBUG` | `false` in production | `false` |

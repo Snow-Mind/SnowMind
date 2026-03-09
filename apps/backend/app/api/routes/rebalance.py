@@ -13,14 +13,14 @@ from supabase import Client
 
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_api_key
+from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryResponse
 
 logger = logging.getLogger("snowmind")
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_privy_auth)])
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

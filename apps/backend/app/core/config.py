@@ -36,11 +36,15 @@ class Settings(BaseSettings):
     # ── Deployer (testnet Benqi accrual only) ────────────────
     DEPLOYER_PRIVATE_KEY: str = ""  # Testnet deployer for accrueInterest()
 
+    # ── Auth / Privy ──────────────────────────────────────────
+    PRIVY_APP_ID: str = ""      # From privy.io dashboard
+    PRIVY_APP_SECRET: str = ""  # For server-side Privy API calls
+
     # ── Security ─────────────────────────────────────────────
     SESSION_KEY_ENCRYPTION_KEY: str = ""  # 32 bytes, hex-encoded
     JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
-    BACKEND_API_KEY: str = ""  # Frontend → backend auth
+    BACKEND_API_KEY: str = ""  # Frontend → backend auth (fallback)
 
     # ── Execution Service (Node.js sidecar) ──────────────────
     EXECUTION_SERVICE_URL: str = "http://localhost:3001"

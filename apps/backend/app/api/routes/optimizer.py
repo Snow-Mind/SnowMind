@@ -13,7 +13,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_api_key
+from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
@@ -27,7 +27,7 @@ from app.services.optimizer.risk_scorer import RiskScorer
 
 logger = logging.getLogger("snowmind")
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_privy_auth)])
 
 _rate_fetcher = RateFetcher()
 _risk_scorer = RiskScorer()

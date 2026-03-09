@@ -9,6 +9,7 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import Header, HTTPException, Request, status
 from jose import JWTError, jwt
 
@@ -80,6 +81,88 @@ async def require_jwt(
             detail="Invalid or expired token",
         )
     return payload
+
+
+# ── Privy auth (user-facing endpoints) ──────────────────────
+
+_privy_jwks_cache: dict | None = None
+_privy_jwks_last_fetch: float = 0.0
+_PRIVY_JWKS_CACHE_TTL = 3600  # 1 hour
+
+
+async def _fetch_privy_jwks(app_id: str) -> dict:
+    """Fetch and cache Privy's JWKS for token verification."""
+    global _privy_jwks_cache, _privy_jwks_last_fetch
+
+    now = time.time()
+    if _privy_jwks_cache and (now - _privy_jwks_last_fetch) < _PRIVY_JWKS_CACHE_TTL:
+        return _privy_jwks_cache
+
+    url = f"https://auth.privy.io/api/v1/apps/{app_id}/.well-known/jwks.json"
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, timeout=10)
+        resp.raise_for_status()
+        _privy_jwks_cache = resp.json()
+        _privy_jwks_last_fetch = now
+        logger.info("Refreshed Privy JWKS cache")
+        return _privy_jwks_cache
+
+
+async def verify_privy_token(token: str) -> dict | None:
+    """Verify a Privy-issued access token and return decoded claims.
+
+    Returns None on any failure (invalid signature, expired, wrong audience).
+    """
+    s = get_settings()
+    if not s.PRIVY_APP_ID:
+        return None
+
+    try:
+        jwks = await _fetch_privy_jwks(s.PRIVY_APP_ID)
+        payload = jwt.decode(
+            token,
+            jwks,
+            algorithms=["ES256"],
+            audience=s.PRIVY_APP_ID,
+            issuer="privy.io",
+        )
+        return payload
+    except (JWTError, httpx.HTTPError) as exc:
+        logger.debug("Privy token verification failed: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("Unexpected error verifying Privy token: %s", exc)
+        return None
+
+
+async def require_privy_auth(
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> dict:
+    """FastAPI dependency — verifies Privy auth token or API key fallback.
+
+    Returns a claims dict with at minimum ``sub`` (Privy DID or "service").
+
+    Priority:
+      1. Privy Bearer token (per-user auth — recommended)
+      2. API key (service-to-service / backward compat)
+    """
+    # 1. Try Privy token
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token:
+            payload = await verify_privy_token(token)
+            if payload:
+                return payload
+
+    # 2. Fall back to shared API key
+    if x_api_key and verify_api_key(x_api_key):
+        return {"sub": "service", "type": "api_key"}
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing authentication",
+    )
 
 
 # ── In-memory sliding-window rate limiter ────────────────────
