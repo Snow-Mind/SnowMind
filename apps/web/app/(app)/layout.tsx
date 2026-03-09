@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import ConnectButton from "@/components/wallet/ConnectButton";
 import SmartAccountSetup from "@/components/wallet/SmartAccountSetup";
 
@@ -25,7 +26,7 @@ const NAV_ITEMS = [
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-function Sidebar({ onLogout, hasAccount }: { onLogout: () => void; hasAccount: boolean }) {
+function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits: boolean }) {
   const pathname = usePathname();
 
   return (
@@ -42,8 +43,8 @@ function Sidebar({ onLogout, hasAccount }: { onLogout: () => void; hasAccount: b
       <nav className="flex-1 px-3 py-3">
         <ul className="space-y-0.5">
           {NAV_ITEMS.filter((item) => {
-            // Show "Activate" only for users without an account; show all other tabs once account exists
-            if (item.href === "/onboarding") return !hasAccount;
+            // Show "Activate" until user has deposits; always show other tabs
+            if (item.href === "/onboarding") return !hasDeposits;
             return true;
           }).map((item) => {
             const isActive = pathname === item.href;
@@ -132,9 +133,11 @@ export default function AppLayout({
   const pathname = usePathname();
   const { authenticated, ready, login, logout, activeWallet, eoaAddress, isLoading: authLoading } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
+  const { data: portfolio } = usePortfolio(smartAccount.address ?? undefined);
   const [setupOpen, setSetupOpen] = useState(false);
 
   const hasAccount = smartAccount.hasAccount;
+  const hasDeposits = Number(portfolio?.totalDepositedUsd ?? 0) > 0;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -187,7 +190,7 @@ export default function AppLayout({
 
   return (
     <div className="app-light min-h-screen bg-[#F5F0EB] text-[#1A1715]">
-      <Sidebar onLogout={logout} hasAccount={hasAccount} />
+      <Sidebar onLogout={logout} hasDeposits={hasDeposits} />
       <div className="flex min-h-screen flex-1 flex-col pl-56">
         <TopBar
           authenticated={authenticated}

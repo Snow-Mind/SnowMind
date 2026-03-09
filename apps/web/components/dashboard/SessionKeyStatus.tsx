@@ -84,17 +84,17 @@ export default function SessionKeyStatus() {
     return (
       <div className="crystal-card p-6">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-void-2">
-            <Shield className="h-4 w-4 text-glacier" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]">
+            <Shield className="h-4 w-4 text-[#E84142]" />
           </div>
           <div className="flex-1">
-            <h2 className="text-sm font-medium text-arctic">Session Key</h2>
-            <p className="text-xs text-muted-foreground">Loading…</p>
+            <h2 className="text-sm font-medium text-[#1A1715]">Session Key</h2>
+            <p className="text-xs text-[#8A837C]">Loading…</p>
           </div>
         </div>
         <div className="mt-5 space-y-2">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-9 animate-pulse rounded-lg bg-ice-20" />
+            <div key={i} className="h-9 animate-pulse rounded-lg bg-[#EDE8E3]" />
           ))}
         </div>
       </div>
@@ -106,16 +106,16 @@ export default function SessionKeyStatus() {
     return (
       <div className="crystal-card p-6">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-void-2">
-            <Shield className="h-4 w-4 text-glacier" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]">
+            <Shield className="h-4 w-4 text-[#E84142]" />
           </div>
           <div className="flex-1">
-            <h2 className="text-sm font-medium text-arctic">Session Key</h2>
-            <p className="text-xs text-muted-foreground">
+            <h2 className="text-sm font-medium text-[#1A1715]">Session Key</h2>
+            <p className="text-xs text-[#8A837C]">
               No session key granted yet. Set up your smart account to enable autonomous optimization.
             </p>
           </div>
-          <span className="rounded-full border border-crimson/30 bg-crimson/10 px-2 py-0.5 text-xs text-crimson">
+          <span className="rounded-full border border-[#DC2626]/30 bg-[#DC2626]/10 px-2 py-0.5 text-xs text-[#DC2626]">
             Not Granted
           </span>
         </div>
@@ -126,20 +126,20 @@ export default function SessionKeyStatus() {
   return (
     <div className="crystal-card p-6">
       <div className="flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-void-2">
-          <Shield className="h-4 w-4 text-glacier" />
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]">
+          <Shield className="h-4 w-4 text-[#E84142]" />
         </div>
         <div className="flex-1">
-          <h2 className="text-sm font-medium text-arctic">Session Key</h2>
-          <p className="text-xs text-muted-foreground">
+          <h2 className="text-sm font-medium text-[#1A1715]">Session Key</h2>
+          <p className="text-xs text-[#8A837C]">
             Controls what SnowMind can do with your smart account.
           </p>
         </div>
         <span
           className={`rounded-full border px-2 py-0.5 text-xs ${
             isActive
-              ? "border-mint/30 bg-mint/10 text-mint"
-              : "border-crimson/30 bg-crimson/10 text-crimson"
+              ? "border-[#059669]/30 bg-[#059669]/10 text-[#059669]"
+              : "border-[#DC2626]/30 bg-[#DC2626]/10 text-[#DC2626]"
           }`}
         >
           {isActive ? "Active" : "Inactive"}
@@ -148,24 +148,24 @@ export default function SessionKeyStatus() {
 
       {/* Authorized actions list */}
       <div className="mt-5">
-        <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <h3 className="text-[10px] uppercase tracking-wider text-[#8A837C]">
           Authorized Actions
         </h3>
         <div className="mt-2 space-y-1.5">
           {authorized.map((a) => (
             <div
               key={`${a.protocol}-${a.action}`}
-              className="flex items-center gap-2 rounded-lg border border-border/30 bg-void-2/20 px-3 py-2"
+              className="flex items-center gap-2 rounded-lg border border-[#E8E2DA]/60 bg-[#EDE8E3]/30 px-3 py-2"
             >
-              <Check className="h-3 w-3 text-mint" />
+              <Check className="h-3 w-3 text-[#059669]" />
               <span
                 className="text-xs font-medium"
                 style={{ color: a.color }}
               >
                 {a.protocol}
               </span>
-              <span className="text-xs text-arctic">{a.action}()</span>
-              <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+              <span className="text-xs text-[#1A1715]">{a.action}()</span>
+              <span className="ml-auto font-mono text-[10px] text-[#8A837C]">
                 {a.selector}
               </span>
             </div>
@@ -177,11 +177,11 @@ export default function SessionKeyStatus() {
           {["transfer()", "approve()", "delegatecall()"].map((fn) => (
             <div
               key={fn}
-              className="flex items-center gap-2 rounded-lg border border-crimson/10 bg-crimson/5 px-3 py-2"
+              className="flex items-center gap-2 rounded-lg border border-[#DC2626]/10 bg-[#DC2626]/5 px-3 py-2"
             >
-              <X className="h-3 w-3 text-crimson/60" />
-              <span className="text-xs text-crimson/60">{fn}</span>
-              <span className="ml-auto text-[10px] text-crimson/40">
+              <X className="h-3 w-3 text-[#DC2626]/60" />
+              <span className="text-xs text-[#DC2626]/60">{fn}</span>
+              <span className="ml-auto text-[10px] text-[#DC2626]/40">
                 Blocked
               </span>
             </div>
@@ -191,13 +191,13 @@ export default function SessionKeyStatus() {
 
       {/* Metadata */}
       <div className="mt-5 space-y-2">
-        <div className="flex items-center justify-between rounded-lg border border-border/30 bg-void-2/20 px-3 py-2.5">
+        <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA]/60 bg-[#EDE8E3]/30 px-3 py-2.5">
           <div className="flex items-center gap-2">
-            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs text-arctic">Expires</span>
+            <Clock className="h-3.5 w-3.5 text-[#8A837C]" />
+            <span className="text-xs text-[#1A1715]">Expires</span>
           </div>
           <span
-            className={`font-mono text-xs ${isExpiringSoon ? "text-amber-400" : "text-muted-foreground"}`}
+            className={`font-mono text-xs ${isExpiringSoon ? "text-amber-500" : "text-[#8A837C]"}`}
           >
             {isExpiringSoon && (
               <AlertTriangle className="mr-1 inline h-3 w-3 text-amber-400" />
@@ -205,9 +205,9 @@ export default function SessionKeyStatus() {
             {daysLeft} days left
           </span>
         </div>
-        <div className="flex items-center justify-between rounded-lg border border-border/30 bg-void-2/20 px-3 py-2.5">
-          <span className="text-xs text-arctic">Max per Tx</span>
-          <span className="font-mono text-xs text-muted-foreground">
+        <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA]/60 bg-[#EDE8E3]/30 px-3 py-2.5">
+          <span className="text-xs text-[#1A1715]">Max per Tx</span>
+          <span className="font-mono text-xs text-[#8A837C]">
             {sk.maxAmountPerTx}
           </span>
         </div>
@@ -215,14 +215,14 @@ export default function SessionKeyStatus() {
 
       {/* Actions */}
       <div className="mt-5 flex gap-2">
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-glacier/10 px-3 py-2 text-xs font-medium text-glacier transition-colors hover:bg-glacier/20">
+        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#E84142]/10 px-3 py-2 text-xs font-medium text-[#E84142] transition-colors hover:bg-[#E84142]/20">
           <RefreshCw className="h-3 w-3" />
           Renew Key
         </button>
         {!showRevokeConfirm ? (
           <button
             onClick={() => setShowRevokeConfirm(true)}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-crimson/10 px-3 py-2 text-xs font-medium text-crimson transition-colors hover:bg-crimson/20"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#DC2626]/10 px-3 py-2 text-xs font-medium text-[#DC2626] transition-colors hover:bg-[#DC2626]/20"
           >
             <X className="h-3 w-3" />
             Revoke Key
@@ -231,14 +231,14 @@ export default function SessionKeyStatus() {
           <div className="flex flex-1 gap-1">
             <button
               onClick={() => setShowRevokeConfirm(false)}
-              className="flex-1 rounded-lg border border-border/50 px-2 py-2 text-xs text-muted-foreground hover:text-arctic"
+              className="flex-1 rounded-lg border border-[#E8E2DA] px-2 py-2 text-xs text-[#8A837C] hover:text-[#1A1715]"
             >
               Cancel
             </button>
             <button
               onClick={handleRevoke}
               disabled={revoking}
-              className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-crimson px-2 py-2 text-xs font-medium text-white hover:bg-crimson/90 disabled:opacity-50"
+              className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-[#DC2626] px-2 py-2 text-xs font-medium text-white hover:bg-[#DC2626]/90 disabled:opacity-50"
             >
               {revoking && <Loader2 className="h-3 w-3 animate-spin" />}
               {revoking ? "Revoking…" : "Confirm"}
