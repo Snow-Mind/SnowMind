@@ -25,6 +25,7 @@ interface SmartAccountState {
 export function useSmartAccount(wallet: ConnectedWallet | null) {
   const storedAddress = usePortfolioStore((s) => s.smartAccountAddress) as Address | null;
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
+  const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount);
 
   const [state, setState] = useState<SmartAccountState>({
     address: storedAddress,
@@ -161,10 +162,23 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     });
   }, []);
 
+  const resetAccount = useCallback(() => {
+    clearSmartAccount();
+    setState({
+      address: null,
+      isDeployed: false,
+      setupStep: "idle",
+      error: null,
+      kernelClient: null,
+      txHashes: {},
+    });
+  }, [clearSmartAccount]);
+
   return {
     ...state,
     initializeAccount,
     retry,
+    resetAccount,
     isLoading: state.setupStep === "creating",
     hasAccount: state.setupStep === "ready" && !!state.address,
   };

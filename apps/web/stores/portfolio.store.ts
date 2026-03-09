@@ -10,6 +10,7 @@ interface PortfolioState {
   setSmartAccountAddress: (address: string) => void;
   setAllocations: (allocations: ProtocolAllocation[]) => void;
   setTotals: (deposited: string, yield_: string) => void;
+  clearSmartAccount: () => void;
 }
 
 export const usePortfolioStore = create<PortfolioState>()(
@@ -23,6 +24,8 @@ export const usePortfolioStore = create<PortfolioState>()(
       setAllocations: (allocations) => set({ allocations }),
       setTotals: (deposited, yield_) =>
         set({ totalDepositedUsd: deposited, totalYieldUsd: yield_ }),
+      clearSmartAccount: () =>
+        set({ smartAccountAddress: null, allocations: [], totalDepositedUsd: "0", totalYieldUsd: "0" }),
     }),
     {
       name: "snowmind-portfolio",
