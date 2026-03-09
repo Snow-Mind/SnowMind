@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import {
   Wallet,
   Cpu,
@@ -71,15 +72,54 @@ const SAFETY_CHECKS = [
 
 export default function HowItWorksPage() {
   return (
-    <main>
+    <main className="min-h-screen bg-[#F5F0EB]">
       {/* Header */}
-      <section className="pb-16 pt-24 sm:pt-32">
+      <header className="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-5 py-4 md:px-10 md:py-5 bg-[#F5F0EB]/80 backdrop-blur-md">
+        <Link href="/" className="flex items-center gap-2.5">
+          <Image
+            src="/snowmind-logo.png"
+            alt="Snow Mind"
+            width={120}
+            height={38}
+            className="h-[38px] w-auto"
+          />
+          <span className="font-sans font-bold text-xl text-[#E84142] tracking-[-0.02em]">
+            SnowMind
+          </span>
+        </Link>
+
+        <nav className="hidden md:flex items-center gap-8">
+          <Link
+            href="/how-it-works"
+            className="font-sans font-medium text-sm text-[#E84142]"
+          >
+            How It Works
+          </Link>
+          <Link
+            href="/docs"
+            className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
+          >
+            Docs
+          </Link>
+          <Link
+            href="/dashboard"
+            className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
+          >
+            Launch App
+          </Link>
+        </nav>
+      </header>
+
+      {/* Hero */}
+      <section className="pb-16 pt-28 sm:pt-36">
         <div className="mx-auto max-w-4xl px-6 text-center">
-          <p className="section-label">Documentation</p>
-          <h1 className="mt-3 font-display text-4xl font-bold tracking-tight text-arctic sm:text-5xl">
+          <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
+            Documentation
+          </p>
+          <h1 className="mt-3 font-sans text-4xl font-bold tracking-tight text-[#1A1715] sm:text-5xl">
             How SnowMind Works
           </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+          <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[#5C5550] sm:text-lg">
             A step-by-step look at how your stablecoins are optimized across
             Avalanche lending protocols — safely, autonomously, and
             transparently.
@@ -90,32 +130,35 @@ export default function HowItWorksPage() {
       {/* Steps */}
       <section className="pb-24">
         <div className="mx-auto max-w-4xl px-6">
-          <div className="space-y-12">
+          <div className="space-y-8">
             {DETAILED_STEPS.map((step, index) => (
-              <div key={step.title} className="crystal-card p-8 sm:p-10">
+              <div
+                key={step.title}
+                className="rounded-2xl border border-[#E8E2DA] bg-white/80 p-8 sm:p-10 transition-all hover:-translate-y-1 hover:shadow-lg"
+              >
                 <div className="flex items-start gap-6">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-void-2">
-                    <step.icon className="h-5 w-5 text-glacier" />
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#E8E2DA] bg-[#F5F0EB]">
+                    <step.icon className="h-5 w-5 text-[#E84142]" />
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-3">
-                      <span className="metric-value text-xs">
+                      <span className="font-mono text-xs font-semibold text-[#E84142]">
                         STEP {String(index + 1).padStart(2, "0")}
                       </span>
                     </div>
-                    <h2 className="mt-2 font-display text-2xl font-semibold text-arctic">
+                    <h2 className="mt-2 font-sans text-2xl font-semibold text-[#1A1715]">
                       {step.title}
                     </h2>
-                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                    <p className="mt-3 text-sm leading-relaxed text-[#5C5550]">
                       {step.description}
                     </p>
                     <ul className="mt-5 space-y-2.5">
                       {step.details.map((detail) => (
                         <li
                           key={detail}
-                          className="flex items-start gap-2.5 text-sm text-muted-foreground"
+                          className="flex items-start gap-2.5 text-sm text-[#5C5550]"
                         >
-                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-mint" />
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#E84142]" />
                           {detail}
                         </li>
                       ))}
@@ -129,14 +172,14 @@ export default function HowItWorksPage() {
       </section>
 
       {/* Safety section */}
-      <section className="border-t border-border/50 py-24">
+      <section className="border-t border-[#E8E2DA] bg-white/40 py-24">
         <div className="mx-auto max-w-4xl px-6">
           <div className="text-center">
-            <Shield className="mx-auto h-8 w-8 text-glacier" />
-            <h2 className="mt-4 font-display text-3xl font-bold tracking-tight text-arctic">
+            <Shield className="mx-auto h-8 w-8 text-[#E84142]" />
+            <h2 className="mt-4 font-sans text-3xl font-bold tracking-tight text-[#1A1715]">
               Safety at every layer
             </h2>
-            <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
+            <p className="mx-auto mt-4 max-w-xl text-[#5C5550]">
               Multiple independent safeguards protect your funds.
             </p>
           </div>
@@ -145,10 +188,10 @@ export default function HowItWorksPage() {
             {SAFETY_CHECKS.map((check) => (
               <div
                 key={check}
-                className="flex items-start gap-3 rounded-xl border border-border/50 bg-void-2/30 p-5"
+                className="flex items-start gap-3 rounded-xl border border-[#E8E2DA] bg-white/80 p-5"
               >
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-mint" />
-                <p className="text-sm text-muted-foreground">{check}</p>
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#E84142]" />
+                <p className="text-sm text-[#5C5550]">{check}</p>
               </div>
             ))}
           </div>
@@ -156,16 +199,19 @@ export default function HowItWorksPage() {
       </section>
 
       {/* CTA */}
-      <section className="border-t border-border/50 py-24">
+      <section className="border-t border-[#E8E2DA] bg-[#1A1715] py-24">
         <div className="mx-auto max-w-3xl px-6 text-center">
-          <h2 className="font-display text-3xl font-bold tracking-tight text-arctic">
+          <h2 className="font-sans text-3xl font-bold tracking-tight text-white">
             Ready to optimize?
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
+          <p className="mx-auto mt-4 max-w-xl text-[#8A837C]">
             Connect your wallet and start earning optimized yield in minutes.
           </p>
           <div className="mt-8">
-            <Link href="/dashboard" className="glacier-btn text-sm">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-2 bg-[#E84142] text-white font-semibold px-8 py-3 rounded-lg hover:bg-[#D63031] transition-colors"
+            >
               Launch App
               <ArrowRight className="h-4 w-4" />
             </Link>

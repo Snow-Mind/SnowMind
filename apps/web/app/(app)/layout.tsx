@@ -187,7 +187,7 @@ export default function AppLayout({
   if (!authenticated) return null;
 
   return (
-    <div className="flex min-h-screen">
+    <div className="min-h-screen bg-void text-arctic">
       <Sidebar onLogout={logout} hasDeposits={hasDeposits} />
       <div className="flex min-h-screen flex-1 flex-col pl-56">
         <TopBar

@@ -43,3 +43,4 @@ link.md
 # Foundry cache/broadcast
 contracts/cache/
 contracts/broadcast/
+backend_logs.md

@@ -3,7 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { GLSLHills } from "@/components/ui/glsl-hills";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Shield,
   TrendingUp,
@@ -69,6 +71,8 @@ export default function LandingPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
   const [featuresVisible, setFeaturesVisible] = useState(false);
+  const router = useRouter();
+  const { authenticated, login, ready } = useAuth();
 
   const scrollProgressRef = useRef(0);
   const heroRef = useRef<HTMLDivElement>(null);
@@ -179,17 +183,23 @@ export default function LandingPage() {
             How It Works
           </Link>
           <Link
-            href="#docs"
+            href="/docs"
             className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
           >
             Docs
           </Link>
-          <Link
-            href="/dashboard"
+          <button
+            onClick={() => {
+              if (authenticated) {
+                router.push("/dashboard");
+              } else if (ready) {
+                login();
+              }
+            }}
             className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
           >
             Launch App
-          </Link>
+          </button>
         </nav>
 
         <button
@@ -238,19 +248,25 @@ export default function LandingPage() {
           How It Works
         </Link>
         <Link
-          href="#docs"
+          href="/docs"
           onClick={() => setMenuOpen(false)}
           className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
         >
           Docs
         </Link>
-        <Link
-          href="/dashboard"
-          onClick={() => setMenuOpen(false)}
+        <button
+          onClick={() => {
+            setMenuOpen(false);
+            if (authenticated) {
+              router.push("/dashboard");
+            } else if (ready) {
+              login();
+            }
+          }}
           className="w-full text-center py-3 mt-1 bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base rounded-lg hover:bg-[#D63031] transition-colors"
         >
           Launch App
-        </Link>
+        </button>
       </div>
 
       {/* ═══ HERO SCROLL ZONE (200vh for scroll-lock transition) ═══ */}
@@ -276,7 +292,13 @@ export default function LandingPage() {
             <button
               className="hero-fadein-3 pointer-events-auto bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base px-10 py-4 rounded-[10px] mt-8 hover:bg-[#D63031] hover:scale-[1.02] transition-all duration-200 cursor-pointer"
               style={{ boxShadow: "0 4px 24px rgba(232, 65, 66, 0.3)" }}
-              onClick={() => console.log("Create Agent clicked")}
+              onClick={() => {
+                if (authenticated) {
+                  router.push("/dashboard");
+                } else if (ready) {
+                  login();
+                }
+              }}
             >
               Create Agent
             </button>
@@ -429,7 +451,7 @@ export default function LandingPage() {
                 How It Works
               </a>
               <a
-                href="#docs"
+                href="/docs"
                 className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
               >
                 Docs
