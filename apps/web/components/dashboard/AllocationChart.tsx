@@ -8,7 +8,7 @@ import {
   Tooltip,
 } from "recharts";
 import { PieChart as PieChartIcon } from "lucide-react";
-import { PROTOCOL_CONFIG } from "@/lib/constants";
+import { PROTOCOL_CONFIG, IDLE_CONFIG } from "@/lib/constants";
 import { formatUsd, formatPct } from "@/lib/format";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
 
@@ -22,7 +22,10 @@ export default function AllocationChart({
   totalDeposited,
 }: AllocationChartProps) {
   const data = allocations.map((a) => {
-    const meta = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
+    const isIdle = a.protocolId === "idle";
+    const meta = isIdle
+      ? IDLE_CONFIG
+      : PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
     return {
       name: a.name || meta?.name || a.protocolId,
       value: a.allocationPct * 100,

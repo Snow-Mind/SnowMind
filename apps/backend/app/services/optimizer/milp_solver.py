@@ -43,7 +43,7 @@ class ProtocolInput:
     protocol_id: str
     apy: Decimal  # Annual yield as decimal (Decimal("0.041") = 4.1%)
     risk_score: Decimal  # 0 (safe) to 10 (risky)
-    min_allocation: Decimal = Decimal("500")  # Minimum USD if participating
+    min_allocation: Decimal = Decimal("1")  # Minimum USD if participating (low for testnet)
     max_allocation_pct: Decimal = Decimal("0.60")  # Max fraction of total
     is_available: bool = True
 
@@ -57,7 +57,7 @@ class OptimizerInput:
     current_allocations: dict[str, Decimal] = field(default_factory=dict)
     gas_cost_estimate_usd: Decimal = Decimal("0.10")
     risk_aversion: Decimal = Decimal("0.5")  # λ  (0 = pure yield, 1 = pure safety)
-    min_protocols: int = 2
+    min_protocols: int = 1  # Allow single protocol for small amounts
     max_protocols: int = 4
 
 
@@ -117,6 +117,7 @@ def is_rebalance_worth_it(
     Two-condition gate:
       1. Max |delta_i| / total > MIN_REBALANCE_THRESHOLD (5 %)
       2. Annualised yield improvement in USD > gas_cost × 365
+         (Bypassed for initial deployments where current_apy is 0)
     Returns (should_rebalance, reason).
     """
     if total <= _ZERO:
@@ -127,6 +128,10 @@ def is_rebalance_worth_it(
         return False, (
             f"Max delta {float(max_pct):.2%} <= threshold {float(MIN_REBALANCE_THRESHOLD):.0%}"
         )
+
+    # For initial deployments (no existing yield), always approve
+    if current_apy <= _ZERO:
+        return True, "Initial deployment — no existing yield, deploying to protocols"
 
     annual_improvement_usd = (proposed_apy - current_apy) * total
     amortised_gas = gas_cost_usd * _365
@@ -152,7 +157,7 @@ def fallback_equal_split(inp: OptimizerInput) -> OptimizerOutput:
         key=lambda p: p.apy,
         reverse=True,
     )
-    pick = available[: max(inp.min_protocols, 2)] if available else []
+    pick = available[: max(inp.min_protocols, 1)] if available else []
 
     if not pick:
         return OptimizerOutput(

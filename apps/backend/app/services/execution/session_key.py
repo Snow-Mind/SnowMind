@@ -68,15 +68,36 @@ def store_session_key(
     """Encrypt and persist a session key for *account_id*.
 
     ``session_key_data`` must contain at minimum:
-      - ``raw_key``           (plaintext private key — will be encrypted)
-      - ``key_address``       (the session key's own address)
-      - ``expires_at``        (ISO-8601 timestamp)
-      - ``allowed_protocols`` (list[str])
-      - ``max_amount_per_tx`` (str, BigInt as string)
+      - ``serializedPermission`` or ``raw_key`` (ZeroDev serialized permission — will be encrypted)
+      - ``sessionKeyAddress`` or ``key_address`` (the session key's own address)
+      - ``expiresAt`` or ``expires_at``  (ISO-8601 timestamp or unix epoch)
 
     Returns the UUID of the new ``session_keys`` row.
     """
-    encrypted = encrypt_session_key(session_key_data["raw_key"])
+    # Accept both frontend camelCase and direct snake_case fields
+    raw_key = (
+        session_key_data.get("serializedPermission")
+        or session_key_data.get("raw_key")
+        or ""
+    )
+    if not raw_key:
+        raise ValueError("session_key_data must contain 'serializedPermission' or 'raw_key'")
+
+    key_address = (
+        session_key_data.get("sessionKeyAddress")
+        or session_key_data.get("key_address")
+        or ""
+    )
+
+    # Handle expiresAt as either ISO string or unix timestamp
+    expires_raw = session_key_data.get("expiresAt") or session_key_data.get("expires_at")
+    if isinstance(expires_raw, (int, float)):
+        from datetime import datetime, timezone
+        expires_at = datetime.fromtimestamp(expires_raw, tz=timezone.utc).isoformat()
+    else:
+        expires_at = str(expires_raw) if expires_raw else None
+
+    encrypted = encrypt_session_key(raw_key)
 
     row = (
         db.table("session_keys")
@@ -84,11 +105,11 @@ def store_session_key(
             {
                 "account_id": str(account_id),
                 "serialized_permission": encrypted,
-                "key_address": session_key_data["key_address"],
-                "expires_at": session_key_data["expires_at"],
+                "key_address": key_address,
+                "expires_at": expires_at,
                 "is_active": True,
-                "allowed_protocols": session_key_data["allowed_protocols"],
-                "max_amount_per_tx": session_key_data["max_amount_per_tx"],
+                "allowed_protocols": session_key_data.get("allowed_protocols", ["benqi", "aave_v3"]),
+                "max_amount_per_tx": session_key_data.get("max_amount_per_tx", "0"),
             }
         )
         .execute()

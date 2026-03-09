@@ -107,6 +107,16 @@ export const PROTOCOL_CONFIG = {
   },
 } as const
 
+// Idle USDC display config (not a real protocol, used for dashboard)
+export const IDLE_CONFIG = {
+  id: 'idle' as const,
+  name: 'Idle USDC',
+  shortName: 'Idle',
+  color: '#64748B',  // slate gray
+  bgColor: 'rgba(100, 116, 139, 0.12)',
+  riskScore: 0,
+} as const
+
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
 // Only protocols the MILP optimizer considers for MVP

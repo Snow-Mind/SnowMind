@@ -1,4 +1,4 @@
-﻿"""Cost-aware rebalance orchestrator â€” full pipeline from rates to on-chain execution.
+"""Cost-aware rebalance orchestrator â€” full pipeline from rates to on-chain execution.
 
 Transaction ordering: withdrawals FIRST, then deposits (ensure funds are available).
 """
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
+import httpx
 from web3 import AsyncWeb3, AsyncHTTPProvider, Web3
 
 from app.core.config import get_settings
@@ -16,7 +17,6 @@ from app.services.execution.session_key import (
     get_active_session_key,
     revoke_session_key,
 )
-from app.services.execution.userop_builder import UserOpBuilder
 from app.services.optimizer.milp_solver import (
     OptimizerInput,
     ProtocolInput,
@@ -33,7 +33,17 @@ logger = logging.getLogger("snowmind")
 
 MAX_UINT256 = 2**256 - 1
 
-# â”€â”€ Registry ABI (logRebalance on SnowMindRegistry) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- ERC-20 balanceOf ABI -------------------------------------------------
+ERC20_BALANCE_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    }
+]
+
 REGISTRY_ABI = [
     {
         "name": "logRebalance",
@@ -54,7 +64,6 @@ class Rebalancer:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.userop_builder = UserOpBuilder()
         self.rate_fetcher = RateFetcher()
         self.rate_validator = RateValidator()
         self.risk_scorer = RiskScorer()
@@ -64,6 +73,21 @@ class Rebalancer:
             "benqi": self.settings.BENQI_POOL,
             "euler_v2": self.settings.EULER_VAULT,
         }
+
+    async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
+        """Read the on-chain USDC balance sitting idle in the smart account."""
+        try:
+            usdc_contract = self.w3.eth.contract(
+                address=self.w3.to_checksum_address(self.settings.USDC_ADDRESS),
+                abi=ERC20_BALANCE_ABI,
+            )
+            balance_wei = await usdc_contract.functions.balanceOf(
+                self.w3.to_checksum_address(smart_account_address)
+            ).call()
+            return Decimal(str(balance_wei)) / Decimal("1000000")
+        except Exception as exc:
+            logger.warning("Failed to read idle USDC for %s: %s", smart_account_address, exc)
+            return Decimal("0")
 
     # â”€â”€ Full pipeline (cron entry-point) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -139,7 +163,7 @@ class Rebalancer:
                 )
             )
 
-        # 4. Get current allocations from DB
+        # 4. Get current allocations from DB + on-chain idle USDC
         alloc_rows = (
             db.table("allocations")
             .select("protocol_id, amount_usdc")
@@ -152,6 +176,15 @@ class Rebalancer:
             amt = Decimal(str(row["amount_usdc"]))
             current[row["protocol_id"]] = amt
             total_usd += amt
+
+        # Check on-chain idle USDC balance (not yet deployed to any protocol)
+        idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
+        if idle_usdc > Decimal("0.01"):
+            logger.info(
+                "Detected %.2f idle USDC in %s (protocol-deployed: %.2f)",
+                idle_usdc, smart_account_address, total_usd,
+            )
+            total_usd += idle_usdc
 
         if total_usd <= 0:
             return await self._log(db, account_id, "skipped",
@@ -269,6 +302,37 @@ class Rebalancer:
 
     # â”€â”€ Execute rebalance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+    async def _call_execution_service(
+        self,
+        serialized_permission: str,
+        smart_account_address: str,
+        withdrawals: list[dict],
+        deposits: list[dict],
+    ) -> str:
+        """Call the Node.js execution service to execute via ZeroDev."""
+        payload = {
+            "serializedPermission": serialized_permission,
+            "smartAccountAddress": smart_account_address,
+            "withdrawals": withdrawals,
+            "deposits": deposits,
+            "contracts": {
+                "AAVE_POOL": self.settings.AAVE_V3_POOL,
+                "BENQI_POOL": self.settings.BENQI_POOL,
+                "USDC": self.settings.USDC_ADDRESS,
+                "REGISTRY": self.settings.REGISTRY_CONTRACT_ADDRESS,
+            },
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{self.settings.EXECUTION_SERVICE_URL}/execute-rebalance",
+                json=payload,
+                headers={"x-internal-key": self.settings.INTERNAL_SERVICE_KEY},
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            logger.info("Execution service returned: %s", result)
+            return result["txHash"]
+
     async def execute_rebalance(
         self,
         account_id: str,
@@ -276,13 +340,11 @@ class Rebalancer:
         target_allocations: dict[str, Decimal],
     ) -> str | None:
         """
-        Execute a full rebalance:
+        Execute a full rebalance via the Node.js execution service:
           1. Get current allocations (DB + on-chain balance check)
           2. Compute withdrawals/deposits from deltas
-          3. Build protocol-specific calldata (Benqi qiTokens, Aave MAX_UINT, etc.)
-          4. Order: withdrawals FIRST, registry logs, deposits SECOND
-          5. Sign with session key, batch into single UserOp, submit
-          6. Update allocations in DB
+          3. Call execution service with ZeroDev serialized permission
+          4. Update allocations in DB
         Returns tx_hash, or None if nothing to do.
         """
         db = get_supabase()
@@ -310,65 +372,35 @@ class Rebalancer:
         if not withdrawals and not deposits:
             return None
 
-        usdc = self.settings.USDC_ADDRESS
-        calls: list[dict] = []
-
-        # Step 3a: WITHDRAWALS FIRST (ensure funds are available)
-        for protocol_id, amount_usd in withdrawals:
-            adapter = get_adapter(protocol_id)
-            amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
-
-            if protocol_id == "benqi":
-                # Benqi: convert USDC amount to qiToken units, then redeem
-                qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
-                calldata = adapter.build_withdraw_calldata(usdc, qi_amount, smart_account_address)
-            elif protocol_id == "aave_v3":
-                # Aave: use MAX_UINT for full exit, exact amount otherwise
-                is_full_exit = abs(current.get(protocol_id, Decimal("0")) - amount_usd) < Decimal("1")
-                amt = MAX_UINT256 if is_full_exit else amount_wei
-                calldata = adapter.build_withdraw_calldata(usdc, amt, smart_account_address)
-            else:
-                # Euler / generic: pass amount directly
-                calldata = adapter.build_withdraw_calldata(usdc, amount_wei, smart_account_address)
-
-            calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
-
-        # Step 3b: REGISTRY LOGS (between withdrawals and deposits)
-        for w_pid, w_amount in withdrawals:
-            from_addr = self._protocol_addresses.get(w_pid, "")
-            if not from_addr:
-                continue
-            w_wei = int(Decimal(str(w_amount)) * Decimal("1e6"))
-            for d_pid, _ in deposits:
-                to_addr = self._protocol_addresses.get(d_pid, "")
-                if not to_addr:
-                    continue
-                log_call = self._encode_registry_log(from_addr, to_addr, w_wei)
-                calls.append(log_call)
-
-        # Step 3c: DEPOSITS SECOND
-        for protocol_id, amount_usd in deposits:
-            adapter = get_adapter(protocol_id)
-            amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
-
-            # All adapters use the same build_supply_calldata interface:
-            #   Benqi â†’ mint(uint256)  |  Aave â†’ supply(asset,amount,onBehalfOf,0)
-            #   Euler â†’ deposit(assets,receiver)
-            calldata = adapter.build_supply_calldata(usdc, amount_wei, smart_account_address)
-            calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
-
-        # Step 4: Get session key and build batched UserOp
+        # Step 3: Get session key and call execution service
         session_key = get_active_session_key(db, UUID(account_id))
         if not session_key:
             raise ValueError(f"No active session key for account {account_id}")
 
-        tx_hash = await self.userop_builder.build_and_send_userop(
+        # Build withdrawal/deposit instructions for the Node.js execution service
+        exec_withdrawals = []
+        for protocol_id, amount_usd in withdrawals:
+            entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount_usd)}
+            if protocol_id == "benqi":
+                adapter = get_adapter(protocol_id)
+                amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
+                qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
+                entry["qiTokenAmount"] = str(qi_amount)
+            exec_withdrawals.append(entry)
+
+        exec_deposits = [
+            {"protocol": pid, "amountUSDC": float(amt)}
+            for pid, amt in deposits
+        ]
+
+        tx_hash = await self._call_execution_service(
+            serialized_permission=session_key,
             smart_account_address=smart_account_address,
-            calls=calls,
-            session_key_hex=session_key,
+            withdrawals=exec_withdrawals,
+            deposits=exec_deposits,
         )
 
-        # Step 5: Update allocations in DB
+        # Step 4: Update allocations in DB
         await self._update_allocations_db(
             db, account_id, target_allocations,
         )
@@ -391,47 +423,32 @@ class Rebalancer:
         """
         db = get_supabase()
         current = await self._get_current_allocations(account_id, smart_account_address)
-        usdc = self.settings.USDC_ADDRESS
-        calls: list[dict] = []
 
+        exec_withdrawals = []
         for protocol_id, amount_usd in current.items():
             if amount_usd < Decimal("1"):
                 continue
-            adapter = get_adapter(protocol_id)
-
+            entry: dict = {"protocol": protocol_id, "amountUSDC": "MAX"}
             if protocol_id == "benqi":
-                # Get actual qiToken balance (more accurate than estimated)
+                adapter = get_adapter(protocol_id)
                 qi_balance = await adapter.pool.functions.balanceOf(
                     self.w3.to_checksum_address(smart_account_address)
                 ).call()
-                calldata = adapter.build_withdraw_calldata(usdc, qi_balance, smart_account_address)
+                entry["qiTokenAmount"] = str(qi_balance)
+            exec_withdrawals.append(entry)
 
-            elif protocol_id == "aave_v3":
-                # Aave: use MAX_UINT for full withdrawal
-                calldata = adapter.build_withdraw_calldata(usdc, MAX_UINT256, smart_account_address)
-
-            elif protocol_id == "euler_v2":
-                # Euler: get share balance and redeem all
-                balance_wei = await adapter.get_user_balance(smart_account_address, usdc)
-                calldata = adapter.build_withdraw_calldata(usdc, balance_wei, smart_account_address)
-
-            else:
-                amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
-                calldata = adapter.build_withdraw_calldata(usdc, amount_wei, smart_account_address)
-
-            calls.append({"to": calldata.to, "data": calldata.data, "value": calldata.value})
-
-        if not calls:
+        if not exec_withdrawals:
             raise ValueError("No positions to withdraw")
 
         session_key = get_active_session_key(db, UUID(account_id))
         if not session_key:
             raise ValueError(f"No active session key for account {account_id}")
 
-        tx_hash = await self.userop_builder.build_and_send_userop(
+        tx_hash = await self._call_execution_service(
+            serialized_permission=session_key,
             smart_account_address=smart_account_address,
-            calls=calls,
-            session_key_hex=session_key,
+            withdrawals=exec_withdrawals,
+            deposits=[],
         )
 
         # Revoke session keys + mark account inactive

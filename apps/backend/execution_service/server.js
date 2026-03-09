@@ -6,7 +6,9 @@ app.use(express.json({ limit: "1mb" }))
 
 // Internal auth — only Python backend can call this
 app.use((req, res, next) => {
-  if (req.headers["x-internal-key"] !== process.env.INTERNAL_SERVICE_KEY)
+  const key = process.env.INTERNAL_SERVICE_KEY
+  // If key is configured, enforce it; otherwise allow (dev/single-container mode)
+  if (key && req.headers["x-internal-key"] !== key)
     return res.status(401).json({ error: "Unauthorized" })
   next()
 })

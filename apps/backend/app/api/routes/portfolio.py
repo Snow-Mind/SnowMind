@@ -5,7 +5,9 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supabase import Client
+from web3 import AsyncWeb3, AsyncHTTPProvider
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.validators import validate_eth_address
@@ -18,6 +20,35 @@ router = APIRouter()  # All portfolio reads are public
 
 # Protocol display names
 _NAMES = {"benqi": "Benqi", "aave_v3": "Aave V3", "euler_v2": "Euler V2"}
+
+# ERC-20 balanceOf ABI
+_ERC20_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    }
+]
+
+
+async def _get_idle_usdc(address: str) -> Decimal:
+    """Read the on-chain USDC balance sitting idle in the smart account."""
+    try:
+        settings = get_settings()
+        w3 = AsyncWeb3(AsyncHTTPProvider(settings.AVALANCHE_RPC_URL))
+        usdc = w3.eth.contract(
+            address=w3.to_checksum_address(settings.USDC_ADDRESS),
+            abi=_ERC20_ABI,
+        )
+        balance_wei = await usdc.functions.balanceOf(
+            w3.to_checksum_address(address)
+        ).call()
+        return Decimal(str(balance_wei)) / Decimal("1000000")
+    except Exception as exc:
+        logger.warning("Failed to read idle USDC for %s: %s", address, exc)
+        return Decimal("0")
 
 
 # ── GET /portfolio/{address} ──────────────────────────────
@@ -66,6 +97,26 @@ async def get_portfolio(
                 current_apy=Decimal(str(row["apy_at_allocation"] or 0)),
             )
         )
+
+    # Read on-chain idle USDC balance (not yet deployed to any protocol)
+    idle_usdc = await _get_idle_usdc(address)
+    if idle_usdc > Decimal("0.01"):
+        total_deposited += idle_usdc
+        # Add idle USDC as its own "allocation" entry so the dashboard shows it
+        total_for_pct = total_deposited if total_deposited > 0 else Decimal("1")
+        allocations.append(
+            AllocationResponse(
+                protocol_id="idle",
+                name="Idle USDC (Wallet)",
+                amount_usdc=idle_usdc,
+                allocation_pct=idle_usdc / total_for_pct,
+                current_apy=Decimal("0"),
+            )
+        )
+        # Recalculate allocation_pct for all entries
+        if total_deposited > 0:
+            for alloc in allocations:
+                alloc.allocation_pct = alloc.amount_usdc / total_deposited
 
     # Last rebalance timestamp
     last_rb = (
