@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Any
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_ORIGINS = "https://www.snowmind.xyz,http://localhost:3000"
 
 
 class Settings(BaseSettings):
@@ -13,23 +13,20 @@ class Settings(BaseSettings):
     APP_NAME: str = "SnowMind API"
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = False
-    ALLOWED_ORIGINS: list[str] = [
-        "https://snowmind.app",
-        "https://snowmind.vercel.app",
-        "https://www.snowmind.xyz",
-        "http://localhost:3000",
-    ]
+    ALLOWED_ORIGINS: str = _DEFAULT_ORIGINS
 
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def _parse_origins(cls, v: Any) -> Any:
-        """Accept JSON array OR comma-separated string from env vars."""
-        if isinstance(v, str):
-            v = v.strip()
-            if v.startswith("["):
-                return json.loads(v)
-            return [o.strip() for o in v.split(",") if o.strip()]
-        return v
+    @property
+    def allowed_origins(self) -> list[str]:
+        """Parse ALLOWED_ORIGINS env var into a list.
+
+        Accepts JSON array, comma-separated string, or empty string.
+        """
+        raw = self.ALLOWED_ORIGINS.strip()
+        if not raw:
+            return _DEFAULT_ORIGINS.split(",")
+        if raw.startswith("["):
+            return json.loads(raw)
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
     # ── Supabase ─────────────────────────────────────────────
     SUPABASE_URL: str = ""
