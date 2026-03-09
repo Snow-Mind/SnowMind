@@ -15,7 +15,6 @@ import { cn } from "@/lib/utils";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
-import { usePortfolio } from "@/hooks/usePortfolio";
 import ConnectButton from "@/components/wallet/ConnectButton";
 import SmartAccountSetup from "@/components/wallet/SmartAccountSetup";
 
@@ -26,7 +25,7 @@ const NAV_ITEMS = [
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits: boolean }) {
+function Sidebar({ onLogout, hasAccount }: { onLogout: () => void; hasAccount: boolean }) {
   const pathname = usePathname();
 
   return (
@@ -43,8 +42,8 @@ function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits:
       <nav className="flex-1 px-3 py-3">
         <ul className="space-y-0.5">
           {NAV_ITEMS.filter((item) => {
-            // Hide "Activate" once user has deposits; hide dashboard/portfolio/settings for fresh users
-            if (item.href === "/onboarding") return !hasDeposits;
+            // Show "Activate" only for users without an account; show all other tabs once account exists
+            if (item.href === "/onboarding") return !hasAccount;
             return true;
           }).map((item) => {
             const isActive = pathname === item.href;
@@ -133,10 +132,9 @@ export default function AppLayout({
   const pathname = usePathname();
   const { authenticated, ready, login, logout, activeWallet, eoaAddress, isLoading: authLoading } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
-  const { data: portfolio } = usePortfolio(smartAccount.address ?? undefined);
   const [setupOpen, setSetupOpen] = useState(false);
 
-  const hasDeposits = Number(portfolio?.totalDepositedUsd ?? 0) > 0;
+  const hasAccount = smartAccount.hasAccount;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -145,17 +143,18 @@ export default function AppLayout({
     }
   }, [ready, authenticated, router]);
 
-  // Redirect new users to onboarding after smart account is ready
+  // Only redirect FRESH users (no stored smart account) to onboarding
+  // Once they've been to onboarding, let them navigate freely
   useEffect(() => {
     if (
-      smartAccount.setupStep === "ready" &&
-      !hasDeposits &&
-      pathname !== "/onboarding" &&
-      pathname !== "/settings"
+      smartAccount.setupStep === "creating" &&
+      !smartAccount.address &&
+      pathname !== "/onboarding"
     ) {
+      // Account is being created for first time — go to onboarding
       router.replace("/onboarding");
     }
-  }, [smartAccount.setupStep, hasDeposits, pathname, router]);
+  }, [smartAccount.setupStep, smartAccount.address, pathname, router]);
 
   // Show setup wizard when smart account is being created
   const shouldOpenSetup = authenticated && smartAccount.setupStep === "creating";
@@ -188,7 +187,7 @@ export default function AppLayout({
 
   return (
     <div className="app-light min-h-screen bg-[#F5F0EB] text-[#1A1715]">
-      <Sidebar onLogout={logout} hasDeposits={hasDeposits} />
+      <Sidebar onLogout={logout} hasAccount={hasAccount} />
       <div className="flex min-h-screen flex-1 flex-col pl-56">
         <TopBar
           authenticated={authenticated}

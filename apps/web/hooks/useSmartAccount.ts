@@ -23,17 +23,19 @@ interface SmartAccountState {
 }
 
 export function useSmartAccount(wallet: ConnectedWallet | null) {
+  const storedAddress = usePortfolioStore((s) => s.smartAccountAddress) as Address | null;
+  const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
+
   const [state, setState] = useState<SmartAccountState>({
-    address: null,
-    isDeployed: false,
-    setupStep: "idle",
+    address: storedAddress,
+    isDeployed: !!storedAddress,
+    setupStep: storedAddress ? "ready" : "idle",
     error: null,
     kernelClient: null,
     txHashes: {},
   });
 
   const initializingRef = useRef(false);
-  const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
 
   const initializeAccount = useCallback(async () => {
     if (!wallet || initializingRef.current) return;
@@ -103,8 +105,6 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
             },
           }),
         });
-        // We don't get a tx hash from the backend registration API directly,
-        // but the backend emits the on-chain registration tx.
         hashes.registry = "backend-registered";
       } catch {
         console.warn("Backend registration failed — will retry on next load");
@@ -131,12 +131,24 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     }
   }, [wallet, setSmartAccountAddress]);
 
-  // Auto-initialize when wallet is available
+  // Auto-initialize when wallet is available and no stored address
   useEffect(() => {
-    if (wallet && state.setupStep === "idle") {
+    if (wallet && !storedAddress && state.setupStep === "idle") {
       initializeAccount();
     }
-  }, [wallet, state.setupStep, initializeAccount]);
+  }, [wallet, storedAddress, state.setupStep, initializeAccount]);
+
+  // If we have a stored address but no wallet yet, keep showing "ready"
+  // Once wallet connects, try to re-register with backend (idempotent)
+  useEffect(() => {
+    if (wallet && storedAddress && state.setupStep === "ready" && !state.kernelClient) {
+      // Silently re-register to ensure backend has this account
+      api.registerAccount({
+        ownerAddress: wallet.address as string,
+        smartAccountAddress: storedAddress,
+      }).catch(() => {});
+    }
+  }, [wallet, storedAddress, state.setupStep, state.kernelClient]);
 
   const retry = useCallback(() => {
     setState({

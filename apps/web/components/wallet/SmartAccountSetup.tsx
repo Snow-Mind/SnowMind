@@ -47,28 +47,28 @@ function TxLink({ label, hash }: { label: string; hash: string | null | undefine
 
   if (!hash) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border/30 bg-void-2/20 px-3 py-2">
-        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">{label}: pending…</span>
+      <div className="flex items-center gap-2 rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]/30 px-3 py-2">
+        <Loader2 className="h-3 w-3 animate-spin text-[#8A837C]" />
+        <span className="text-xs text-[#8A837C]">{label}: pending…</span>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-mint/20 bg-mint/5 px-3 py-2">
-      <Check className="h-3 w-3 shrink-0 text-mint" />
-      <span className="text-xs text-muted-foreground">{label}</span>
+    <div className="flex items-center gap-2 rounded-lg border border-[#059669]/20 bg-[#059669]/5 px-3 py-2">
+      <Check className="h-3 w-3 shrink-0 text-[#059669]" />
+      <span className="text-xs text-[#5C5550]">{label}</span>
       <span className="ml-auto flex items-center gap-1.5">
         <button
           onClick={copyHash}
-          className="font-mono text-[10px] text-glacier hover:underline"
+          className="font-mono text-[10px] text-[#E84142] hover:underline"
           title="Copy hash"
         >
           {hash.slice(0, 6)}…{hash.slice(-4)}
         </button>
-        <button onClick={copyHash} className="text-muted-foreground hover:text-arctic">
+        <button onClick={copyHash} className="text-[#8A837C] hover:text-[#1A1715]">
           {copied ? (
-            <Check className="h-2.5 w-2.5 text-mint" />
+            <Check className="h-2.5 w-2.5 text-[#059669]" />
           ) : (
             <Copy className="h-2.5 w-2.5" />
           )}
@@ -77,7 +77,7 @@ function TxLink({ label, hash }: { label: string; hash: string | null | undefine
           href={EXPLORER.tx(hash)}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-glacier hover:text-glacier/80"
+          className="text-[#E84142] hover:text-[#D63031]"
           title="View on Snowtrace"
         >
           <ExternalLink className="h-2.5 w-2.5" />
@@ -125,7 +125,7 @@ export default function SmartAccountSetup({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={step === "ready" || step === "error"}
-        className="border-border-frost bg-void-2/95 backdrop-blur-2xl sm:max-w-md"
+        className="app-light border-[#E8E2DA] bg-[#FAFAF8] sm:max-w-md"
       >
         <DialogHeader className="text-center">
           <DialogTitle className="sr-only">{config.title}</DialogTitle>
@@ -145,22 +145,22 @@ export default function SmartAccountSetup({
             >
               {step === "creating" ? (
                 <div className="relative h-20 w-20">
-                  <NeuralSnowflake className="h-20 w-20 text-glacier" />
+                  <NeuralSnowflake className="h-20 w-20 text-[#E84142]" />
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="h-3 w-3 rounded-full bg-glacier animate-pulse" />
+                    <div className="h-3 w-3 rounded-full bg-[#E84142] animate-pulse" />
                   </div>
                 </div>
               ) : step === "ready" ? (
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-mint/10">
-                  <CheckCircle className="h-8 w-8 text-mint" />
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#059669]/10">
+                  <CheckCircle className="h-8 w-8 text-[#059669]" />
                 </div>
               ) : step === "error" ? (
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-crimson/10">
-                  <AlertCircle className="h-8 w-8 text-crimson" />
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#DC2626]/10">
+                  <AlertCircle className="h-8 w-8 text-[#DC2626]" />
                 </div>
               ) : (
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-glacier/10">
-                  <Snowflake className="h-8 w-8 text-glacier" />
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#E84142]/10">
+                  <Snowflake className="h-8 w-8 text-[#E84142]" />
                 </div>
               )}
             </motion.div>
@@ -168,10 +168,10 @@ export default function SmartAccountSetup({
 
           {/* Title & description */}
           <div className="space-y-2 text-center">
-            <h3 className="font-display text-lg font-semibold text-arctic">
+            <h3 className="font-display text-lg font-semibold text-[#1A1715]">
               {config.title}
             </h3>
-            <p className="text-sm text-muted-foreground max-w-xs">
+            <p className="text-sm text-[#5C5550] max-w-xs">
               {step === "error" && error ? error : config.description}
             </p>
           </div>
@@ -184,17 +184,17 @@ export default function SmartAccountSetup({
               className="w-full space-y-4"
             >
               {/* Address */}
-              <div className="rounded-lg border border-border-frost bg-ice-10 px-4 py-3 text-center">
-                <p className="text-xs text-muted-foreground mb-1">Smart Account</p>
+              <div className="rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]/40 px-4 py-3 text-center">
+                <p className="text-xs text-[#8A837C] mb-1">Smart Account</p>
                 <a
                   href={EXPLORER.address(address)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="font-mono text-sm text-glacier hover:underline"
+                  className="font-mono text-sm text-[#E84142] hover:underline"
                 >
                   {address.slice(0, 6)}...{address.slice(-4)}
                 </a>
-                <p className="mt-1 text-[10px] text-muted-foreground">
+                <p className="mt-1 text-[10px] text-[#8A837C]">
                   View on Snowtrace ↗
                 </p>
               </div>
@@ -202,7 +202,7 @@ export default function SmartAccountSetup({
               {/* Transaction confirmations */}
               {txHashes && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">
                     Setup Transactions
                   </p>
                   {txHashes.deployment !== undefined && (
@@ -220,19 +220,19 @@ export default function SmartAccountSetup({
 
               {/* Features */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="flex items-center gap-2 rounded-lg border border-border/50 bg-ice-20 px-3 py-2.5">
-                  <Shield className="h-4 w-4 text-glacier shrink-0" />
-                  <span className="text-xs text-muted-foreground">Non-custodial</span>
+                <div className="flex items-center gap-2 rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]/30 px-3 py-2.5">
+                  <Shield className="h-4 w-4 text-[#E84142] shrink-0" />
+                  <span className="text-xs text-[#5C5550]">Non-custodial</span>
                 </div>
-                <div className="flex items-center gap-2 rounded-lg border border-border/50 bg-ice-20 px-3 py-2.5">
-                  <Zap className="h-4 w-4 text-mint shrink-0" />
-                  <span className="text-xs text-muted-foreground">Gas sponsored</span>
+                <div className="flex items-center gap-2 rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]/30 px-3 py-2.5">
+                  <Zap className="h-4 w-4 text-[#059669] shrink-0" />
+                  <span className="text-xs text-[#5C5550]">Gas sponsored</span>
                 </div>
               </div>
 
               <Button
                 onClick={() => onOpenChange(false)}
-                className="w-full bg-gradient-to-r from-glacier to-frost text-white hover:opacity-90"
+                className="w-full bg-[#E84142] text-white hover:bg-[#D63031]"
               >
                 Go to Dashboard
               </Button>
@@ -241,14 +241,14 @@ export default function SmartAccountSetup({
 
           {/* Error state: show retry */}
           {step === "error" && (
-            <Button onClick={onRetry} variant="outline" className="border-glacier/30">
+            <Button onClick={onRetry} variant="outline" className="border-[#E84142]/30 text-[#E84142] hover:bg-[#E84142]/5">
               Try Again
             </Button>
           )}
 
           {/* Loading indicator */}
           {step === "creating" && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 text-xs text-[#8A837C]">
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>Creating on Avalanche...</span>
             </div>

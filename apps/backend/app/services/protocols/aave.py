@@ -107,10 +107,28 @@ class AaveV3Adapter(BaseProtocolAdapter):
     # ── Rate reading ────────────────────────────────────────────────
 
     async def get_rate(self) -> ProtocolRate:
-        """Read live currentLiquidityRate from the Aave V3 Pool contract."""
-        reserve_data = await self.pool.functions.getReserveData(
-            self.w3.to_checksum_address(self.usdc_address)
-        ).call()
+        """Read live currentLiquidityRate from the Aave V3 Pool contract.
+        
+        Returns 0 APY gracefully if getReserveData reverts (e.g. asset not listed).
+        """
+        try:
+            reserve_data = await self.pool.functions.getReserveData(
+                self.w3.to_checksum_address(self.usdc_address)
+            ).call()
+        except Exception as exc:
+            # getReserveData reverts when asset is not listed on this pool deployment
+            import logging
+            logging.getLogger(__name__).warning(
+                "Aave V3 getReserveData reverted for %s: %s — returning 0 APY",
+                self.usdc_address, exc,
+            )
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=Decimal("0"),
+                tvl_usd=Decimal("0"),
+                utilization_rate=None,
+                fetched_at=time.time(),
+            )
 
         RAY = Decimal("1e27")
         SECONDS_PER_YEAR = Decimal("31557600")
@@ -171,9 +189,12 @@ class AaveV3Adapter(BaseProtocolAdapter):
     # ── Balance ─────────────────────────────────────────────────────
 
     async def get_user_balance(self, user_address: str, asset: str) -> int:
-        reserve_data = await self.pool.functions.getReserveData(
-            self.w3.to_checksum_address(self.usdc_address)
-        ).call()
+        try:
+            reserve_data = await self.pool.functions.getReserveData(
+                self.w3.to_checksum_address(self.usdc_address)
+            ).call()
+        except Exception:
+            return 0
         atoken_address = reserve_data[8]
 
         atoken = self.w3.eth.contract(
