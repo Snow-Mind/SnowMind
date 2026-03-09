@@ -263,3 +263,6 @@ To apply migrations:
 3. Verify tables exist: `SELECT tablename FROM pg_tables WHERE schemaname = 'public';`
 
 The full schema is also available at `apps/backend/supabase_schema.sql` for reference.
+
+
+Bye-Bye.
