@@ -73,7 +73,7 @@ Set these in **Railway → Service → Variables**:
 | `DEPLOYER_PRIVATE_KEY` | Testnet deployer PK (only for MockBenqi accrual) | *(optional)* |
 | `IS_TESTNET` | `true` for Fuji, `false` for mainnet | `true` |
 | `DEBUG` | `false` in production | `false` |
-| `ALLOWED_ORIGINS` | JSON array of frontend URLs | `["https://snowmind.vercel.app"]` |
+| `ALLOWED_ORIGINS` | JSON array of frontend URLs | `["http://www.snowmind.xyz"]` |
 | `REBALANCE_CHECK_INTERVAL` | Seconds between optimizer runs | `1800` |
 | `MAX_PROTOCOL_ALLOCATION` | Max % per protocol | `0.60` |
 | `MIN_REBALANCE_THRESHOLD` | Min delta to trigger rebalance | `0.05` |
@@ -114,7 +114,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**:
 | `NEXT_PUBLIC_PRIVY_APP_ID` | All | *(from privy.io dashboard)* |
 | `NEXT_PUBLIC_ZERODEV_PROJECT_ID` | All | *(from dashboard.zerodev.app)* |
 | `NEXT_PUBLIC_AVALANCHE_RPC_URL` | All | `https://api.avax-test.network/ext/bc/C/rpc` |
-| `NEXT_PUBLIC_BACKEND_URL` | Production | `https://<railway-domain>` |
+| `NEXT_PUBLIC_BACKEND_URL` | Production | `https://snowmindweb-production.up.railway.app` |
 | `NEXT_PUBLIC_CHAIN_ID` | All | `43113` |
 | `NEXT_PUBLIC_BACKEND_API_KEY` | All | *(same as `BACKEND_API_KEY` in Railway)* |
 | `NEXT_PUBLIC_PIMLICO_API_KEY` | All | *(from pimlico.io)* |

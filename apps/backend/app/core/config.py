@@ -1,5 +1,10 @@
-from functools import lru_cache
+from __future__ import annotations
 
+import json
+from functools import lru_cache
+from typing import Any
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +19,17 @@ class Settings(BaseSettings):
         "https://www.snowmind.xyz",
         "http://localhost:3000",
     ]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _parse_origins(cls, v: Any) -> Any:
+        """Accept JSON array OR comma-separated string from env vars."""
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("["):
+                return json.loads(v)
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
 
     # ── Supabase ─────────────────────────────────────────────
     SUPABASE_URL: str = ""
