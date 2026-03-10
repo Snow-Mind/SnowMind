@@ -14,6 +14,8 @@ import {
   X,
   Loader2,
   CheckCircle2,
+  ArrowDown,
+  Lock,
 } from "lucide-react";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { useAuth } from "@/hooks/useAuth";
@@ -21,9 +23,22 @@ import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useSessionKey } from "@/hooks/useSessionKey";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { EXPLORER } from "@/lib/constants";
+import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL } from "@/lib/constants";
 import { api } from "@/lib/api-client";
 import { toast } from "sonner";
+import {
+  parseUnits,
+  encodeFunctionData,
+  formatUnits,
+  createWalletClient,
+  createPublicClient,
+  custom,
+  http,
+} from "viem";
+import { avalancheFuji } from "viem/chains";
+import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useQueryClient } from "@tanstack/react-query";
+import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 
 function TopBar({
   smartAccountAddress,
@@ -308,29 +323,6 @@ export default function AppLayout({
 }
 
 // ── Deposit Modal (Giza-style) ──────────────────────────────
-
-import {
-  ArrowDown,
-  Loader2,
-  CheckCircle2,
-  Wallet,
-  X,
-  Lock,
-} from "lucide-react";
-import {
-  parseUnits,
-  encodeFunctionData,
-  formatUnits,
-  createWalletClient,
-  createPublicClient,
-  custom,
-  http,
-} from "viem";
-import { avalancheFuji } from "viem/chains";
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
-import { useQueryClient } from "@tanstack/react-query";
-import { CONTRACTS, AVALANCHE_RPC_URL } from "@/lib/constants";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 
 const ERC20_TRANSFER_ABI = [
   {
