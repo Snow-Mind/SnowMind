@@ -16,6 +16,8 @@ import {
 import { toast } from "sonner";
 import {
   createPublicClient,
+  createWalletClient,
+  custom,
   http,
   parseUnits,
   encodeFunctionData,
@@ -26,7 +28,7 @@ import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
-import { EXPLORER, CONTRACTS } from "@/lib/constants";
+import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL } from "@/lib/constants";
 import { createSmartAccount, grantAndSerializeSessionKey, BENQI_ABI } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +39,16 @@ const ERC20_ABI = [
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "transfer",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
   },
   {
     name: "approve",
@@ -53,6 +65,7 @@ const ERC20_ABI = [
 // Activation sub-steps (Giza-style progress)
 type ActivationPhase =
   | "idle"
+  | "transferring-usdc"
   | "creating-client"
   | "granting-session-key"
   | "registering-backend"
@@ -62,6 +75,7 @@ type ActivationPhase =
 
 const PHASE_LABELS: Record<ActivationPhase, string> = {
   idle: "",
+  "transferring-usdc": "Transferring USDC to smart account…",
   "creating-client": "Connecting to your smart account…",
   "granting-session-key": "Granting agent permissions…",
   "registering-backend": "Registering with optimizer…",
@@ -82,23 +96,26 @@ export default function OnboardingPage() {
     wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
 
   const [copied, setCopied] = useState(false);
-  const [usdcBalance, setUsdcBalance] = useState("0");
+  const [eoaBalance, setEoaBalance] = useState("0");
+  const [depositAmount, setDepositAmount] = useState("");
   const [activating, setActivating] = useState(false);
   const [activated, setActivated] = useState(false);
   const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activateGuardRef = useRef(false);
 
-  const balanceNum = parseFloat(usdcBalance);
-  const hasFunds = balanceNum >= 0.01;
+  const eoaBalanceNum = parseFloat(eoaBalance);
+  const parsedAmount = parseFloat(depositAmount);
+  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
+  const hasWalletFunds = eoaBalanceNum >= 1;
 
-  // Poll USDC balance of smart account
+  // Poll USDC balance of user's EOA wallet
   useEffect(() => {
-    if (!smartAccountAddress) return;
+    if (!wallet) return;
 
     const publicClient = createPublicClient({
       chain: avalancheFuji,
-      transport: http(process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL),
+      transport: http(AVALANCHE_RPC_URL),
     });
 
     const checkBalance = async () => {
@@ -107,20 +124,20 @@ export default function OnboardingPage() {
           address: CONTRACTS.USDC,
           abi: ERC20_ABI,
           functionName: "balanceOf",
-          args: [smartAccountAddress as `0x${string}`],
+          args: [wallet.address as `0x${string}`],
         });
-        setUsdcBalance(formatUnits(balance as bigint, 6));
+        setEoaBalance(formatUnits(balance as bigint, 6));
       } catch {
         /* ignore polling errors */
       }
     };
 
     checkBalance();
-    pollRef.current = setInterval(checkBalance, 5000);
+    pollRef.current = setInterval(checkBalance, 8000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [smartAccountAddress]);
+  }, [wallet]);
 
   const handleCopy = () => {
     if (!smartAccountAddress) return;
@@ -132,14 +149,54 @@ export default function OnboardingPage() {
 
   // Giza-style activation: single atomic flow with granular progress
   const handleActivate = async () => {
-    if (!wallet || !smartAccountAddress || !hasFunds) return;
+    if (!wallet || !smartAccountAddress || !isValidAmount) return;
     if (activateGuardRef.current) return; // prevent double invocation
     activateGuardRef.current = true;
     setActivating(true);
-    setActivationPhase("creating-client");
+
+    const amountWei = parseUnits(parsedAmount.toFixed(6), 6);
 
     try {
+      // Phase 0: Transfer USDC from EOA wallet → smart account (just a sign)
+      setActivationPhase("transferring-usdc");
+      const provider = await wallet.getEthereumProvider();
+
+      // Switch to Fuji if needed
+      try {
+        await provider.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: "0xA869" }],
+        });
+      } catch {
+        // Chain may already be selected
+      }
+
+      const walletClient = createWalletClient({
+        chain: avalancheFuji,
+        transport: custom(provider),
+      });
+      const [eoaAddress] = await walletClient.getAddresses();
+
+      const transferHash = await walletClient.sendTransaction({
+        account: eoaAddress,
+        to: CONTRACTS.USDC,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "transfer",
+          args: [smartAccountAddress as `0x${string}`, amountWei],
+        }),
+      });
+
+      // Wait for transfer to be mined before proceeding
+      const publicClient = createPublicClient({
+        chain: avalancheFuji,
+        transport: http(AVALANCHE_RPC_URL),
+      });
+      await publicClient.waitForTransactionReceipt({ hash: transferHash });
+      toast.success("USDC transferred to smart account!");
+
       // Phase 1: Create kernel client
+      setActivationPhase("creating-client");
       const viemAccount = await toViemAccount({ wallet });
       const { kernelAccount, kernelClient } = await createSmartAccount(viemAccount);
 
@@ -173,10 +230,9 @@ export default function OnboardingPage() {
         },
       });
 
-      // Phase 4: Deploy idle USDC to Benqi (best-effort)
+      // Phase 4: Deploy USDC from smart account to Benqi (best-effort)
       setActivationPhase("deploying-funds");
       try {
-        const amountWei = parseUnits(balanceNum.toFixed(6), 6);
         await kernelClient.sendTransaction({
           calls: [
             {
@@ -234,11 +290,11 @@ export default function OnboardingPage() {
   };
 
   // Determine current step
-  const currentStep = activated ? 3 : hasFunds ? 2 : 1;
+  const currentStep = activated ? 3 : isValidAmount ? 2 : 1;
 
   const steps = [
     { num: 1, label: "Account Created", done: true },
-    { num: 2, label: "Fund Account", done: hasFunds },
+    { num: 2, label: "Choose Amount", done: isValidAmount },
     { num: 3, label: "Activate Agent", done: activated },
   ];
 
@@ -339,11 +395,11 @@ export default function OnboardingPage() {
           </div>
         </div>
 
-        {/* Fund Account Card */}
+        {/* Deposit Amount Card */}
         <div
           className={cn(
             "rounded-xl border p-5 transition-all",
-            hasFunds
+            isValidAmount
               ? "border-[#059669]/20 bg-[#059669]/[0.03]"
               : "border-[#E84142]/20 bg-white",
           )}
@@ -352,42 +408,60 @@ export default function OnboardingPage() {
             <div
               className={cn(
                 "flex h-7 w-7 items-center justify-center rounded-lg",
-                hasFunds ? "bg-[#059669]/10" : "bg-[#E84142]/10",
+                isValidAmount ? "bg-[#059669]/10" : "bg-[#E84142]/10",
               )}
             >
-              {hasFunds ? (
+              {isValidAmount ? (
                 <CheckCircle2 className="h-3.5 w-3.5 text-[#059669]" />
               ) : (
                 <Wallet className="h-3.5 w-3.5 text-[#E84142]" />
               )}
             </div>
             <span className="text-sm font-medium text-[#1A1715]">
-              Fund Your Account
+              Deposit Amount
             </span>
           </div>
-          {hasFunds ? (
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-[#5C5550]">USDC Balance</span>
-              <span className="font-mono text-lg font-semibold text-[#059669]">
-                ${parseFloat(usdcBalance).toFixed(2)}
-              </span>
-            </div>
-          ) : (
-            <>
-              <p className="text-sm text-[#5C5550]">
-                Send USDC (Fuji) to your smart account address above.
-              </p>
-              <div className="mt-3 flex items-center gap-2 text-xs text-[#8A837C]">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Waiting for deposit…
-              </div>
-            </>
-          )}
+          <p className="text-xs text-[#8A837C] mb-3">
+            Choose how much USDC to deposit. It will be transferred from your wallet automatically when you activate.
+          </p>
+          <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
+            <span className="text-sm font-medium text-[#5C5550]">$</span>
+            <input
+              type="number"
+              min="1"
+              max={eoaBalanceNum}
+              step="0.01"
+              placeholder="Enter amount"
+              value={depositAmount}
+              onChange={(e) => setDepositAmount(e.target.value)}
+              disabled={activating}
+              className="flex-1 bg-transparent font-mono text-base text-[#1A1715] outline-none placeholder:text-[#C4BEB8] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+            <span className="text-xs font-medium text-[#8A837C]">USDC</span>
+            {eoaBalanceNum > 0 && (
+              <button
+                onClick={() => setDepositAmount(eoaBalanceNum.toFixed(2))}
+                disabled={activating}
+                className="rounded-md bg-[#E84142]/10 px-2 py-0.5 text-[10px] font-semibold text-[#E84142] hover:bg-[#E84142]/20 transition-colors disabled:opacity-50"
+              >
+                MAX
+              </button>
+            )}
+          </div>
+          <div className="mt-2 flex items-center justify-between text-xs text-[#8A837C]">
+            <span>Wallet balance: ${eoaBalanceNum.toFixed(2)} USDC</span>
+            {parsedAmount > eoaBalanceNum && (
+              <span className="text-[#DC2626]">Exceeds balance</span>
+            )}
+            {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 1 && (
+              <span className="text-[#DC2626]">Min $1.00</span>
+            )}
+          </div>
         </div>
 
         {/* Activation Card — Giza-style with phase progress */}
         <AnimatePresence mode="wait">
-        {hasFunds && !activated && (
+        {isValidAmount && !activated && (
           <motion.div
             key="activate"
             initial={{ opacity: 0, y: 8 }}
@@ -404,13 +478,15 @@ export default function OnboardingPage() {
 
                 {/* Phase progress indicators */}
                 <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                  {(["creating-client", "granting-session-key", "registering-backend", "deploying-funds"] as const).map((phase) => {
-                    const phaseIndex = ["creating-client", "granting-session-key", "registering-backend", "deploying-funds"].indexOf(phase);
-                    const currentIndex = ["creating-client", "granting-session-key", "registering-backend", "deploying-funds"].indexOf(activationPhase);
+                  {(["transferring-usdc", "creating-client", "granting-session-key", "registering-backend", "deploying-funds"] as const).map((phase) => {
+                    const allPhases = ["transferring-usdc", "creating-client", "granting-session-key", "registering-backend", "deploying-funds"] as const;
+                    const phaseIndex = allPhases.indexOf(phase);
+                    const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                     const isDone = currentIndex > phaseIndex || activationPhase === "done";
                     const isCurrent = activationPhase === phase;
 
                     const icons: Record<string, typeof Shield> = {
+                      "transferring-usdc": Wallet,
                       "creating-client": Zap,
                       "granting-session-key": Shield,
                       "registering-backend": ArrowRight,
@@ -468,17 +544,17 @@ export default function OnboardingPage() {
                 <div className="text-center">
                   <p className="text-sm font-medium text-[#1A1715]">Ready to activate</p>
                   <p className="mt-1 text-xs text-[#5C5550]">
-                    Your agent will optimize yield across Benqi and Aave V3 on Avalanche.
+                    ${parsedAmount.toFixed(2)} USDC will be transferred from your wallet and deployed to earn yield.
                     Gas fees are covered. You can deactivate anytime.
                   </p>
                 </div>
                 <button
                   onClick={handleActivate}
-                  disabled={!wallet}
+                  disabled={!wallet || !isValidAmount}
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                 >
                   <Zap className="h-4 w-4" />
-                  Activate Agent
+                  Deposit ${parsedAmount.toFixed(2)} &amp; Activate Agent
                 </button>
               </div>
             )}
