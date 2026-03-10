@@ -22,6 +22,7 @@ import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import AgentStatusPulse from "@/components/dashboard/AgentStatusPulse";
 import SafetyChecks from "@/components/dashboard/SafetyChecks";
 import SessionKeyScope from "@/components/dashboard/SessionKeyScope";
+import FundTransparency from "@/components/dashboard/FundTransparency";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -30,6 +31,7 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
+import { useAuth } from "@/hooks/useAuth";
 import { EXPLORER } from "@/lib/constants";
 import type { Portfolio } from "@snowmind/shared-types";
 
@@ -91,6 +93,7 @@ const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
 
 export default function DashboardPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const { eoaAddress } = useAuth();
   const address = smartAccountAddress || undefined;
   const [activeTab, setActiveTab] = useState<DashboardTab>("markets");
 
@@ -370,6 +373,15 @@ export default function DashboardPage() {
 
       {activeTab === "security" && (
         <div className="space-y-4">
+          {/* Fund Transparency — on-chain verifiability & explorer links */}
+          <ErrorBoundary name="fund-transparency">
+            <FundTransparency
+              portfolio={portfolio ?? null}
+              smartAccountAddress={smartAccountAddress ?? null}
+              eoaAddress={eoaAddress}
+              sessionKey={sessionKey ?? null}
+            />
+          </ErrorBoundary>
           <ErrorBoundary name="safety-checks">
             <SafetyChecks />
           </ErrorBoundary>

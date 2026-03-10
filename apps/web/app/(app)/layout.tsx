@@ -18,6 +18,7 @@ import { usePortfolio } from "@/hooks/usePortfolio";
 import { useSessionKey } from "@/hooks/useSessionKey";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { EXPLORER } from "@/lib/constants";
+import { api } from "@/lib/api-client";
 import { toast } from "sonner";
 
 function TopBar({
@@ -166,10 +167,22 @@ export default function AppLayout({
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
 
-  const handleDeactivateAgent = () => {
+  const handleDeactivateAgent = async () => {
+    const addr = smartAccount.address;
     setAgentActivated(false);
-    toast.success("Agent deactivated. Session key revoked locally.");
     router.push("/onboarding");
+
+    // Revoke session key on the backend (non-blocking but critical)
+    if (addr) {
+      try {
+        await api.revokeSessionKey(addr);
+        toast.success("Agent deactivated. Session key revoked.");
+      } catch {
+        toast.warning("Agent deactivated locally. Backend revocation will retry.");
+      }
+    } else {
+      toast.success("Agent deactivated.");
+    }
   };
 
   // Agent is "active" when it has an active session key (backend can auto-rebalance)

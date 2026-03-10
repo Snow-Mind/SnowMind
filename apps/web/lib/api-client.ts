@@ -47,6 +47,10 @@ export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
   _getAccessToken = getter;
 }
 
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = _getAccessToken ? await _getAccessToken() : null;
 
@@ -57,19 +61,37 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...(options?.headers as Record<string, string>),
   };
 
-  let res: Response;
-  try {
-    res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
-  } catch {
-    throw new NetworkError("Network request failed. Check your connection.");
+  const method = options?.method?.toUpperCase() ?? "GET";
+  const isIdempotent = method === "GET" || method === "HEAD";
+  const maxAttempts = isIdempotent ? MAX_RETRIES + 1 : 1;
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
+    } catch {
+      lastError = new NetworkError("Network request failed. Check your connection.");
+      if (!isIdempotent) throw lastError;
+      continue;
+    }
+
+    if (!res.ok) {
+      if (isIdempotent && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
+        continue;
+      }
+      const text = await res.text().catch(() => "Unknown error");
+      throw new APIError(res.status, `HTTP_${res.status}`, text);
+    }
+
+    return res.json() as Promise<T>;
   }
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "Unknown error");
-    throw new APIError(res.status, `HTTP_${res.status}`, text);
-  }
-
-  return res.json() as Promise<T>;
+  throw lastError ?? new NetworkError("Request failed after retries.");
 }
 
 // ── API client ─────────────────────────────────────────────
