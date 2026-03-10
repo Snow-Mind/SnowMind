@@ -156,12 +156,6 @@ export default function DocsPage() {
             How It Works
           </Link>
           <Link
-            href="/docs"
-            className="font-sans font-medium text-sm text-[#E84142]"
-          >
-            Docs
-          </Link>
-          <Link
             href="/dashboard"
             className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
           >

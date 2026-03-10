@@ -189,12 +189,6 @@ export default function LandingPage() {
           >
             How It Works
           </Link>
-          <Link
-            href="/docs"
-            className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
-          >
-            Docs
-          </Link>
           <button
             onClick={() => {
               if (authenticated) {
@@ -253,13 +247,6 @@ export default function LandingPage() {
           className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
         >
           How It Works
-        </Link>
-        <Link
-          href="/docs"
-          onClick={() => setMenuOpen(false)}
-          className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
-        >
-          Docs
         </Link>
         <button
           onClick={() => {
@@ -456,12 +443,6 @@ export default function LandingPage() {
                 className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
               >
                 How It Works
-              </a>
-              <a
-                href="/docs"
-                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-              >
-                Docs
               </a>
               <a
                 href="https://x.com/mark_nakatani"
