@@ -177,7 +177,10 @@ class SnowMindScheduler:
                     account_id=account_id,
                     smart_account_address=address,
                 )
-                return "ok" if result else "skip"
+                status = result.get("status", "unknown") if result else "skip"
+                if status == "executed":
+                    return "ok"
+                return "skip"
             except ValueError as e:
                 # Non-retryable (e.g. missing session key, no positions)
                 logger.debug("Non-retryable error for %s: %s", account_id, e)

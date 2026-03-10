@@ -246,6 +246,13 @@ class Rebalancer:
                 smart_account_address=smart_account_address,
                 target_allocations=capped,
             )
+        except ValueError as exc:
+            # Non-retryable (e.g. invalid/revoked session key)
+            logger.warning("Rebalance skipped for %s: %s", smart_account_address, exc)
+            await self._log(db, account_id, "skipped",
+                            reason=str(exc),
+                            proposed=result.allocations)
+            raise  # Let scheduler see ValueError as non-retryable
         except Exception as exc:
             logger.exception("Rebalance execution failed for %s", smart_account_address)
             return await self._log(db, account_id, "failed",
@@ -316,6 +323,7 @@ class Rebalancer:
         smart_account_address: str,
         withdrawals: list[dict],
         deposits: list[dict],
+        account_id: str | None = None,
     ) -> str:
         """Call the Node.js execution service to execute via ZeroDev."""
         payload = {
@@ -336,6 +344,24 @@ class Rebalancer:
                 json=payload,
                 headers={"x-internal-key": self.settings.INTERNAL_SERVICE_KEY},
             )
+            # Detect invalid session key errors and revoke so we don't retry forever
+            if resp.status_code == 500:
+                try:
+                    body = resp.json()
+                    err_msg = body.get("error", "")
+                except Exception:
+                    err_msg = resp.text
+                if "serializedSessionKey" in err_msg or "No signer" in err_msg:
+                    logger.warning(
+                        "Invalid session key for %s — revoking",
+                        smart_account_address,
+                    )
+                    if account_id:
+                        db = get_supabase()
+                        revoke_session_key(db, UUID(account_id))
+                    raise ValueError(
+                        f"Session key invalid for {smart_account_address} — revoked"
+                    )
             resp.raise_for_status()
             result = resp.json()
             logger.info("Execution service returned: %s", result)
@@ -406,6 +432,7 @@ class Rebalancer:
             smart_account_address=smart_account_address,
             withdrawals=exec_withdrawals,
             deposits=exec_deposits,
+            account_id=account_id,
         )
 
         # Step 4: Update allocations in DB
