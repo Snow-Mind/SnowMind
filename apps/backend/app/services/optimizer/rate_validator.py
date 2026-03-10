@@ -138,7 +138,7 @@ class RateValidator:
                     data = resp.json()
                     points = data.get("data") or []
                     if not points:
-                        logger.warning("DefiLlama returned empty data for %s", protocol_id)
+                        logger.debug("DefiLlama returned empty data for %s", protocol_id)
                         return True
                     # Latest APY from DefiLlama (as decimal, not percent)
                     latest_apy = points[-1].get("apy", points[-1].get("apyBase", 0))

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldAlert,
@@ -30,6 +31,19 @@ const BALANCE_OF_ABI = [
   },
 ] as const;
 
+/** Map raw error messages to user-friendly ones. */
+function friendlyWithdrawError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("User denied") || msg.includes("User rejected"))
+    return "Transaction cancelled.";
+  if (msg.includes("zd_getUserOperationGasPrice") || msg.includes("does not exist"))
+    return "Gas estimation failed — please try again.";
+  if (msg.includes("chainId"))
+    return "Please switch MetaMask to Avalanche Fuji network.";
+  if (msg.length > 120) return msg.slice(0, 100) + "…";
+  return msg;
+}
+
 type WithdrawPath = "snowmind" | "direct" | null;
 
 export default function EmergencyPanel() {
@@ -40,6 +54,7 @@ export default function EmergencyPanel() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
+  const queryClient = useQueryClient();
 
   async function handleWithdrawAll() {
     if (!wallet || !smartAccountAddress) return;
@@ -83,8 +98,13 @@ export default function EmergencyPanel() {
 
       setTxHash(hash);
       toast.success("Withdrawal successful! USDC returned to your smart account.");
+
+      // Refresh dashboard data
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-history"] });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Withdrawal failed");
+      toast.error(friendlyWithdrawError(err));
     } finally {
       setWithdrawing(false);
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, Loader2, CheckCircle2, Wallet, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -42,6 +43,22 @@ const ERC20_ABI = [
 
 type DepositStep = "idle" | "transferring" | "deploying" | "done";
 
+/** Map raw error messages to user-friendly ones. */
+function friendlyError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("User denied") || msg.includes("User rejected"))
+    return "Transaction cancelled.";
+  if (msg.includes("zd_getUserOperationGasPrice") || msg.includes("does not exist"))
+    return "Gas estimation failed — please try again.";
+  if (msg.includes("chainId"))
+    return "Please switch MetaMask to Avalanche Fuji network.";
+  if (msg.includes("insufficient"))
+    return "Insufficient USDC balance.";
+  // Truncate long messages (raw calldata)
+  if (msg.length > 120) return msg.slice(0, 100) + "…";
+  return msg;
+}
+
 export default function DepositPanel() {
   const [amount, setAmount] = useState("");
   const [step, setStep] = useState<DepositStep>("idle");
@@ -49,6 +66,7 @@ export default function DepositPanel() {
   const [mintTxHash, setMintTxHash] = useState<string | null>(null);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
+  const queryClient = useQueryClient();
 
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const parsedAmount = parseFloat(amount);
@@ -138,10 +156,15 @@ export default function DepositPanel() {
 
       setStep("done");
       setAmount("");
+
+      // Refresh dashboard data
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-history"] });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Deposit failed";
-      toast.error(msg);
-      setStep("idle");
+      toast.error(friendlyError(err));
+      // If transfer succeeded but Benqi deposit failed, stay on "deploying" state isn't helpful
+      setStep(transferTxHash ? "idle" : "idle");
     }
   }
 

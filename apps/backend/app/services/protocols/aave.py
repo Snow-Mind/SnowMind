@@ -139,7 +139,7 @@ class AaveV3Adapter(BaseProtocolAdapter):
                 fetched_at=time.time(),
             )
         except Exception as exc:
-            logger.warning(
+            logger.debug(
                 "Aave V3 on-chain read failed: %s — falling back to DefiLlama", exc,
             )
             return await self._fetch_defillama_rate()
@@ -148,20 +148,27 @@ class AaveV3Adapter(BaseProtocolAdapter):
         """Fetch live Aave V3 Avalanche USDC rate from DefiLlama yield API."""
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"https://yields.llama.fi/chart/{_DEFILLAMA_AAVE_POOL}"
-                )
+                # Use /pools endpoint which is more reliable than /chart
+                resp = await client.get("https://yields.llama.fi/pools")
                 resp.raise_for_status()
                 data = resp.json()
 
-            points = data.get("data") or []
-            if not points:
-                raise ValueError("Empty data from DefiLlama")
+            pools = data.get("data") or []
+            # Find Aave V3 USDC on Avalanche
+            aave_pool = next(
+                (p for p in pools
+                 if p.get("pool") == _DEFILLAMA_AAVE_POOL
+                 or (p.get("project") == "aave-v3"
+                     and p.get("chain") == "Avalanche"
+                     and "USDC" in (p.get("symbol") or ""))),
+                None,
+            )
+            if not aave_pool:
+                raise ValueError("Aave V3 USDC pool not found on DefiLlama")
 
-            latest = points[-1]
-            apy_pct = latest.get("apy", latest.get("apyBase", 0))
+            apy_pct = aave_pool.get("apy", aave_pool.get("apyBase", 0))
             apy = Decimal(str(apy_pct)) / Decimal("100")
-            tvl = Decimal(str(latest.get("tvlUsd", 0)))
+            tvl = Decimal(str(aave_pool.get("tvlUsd", 0)))
 
             logger.info("Aave V3 rate from DefiLlama: %.2f%%", float(apy * 100))
             return ProtocolRate(
@@ -172,7 +179,7 @@ class AaveV3Adapter(BaseProtocolAdapter):
                 fetched_at=time.time(),
             )
         except Exception as exc:
-            logger.warning("DefiLlama fallback also failed: %s — returning 0 APY", exc)
+            logger.debug("DefiLlama fallback also failed: %s — returning 0 APY", exc)
             return ProtocolRate(
                 protocol_id=self.protocol_id,
                 apy=Decimal("0"),
