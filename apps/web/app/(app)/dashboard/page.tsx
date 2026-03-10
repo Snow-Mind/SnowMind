@@ -29,6 +29,7 @@ import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
+import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
@@ -309,8 +310,17 @@ export default function DashboardPage() {
   // Subscribe to realtime rebalance events
   useRealtimePortfolio(address);
 
+  // Live protocol rates for projected APY when funds are idle
+  const { data: rates } = useProtocolRates();
+
   const isLoading = portfolioLoading || rebalanceLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+
+  // Best available APY across active protocols (shown when blended APY is 0)
+  const bestRate = rates
+    ?.filter((r) => r.isActive && !r.isComingSoon && r.currentApy > 0)
+    .sort((a, b) => b.currentApy - a.currentApy)[0];
+  const projectedApy = bestRate ? bestRate.currentApy * 100 : 0;
 
   const OVERVIEW_CARDS = stats
     ? [
@@ -322,8 +332,8 @@ export default function DashboardPage() {
         },
         {
           label: "Blended APY",
-          value: formatPct(stats.blendedApy),
-          change: null as string | null,
+          value: stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%",
+          change: stats.blendedApy === 0 && projectedApy > 0 ? "Projected" : null as string | null,
           icon: TrendingUp,
         },
         {
@@ -420,8 +430,12 @@ export default function DashboardPage() {
               <p className="metric-value mt-2 text-xl">{stat.value}</p>
               {stat.change && (
                 <div className="mt-1 flex items-center gap-1">
-                  <ArrowUpRight className="h-2.5 w-2.5 text-mint" />
-                  <span className="text-[11px] font-medium text-mint">
+                  {stat.change === "Projected" ? (
+                    <TrendingUp className="h-2.5 w-2.5 text-glacier" />
+                  ) : (
+                    <ArrowUpRight className="h-2.5 w-2.5 text-mint" />
+                  )}
+                  <span className={`text-[11px] font-medium ${stat.change === "Projected" ? "text-glacier" : "text-mint"}`}>
                     {stat.change}
                   </span>
                   <span className="text-[11px] text-slate-500">24h</span>

@@ -108,10 +108,12 @@ async def get_portfolio(
 
     allocations: list[AllocationResponse] = []
     total_deposited = Decimal(0)
+    original_db_deposits = Decimal(0)  # Track original deposits for yield calc
     db_protocol_ids: set[str] = set()
     for row in allocs.data or []:
         amt = Decimal(str(row["amount_usdc"]))
         total_deposited += amt
+        original_db_deposits += amt
         db_protocol_ids.add(row["protocol_id"])
         allocations.append(
             AllocationResponse(
@@ -186,9 +188,15 @@ async def get_portfolio(
     )
     last_ts = last_rb.data[0]["created_at"] if last_rb.data else None
 
+    # Yield = current protocol value (on-chain) minus original DB deposits
+    current_protocol_value = sum(
+        a.amount_usdc for a in allocations if a.protocol_id != "idle"
+    )
+    total_yield = max(current_protocol_value - original_db_deposits, Decimal(0))
+
     return PortfolioResponse(
         total_deposited_usd=total_deposited,
-        total_yield_usd=Decimal(0),  # TODO: compute from on-chain deltas
+        total_yield_usd=total_yield,
         allocations=allocations,
         last_rebalance_at=last_ts,
     )

@@ -16,8 +16,8 @@ import { avalancheFuji } from "viem/chains"
 const CHAIN         = avalancheFuji
 const ENTRYPOINT    = getEntryPoint("0.7")
 const ZERODEV_ID    = process.env.ZERODEV_PROJECT_ID
-const BUNDLER_URL   = `https://rpc.zerodev.app/api/v2/bundler/${ZERODEV_ID}`
-const PAYMASTER_URL = `https://rpc.zerodev.app/api/v2/paymaster/${ZERODEV_ID}`
+const BUNDLER_URL   = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
+const PAYMASTER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 
 const AAVE_ABI = [
   { name: "supply",   type: "function", stateMutability: "nonpayable",
