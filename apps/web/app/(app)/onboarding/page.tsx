@@ -4,52 +4,100 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
-  Shield,
-  Zap,
-  ArrowRight,
   CheckCircle2,
   Copy,
   ExternalLink,
   Loader2,
-  Sparkles,
-  Lock,
+  Wallet,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  createPublicClient,
+  http,
+  parseUnits,
+  encodeFunctionData,
+  formatUnits,
+} from "viem";
+import { avalancheFuji } from "viem/chains";
+import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
-import { EXPLORER } from "@/lib/constants";
+import { EXPLORER, CONTRACTS } from "@/lib/constants";
+import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { cn } from "@/lib/utils";
+
+const ERC20_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
 
 // ── Component ───────────────────────────────────────────────
 
 export default function OnboardingPage() {
   const router = useRouter();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const { wallets } = useWallets();
+  const queryClient = useQueryClient();
+  const wallet =
+    wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
 
-  const [isActivating, setIsActivating] = useState(false);
-  const [activated, setActivated] = useState(false);
   const [copied, setCopied] = useState(false);
-  const activatedRef = useRef(false);
+  const [usdcBalance, setUsdcBalance] = useState("0");
+  const [activating, setActivating] = useState(false);
+  const [activated, setActivated] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Auto-activate with moderate risk on mount
+  const balanceNum = parseFloat(usdcBalance);
+  const hasFunds = balanceNum >= 0.01;
+
+  // Poll USDC balance of smart account
   useEffect(() => {
-    if (!smartAccountAddress || activatedRef.current) return;
-    activatedRef.current = true;
+    if (!smartAccountAddress) return;
 
-    (async () => {
-      setIsActivating(true);
+    const publicClient = createPublicClient({
+      chain: avalancheFuji,
+      transport: http(process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL),
+    });
+
+    const checkBalance = async () => {
       try {
-        await api.saveRiskProfile(smartAccountAddress, "moderate");
-        setActivated(true);
+        const balance = await publicClient.readContract({
+          address: CONTRACTS.USDC,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [smartAccountAddress as `0x${string}`],
+        });
+        setUsdcBalance(formatUnits(balance as bigint, 6));
       } catch {
-        // Non-critical — agent still works with default settings
-        setActivated(true);
-      } finally {
-        setIsActivating(false);
+        /* ignore polling errors */
       }
-    })();
+    };
+
+    checkBalance();
+    pollRef.current = setInterval(checkBalance, 5000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, [smartAccountAddress]);
 
-  const handleCopyAddress = () => {
+  const handleCopy = () => {
     if (!smartAccountAddress) return;
     navigator.clipboard.writeText(smartAccountAddress);
     setCopied(true);
@@ -57,62 +105,152 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleGoToDashboard = () => {
-    router.push("/dashboard");
+  const handleActivate = async () => {
+    if (!wallet || !smartAccountAddress || !hasFunds) return;
+    setActivating(true);
+    try {
+      const viemAccount = await toViemAccount({ wallet });
+      const { kernelClient } = await createSmartAccount(viemAccount);
+      const amountWei = parseUnits(balanceNum.toFixed(6), 6);
+
+      // Deploy USDC to Benqi (approve + mint)
+      await kernelClient.sendTransaction({
+        calls: [
+          {
+            to: CONTRACTS.USDC,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: ERC20_ABI,
+              functionName: "approve",
+              args: [CONTRACTS.BENQI_POOL, amountWei],
+            }),
+          },
+          {
+            to: CONTRACTS.BENQI_POOL,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: BENQI_ABI,
+              functionName: "mint",
+              args: [amountWei],
+            }),
+          },
+        ],
+      });
+
+      // Register risk profile with backend (best-effort)
+      try {
+        await api.saveRiskProfile(smartAccountAddress, "moderate");
+      } catch {
+        /* non-critical */
+      }
+
+      // Invalidate queries so dashboard picks up the new allocation
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
+
+      setActivated(true);
+      toast.success("Agent activated! Redirecting to dashboard…");
+      setTimeout(() => router.push("/dashboard"), 1500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("User denied") || msg.includes("User rejected")) {
+        toast.error("Transaction cancelled.");
+      } else {
+        toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
+      }
+    } finally {
+      setActivating(false);
+    }
   };
+
+  // Determine current step
+  const currentStep = activated ? 3 : hasFunds ? 2 : 1;
+
+  const steps = [
+    { num: 1, label: "Account Created", done: true },
+    { num: 2, label: "Fund Account", done: hasFunds },
+    { num: 3, label: "Activate Agent", done: activated },
+  ];
 
   // ── Render ────────────────────────────────────────────────
 
-  if (isActivating) {
-    return (
-      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center py-24">
-        <Loader2 className="h-8 w-8 animate-spin text-[#E84142]" />
-        <p className="mt-4 text-sm text-[#5C5550]">Activating your AI agent…</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="mx-auto max-w-2xl py-6">
+    <div className="mx-auto max-w-lg py-10">
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25 }}
+        transition={{ duration: 0.3 }}
+        className="space-y-8"
       >
         {/* Header */}
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#059669]/10">
-            {activated ? (
-              <CheckCircle2 className="h-6 w-6 text-[#059669]" />
-            ) : (
-              <Sparkles className="h-6 w-6 text-[#E84142]" />
-            )}
-          </div>
+        <div className="text-center">
           <h1 className="font-display text-2xl font-semibold text-[#1A1715]">
-            {activated ? "Agent Activated" : "Activate Your AI Agent"}
+            Activate Your Agent
           </h1>
           <p className="mt-2 text-sm text-[#5C5550]">
-            Fund your smart account with USDC to start earning optimized yield.
+            Fund your smart account and let the AI optimizer go to work.
           </p>
         </div>
 
-        {/* Smart account address card */}
-        <div className="mb-6 rounded-xl border border-[#E84142]/20 bg-[#E84142]/[0.04] p-5">
-          <div className="mb-2 text-xs font-medium uppercase tracking-wider text-[#8A837C]">
-            Your Smart Account
+        {/* Step indicators */}
+        <div className="flex items-center justify-center">
+          {steps.map((step, i) => (
+            <div key={step.num} className="flex items-center">
+              <div className="flex flex-col items-center">
+                <div
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-all",
+                    step.done
+                      ? "bg-[#059669] text-white"
+                      : currentStep === step.num
+                        ? "bg-[#E84142] text-white"
+                        : "bg-[#E8E2DA] text-[#8A837C]",
+                  )}
+                >
+                  {step.done ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : (
+                    step.num
+                  )}
+                </div>
+                <span className="mt-1.5 text-[10px] font-medium text-[#5C5550]">
+                  {step.label}
+                </span>
+              </div>
+              {i < steps.length - 1 && (
+                <div
+                  className={cn(
+                    "mx-3 mb-5 h-px w-16",
+                    step.done ? "bg-[#059669]" : "bg-[#E8E2DA]",
+                  )}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Smart Account Card */}
+        <div className="rounded-xl border border-[#E8E2DA] bg-white p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#059669]/10">
+              <CheckCircle2 className="h-3.5 w-3.5 text-[#059669]" />
+            </div>
+            <span className="text-sm font-medium text-[#1A1715]">
+              Smart Account
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 truncate font-mono text-sm text-[#1A1715]">
+          <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
+            <code className="flex-1 truncate font-mono text-xs text-[#1A1715]">
               {smartAccountAddress}
             </code>
             <button
-              onClick={handleCopyAddress}
-              className="rounded-lg p-2 text-[#8A837C] transition-colors hover:bg-[#EDE8E3] hover:text-[#1A1715]"
+              onClick={handleCopy}
+              className="text-[#8A837C] hover:text-[#1A1715]"
             >
               {copied ? (
-                <CheckCircle2 className="h-4 w-4 text-[#059669]" />
+                <CheckCircle2 className="h-3.5 w-3.5 text-[#059669]" />
               ) : (
-                <Copy className="h-4 w-4" />
+                <Copy className="h-3.5 w-3.5" />
               )}
             </button>
             {smartAccountAddress && (
@@ -120,48 +258,105 @@ export default function OnboardingPage() {
                 href={EXPLORER.address(smartAccountAddress)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-lg p-2 text-[#8A837C] transition-colors hover:bg-[#EDE8E3] hover:text-[#1A1715]"
+                className="text-[#8A837C] hover:text-[#1A1715]"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className="h-3.5 w-3.5" />
               </a>
             )}
           </div>
         </div>
 
-        {/* Fund instructions */}
-        <div className="mb-6 rounded-xl border border-[#E8E2DA] bg-[#FAFAF8] p-5">
-          <p className="text-sm font-medium text-[#1A1715]">Fund your account</p>
-          <p className="mt-1 text-[12px] text-[#5C5550]">
-            Send USDC to your smart account address above. Once received, deploy it to Benqi from the dashboard to start earning yield.
-          </p>
-        </div>
-
-        {/* Features */}
-        <div className="mb-8 grid grid-cols-3 gap-3">
-          {[
-            { icon: Lock, label: "Non-custodial", desc: "You own your wallet" },
-            { icon: Zap, label: "Gas sponsored", desc: "No gas fees for you" },
-            { icon: Shield, label: "Audited protocols", desc: "Battle-tested only" },
-          ].map(({ icon: Icon, label, desc }) => (
-            <div
-              key={label}
-              className="rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] p-3 text-center"
-            >
-              <Icon className="mx-auto h-4 w-4 text-[#E84142]" />
-              <div className="mt-1.5 text-[11px] font-medium text-[#1A1715]">{label}</div>
-              <div className="text-[10px] text-[#5C5550]">{desc}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Go to dashboard */}
-        <button
-          onClick={handleGoToDashboard}
-          className="glacier-btn flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white transition-all"
+        {/* Fund Account Card */}
+        <div
+          className={cn(
+            "rounded-xl border p-5 transition-all",
+            hasFunds
+              ? "border-[#059669]/20 bg-[#059669]/[0.03]"
+              : "border-[#E84142]/20 bg-white",
+          )}
         >
-          Go to Dashboard
-          <ArrowRight className="h-4 w-4" />
-        </button>
+          <div className="mb-3 flex items-center gap-2">
+            <div
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-lg",
+                hasFunds ? "bg-[#059669]/10" : "bg-[#E84142]/10",
+              )}
+            >
+              {hasFunds ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-[#059669]" />
+              ) : (
+                <Wallet className="h-3.5 w-3.5 text-[#E84142]" />
+              )}
+            </div>
+            <span className="text-sm font-medium text-[#1A1715]">
+              Fund Your Account
+            </span>
+          </div>
+          {hasFunds ? (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[#5C5550]">USDC Balance</span>
+              <span className="font-mono text-lg font-semibold text-[#059669]">
+                ${parseFloat(usdcBalance).toFixed(2)}
+              </span>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-[#5C5550]">
+                Send USDC (Fuji) to your smart account address above.
+              </p>
+              <div className="mt-3 flex items-center gap-2 text-xs text-[#8A837C]">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Waiting for deposit…
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Activate Button */}
+        {hasFunds && !activated && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <button
+              onClick={handleActivate}
+              disabled={activating || !wallet}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+            >
+              {activating ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Activating Agent…
+                </>
+              ) : (
+                <>
+                  <Zap className="h-4 w-4" />
+                  Activate Agent
+                </>
+              )}
+            </button>
+            <p className="mt-2 text-center text-[10px] text-[#8A837C]">
+              Deploys your USDC to Benqi and starts the AI optimizer
+            </p>
+          </motion.div>
+        )}
+
+        {/* Activated state */}
+        {activated && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="flex flex-col items-center gap-3 rounded-xl bg-[#059669]/[0.05] border border-[#059669]/20 p-6 text-center"
+          >
+            <CheckCircle2 className="h-8 w-8 text-[#059669]" />
+            <p className="text-sm font-medium text-[#1A1715]">
+              Agent Activated
+            </p>
+            <p className="text-xs text-[#5C5550]">
+              Redirecting to dashboard…
+            </p>
+          </motion.div>
+        )}
       </motion.div>
     </div>
   );

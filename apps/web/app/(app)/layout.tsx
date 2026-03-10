@@ -26,7 +26,7 @@ const NAV_ITEMS = [
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits: boolean }) {
+function Sidebar({ onLogout, isAgentActive }: { onLogout: () => void; isAgentActive: boolean }) {
   const pathname = usePathname();
 
   return (
@@ -43,9 +43,10 @@ function Sidebar({ onLogout, hasDeposits }: { onLogout: () => void; hasDeposits:
       <nav className="flex-1 px-3 py-3">
         <ul className="space-y-0.5">
           {NAV_ITEMS.filter((item) => {
-            // Show "Activate" until user has deposits; always show other tabs
-            if (item.href === "/onboarding") return !hasDeposits;
-            return true;
+            // Before activation: only show Activate
+            if (item.href === "/onboarding") return !isAgentActive;
+            // After activation: show Dashboard/Portfolio/Settings
+            return isAgentActive;
           }).map((item) => {
             const isActive = pathname === item.href;
             return (
@@ -137,7 +138,11 @@ export default function AppLayout({
   const [setupOpen, setSetupOpen] = useState(false);
 
   const hasAccount = smartAccount.hasAccount;
-  const hasDeposits = Number(portfolio?.totalDepositedUsd ?? 0) > 0;
+
+  // Agent is "active" when funds are deployed to at least one protocol (not idle)
+  const isAgentActive = portfolio?.allocations?.some(
+    (a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0,
+  ) ?? false;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -146,18 +151,33 @@ export default function AppLayout({
     }
   }, [ready, authenticated, router]);
 
-  // Only redirect FRESH users (no stored smart account) to onboarding
-  // Once they've been to onboarding, let them navigate freely
+  // Redirect FRESH users (no stored smart account) to onboarding
   useEffect(() => {
     if (
       smartAccount.setupStep === "creating" &&
       !smartAccount.address &&
       pathname !== "/onboarding"
     ) {
-      // Account is being created for first time — go to onboarding
       router.replace("/onboarding");
     }
   }, [smartAccount.setupStep, smartAccount.address, pathname, router]);
+
+  // Gate: redirect to onboarding if agent NOT active and accessing protected pages
+  useEffect(() => {
+    if (!portfolio) return; // still loading — don't redirect yet
+    const protectedPaths = ["/dashboard", "/portfolio", "/settings"];
+    if (!isAgentActive && protectedPaths.includes(pathname)) {
+      router.replace("/onboarding");
+    }
+  }, [portfolio, isAgentActive, pathname, router]);
+
+  // Gate: redirect to dashboard if agent IS active and on onboarding
+  useEffect(() => {
+    if (!portfolio) return;
+    if (isAgentActive && pathname === "/onboarding") {
+      router.replace("/dashboard");
+    }
+  }, [portfolio, isAgentActive, pathname, router]);
 
   // Show setup wizard when smart account is being created
   const shouldOpenSetup = authenticated && smartAccount.setupStep === "creating";
@@ -190,7 +210,7 @@ export default function AppLayout({
 
   return (
     <div className="app-light min-h-screen bg-[#F5F0EB] text-[#1A1715]">
-      <Sidebar onLogout={logout} hasDeposits={hasDeposits} />
+      <Sidebar onLogout={logout} isAgentActive={isAgentActive} />
       <div className="flex min-h-screen flex-1 flex-col pl-56">
         <TopBar
           authenticated={authenticated}
