@@ -62,7 +62,7 @@ const features = [
   {
     title: "Built for Avalanche.",
     description:
-      "Not a multi-chain afterthought. Snow Mind is purpose-built for Avalanche\u2019s lending ecosystem, starting with Benqi, Aave V3, and Euler V2.",
+      "Not a multi-chain afterthought. SnowMind is purpose-built for Avalanche\u2019s lending ecosystem, starting with Benqi, Aave V3, and Euler V2.",
     icon: Snowflake,
   },
 ];
@@ -80,6 +80,13 @@ export default function LandingPage() {
   const scrollIndicatorRef = useRef<HTMLDivElement>(null);
   const cardsRef = useRef<HTMLDivElement>(null);
   const featuresRef = useRef<HTMLDivElement>(null);
+
+  // Auto-redirect to app when user is authenticated (single-click Create Agent flow)
+  useEffect(() => {
+    if (ready && authenticated) {
+      router.push("/dashboard");
+    }
+  }, [ready, authenticated, router]);
 
   useEffect(() => {
     let rafId: number;
@@ -321,7 +328,7 @@ export default function LandingPage() {
           {/* Scroll indicator */}
           <div
             ref={scrollIndicatorRef}
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1 pointer-events-none scroll-indicator"
+            className="absolute bottom-8 left-0 right-0 z-10 flex flex-col items-center justify-center gap-1 pointer-events-none scroll-indicator"
           >
             <span className="font-sans text-xs text-[#8A837C] tracking-[0.08em] uppercase">
               Scroll
@@ -363,7 +370,7 @@ export default function LandingPage() {
                     }}
                   >
                     <div
-                      className="relative bg-[#FAFAF8] border border-[#E8E2DA] rounded-2xl p-8 overflow-hidden text-left transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(26,23,21,0.08)]"
+                      className="relative h-full bg-[#FAFAF8] border border-[#E8E2DA] rounded-2xl p-8 overflow-hidden text-left transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(26,23,21,0.08)]"
                       style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
                     >
                       <span className="absolute top-4 left-6 font-sans font-bold text-[48px] text-[#E84142] opacity-20 select-none leading-none">
@@ -391,10 +398,10 @@ export default function LandingPage() {
       <section className="bg-[#FAFAF8] py-12 md:py-20 px-6">
         <div className="max-w-[1100px] mx-auto text-center">
           <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
-            WHY SNOW MIND
+            WHY SNOWMIND
           </p>
           <h2 className="font-sans font-bold text-[28px] md:text-[36px] text-[#1A1715] mt-3">
-            Built different. On purpose.
+            Smart yield. Uncompromising security.
           </h2>
 
           <div
@@ -473,7 +480,7 @@ export default function LandingPage() {
             style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}
           >
             <span className="font-sans font-normal text-[13px] text-[#8A837C]">
-              &copy; 2026 Snow Mind. All rights reserved.
+              &copy; 2026 SnowMind. All rights reserved.
             </span>
             <span className="font-sans font-medium text-[13px] text-[#5C5550] italic">
               Earn more. Risk less.

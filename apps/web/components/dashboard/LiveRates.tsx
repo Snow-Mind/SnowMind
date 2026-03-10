@@ -109,13 +109,48 @@ export default function LiveRates() {
                         {formatTvl(r.tvlUsd)}
                       </p>
                     </div>
-                    {/* Risk */}
+                    {/* Risk score badge */}
                     <div>
                       <span className="text-[10px] text-muted-foreground">
                         Risk
                       </span>
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        <div className="flex gap-0.5">
+                          {Array.from({ length: 5 }).map((_, di) => (
+                            <div
+                              key={di}
+                              className="h-1.5 w-3 rounded-full"
+                              style={{
+                                backgroundColor:
+                                  di < Math.ceil(r.riskScore / 2)
+                                    ? r.riskScore <= 3
+                                      ? "#00FF88"
+                                      : r.riskScore <= 6
+                                        ? "#F59E0B"
+                                        : "#FF4444"
+                                    : "rgba(255,255,255,0.08)",
+                              }}
+                            />
+                          ))}
+                        </div>
+                        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+                          r.riskScore <= 3
+                            ? "bg-mint/10 text-mint"
+                            : r.riskScore <= 6
+                              ? "bg-amber/10 text-amber"
+                              : "bg-crimson/10 text-crimson"
+                        }`}>
+                          {r.riskScore <= 3 ? "Low" : r.riskScore <= 6 ? "Medium" : "High"}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Max allocation enforced */}
+                    <div>
+                      <span className="text-[10px] text-muted-foreground">
+                        Max Allocation
+                      </span>
                       <p className="font-mono text-xs text-arctic">
-                        {r.riskScore}/10
+                        {((meta?.maxAllocationPct ?? 0.6) * 100).toFixed(0)}%
                       </p>
                     </div>
                   </div>

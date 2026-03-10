@@ -1,33 +1,27 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import {
   TrendingUp,
   Layers,
   Clock,
-  ArrowUpRight,
-  Zap,
-  Activity,
   AlertCircle,
   RefreshCw,
   ExternalLink,
-  Loader2,
-  ArrowDown,
-  CheckCircle2,
+  BarChart3,
+  LineChart,
+  ScrollText,
+  Shield,
   Sparkles,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { toast } from "sonner";
-import { parseUnits, encodeFunctionData } from "viem";
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
-import { useQueryClient } from "@tanstack/react-query";
 import AllocationChart from "@/components/dashboard/AllocationChart";
 import RebalanceHistory from "@/components/dashboard/RebalanceHistory";
 import LiveRates from "@/components/dashboard/LiveRates";
-import EmergencyPanel from "@/components/dashboard/EmergencyPanel";
-import RebalanceCountdown from "@/components/dashboard/RebalanceCountdown";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
+import AgentStatusPulse from "@/components/dashboard/AgentStatusPulse";
+import SafetyChecks from "@/components/dashboard/SafetyChecks";
+import SessionKeyScope from "@/components/dashboard/SessionKeyScope";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -36,21 +30,8 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { api, APIError } from "@/lib/api-client";
-import { EXPLORER, CONTRACTS } from "@/lib/constants";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { EXPLORER } from "@/lib/constants";
 import type { Portfolio } from "@snowmind/shared-types";
-
-const ERC20_APPROVE_ABI = [
-  {
-    name: "approve", type: "function", stateMutability: "nonpayable",
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount",  type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-  },
-] as const;
 
 function deriveOverviewStats(p: Portfolio) {
   const totalDep = Number(p.totalDepositedUsd);
@@ -64,10 +45,15 @@ function deriveOverviewStats(p: Portfolio) {
       )
     : null;
 
+  const activeProtocols = p.allocations.filter(
+    (a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0,
+  ).length;
+
   return {
     totalDeposited: totalDep,
     totalYield: totalYld,
     blendedApy,
+    activeProtocols,
     lastRebalanceLabel: hoursAgo !== null ? `${hoursAgo}h ago` : "Never",
   };
 }
@@ -94,209 +80,19 @@ function StatsSkeleton() {
   );
 }
 
-function QuickActions({
-  smartAccountAddress,
-  rebalanceStatus,
-  protocolCount,
-  idleUsdc,
-  onOptimized,
-}: {
-  smartAccountAddress: string | null;
-  rebalanceStatus: string | undefined;
-  protocolCount: number;
-  idleUsdc: number;
-  onOptimized: () => void;
-}) {
-  const [running, setRunning] = useState(false);
-  const [deploying, setDeploying] = useState(false);
-  const [deployTxHash, setDeployTxHash] = useState<string | null>(null);
-  const { wallets } = useWallets();
-  const queryClient = useQueryClient();
+type DashboardTab = "markets" | "performance" | "agent-log" | "security";
 
-  const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
-
-  async function handleRunOptimizer() {
-    if (!smartAccountAddress) {
-      toast.error("No smart account connected");
-      return;
-    }
-    setRunning(true);
-    try {
-      const result = await api.runOptimizer(smartAccountAddress);
-      if (result.rebalanceNeeded) {
-        toast.success(
-          `Optimizer found a better allocation (expected APY: ${result.expectedApy}). Rebalancing…`,
-        );
-      } else {
-        toast.info("Current allocation is already optimal — no rebalance needed.");
-      }
-      onOptimized();
-    } catch (err) {
-      if (err instanceof APIError && err.status === 400) {
-        toast.error("No funds deployed yet. Deposit and deploy funds first to run the optimizer.");
-      } else {
-        toast.error("Optimizer run failed. Try again later.");
-      }
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function handleDeployToBenqi() {
-    if (!wallet || !smartAccountAddress || idleUsdc < 0.01) return;
-    setDeploying(true);
-    setDeployTxHash(null);
-    try {
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
-
-      const amountWei = parseUnits(idleUsdc.toFixed(6), 6);
-
-      const txHash = await kernelClient.sendTransaction({
-        calls: [
-          {
-            to: CONTRACTS.USDC,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: ERC20_APPROVE_ABI,
-              functionName: "approve",
-              args: [CONTRACTS.BENQI_POOL, amountWei],
-            }),
-          },
-          {
-            to: CONTRACTS.BENQI_POOL,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: BENQI_ABI,
-              functionName: "mint",
-              args: [amountWei],
-            }),
-          },
-        ],
-      });
-
-      setDeployTxHash(txHash);
-      toast.success("Deposited to Benqi! Now earning yield.");
-
-      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
-      queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
-      queryClient.invalidateQueries({ queryKey: ["rebalance-history"] });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("User denied") || msg.includes("User rejected")) {
-        toast.error("Transaction cancelled.");
-      } else if (msg.length > 120) {
-        toast.error(msg.slice(0, 100) + "…");
-      } else {
-        toast.error(msg);
-      }
-    } finally {
-      setDeploying(false);
-    }
-  }
-
-  const statusLabel =
-    rebalanceStatus === "idle"
-      ? "Idle — monitoring rates"
-      : rebalanceStatus ?? "Loading…";
-
-  return (
-    <div className="space-y-3">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <button
-          onClick={handleRunOptimizer}
-          disabled={running || !smartAccountAddress}
-          className="crystal-card flex items-center gap-3 p-4 text-left transition-all hover:border-glacier/20 disabled:opacity-50"
-        >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-glacier/[0.06]">
-            {running ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-glacier" />
-            ) : (
-              <Zap className="h-3.5 w-3.5 text-glacier" />
-            )}
-          </div>
-          <div>
-            <p className="text-[13px] font-medium text-arctic">
-              {running ? "Running…" : "Run Optimizer"}
-            </p>
-            <p className="text-[11px] text-slate-500">
-              Solve MILP for current rates
-            </p>
-          </div>
-        </button>
-        <div className="crystal-card flex items-center gap-3 p-4">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-mint/[0.06]">
-            <Activity className="h-3.5 w-3.5 text-mint" />
-          </div>
-          <div>
-            <p className="text-[13px] font-medium text-arctic">Status</p>
-            <p className="text-[11px] text-slate-500">{statusLabel}</p>
-          </div>
-        </div>
-        <div className="crystal-card flex items-center gap-3 p-4">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-frost/[0.06]">
-            <Layers className="h-3.5 w-3.5 text-frost" />
-          </div>
-          <div>
-            <p className="text-[13px] font-medium text-arctic">Protocols</p>
-            <p className="text-[11px] text-slate-500">
-              {protocolCount} active
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Deploy idle USDC to Benqi */}
-      {idleUsdc >= 0.01 && (
-        <div className="crystal-card flex items-center justify-between gap-4 p-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E84142]/[0.06]">
-              {deploying ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E84142]" />
-              ) : deployTxHash ? (
-                <CheckCircle2 className="h-3.5 w-3.5 text-mint" />
-              ) : (
-                <ArrowDown className="h-3.5 w-3.5 text-[#E84142]" />
-              )}
-            </div>
-            <div>
-              <p className="text-[13px] font-medium text-arctic">
-                {formatUsd(idleUsdc)} USDC idle in wallet
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Deploy to Benqi to start earning yield
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {deployTxHash && (
-              <a
-                href={EXPLORER.tx(deployTxHash)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-[10px] text-mint underline"
-              >
-                View
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            )}
-            <button
-              onClick={handleDeployToBenqi}
-              disabled={deploying || !wallet || !smartAccountAddress}
-              className="rounded-lg bg-[#E84142] px-4 py-2 text-xs font-semibold text-white transition-all hover:bg-[#E84142]/90 disabled:opacity-50"
-            >
-              {deploying ? "Deploying…" : "Deploy to Benqi"}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
+  { id: "markets", label: "Markets", icon: BarChart3 },
+  { id: "performance", label: "Performance", icon: LineChart },
+  { id: "agent-log", label: "Agent Log", icon: ScrollText },
+  { id: "security", label: "Security", icon: Shield },
+];
 
 export default function DashboardPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const address = smartAccountAddress || undefined;
+  const [activeTab, setActiveTab] = useState<DashboardTab>("markets");
 
   const {
     data: portfolio,
@@ -318,16 +114,12 @@ export default function DashboardPage() {
     data: historyData,
   } = useRebalanceHistory(address);
 
-  // Subscribe to realtime rebalance events
   useRealtimePortfolio(address);
 
-  // Live protocol rates for projected APY when funds are idle
   const { data: rates } = useProtocolRates();
 
   const isLoading = portfolioLoading || rebalanceLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
-  const hasActiveSessionKey = sessionKey?.isActive ?? false;
-  const needsActivation = stats && stats.totalDeposited === 0 && !hasActiveSessionKey;
 
   // Best available APY across active protocols (shown when blended APY is 0)
   const bestRate = rates
@@ -338,28 +130,28 @@ export default function DashboardPage() {
   const OVERVIEW_CARDS = stats
     ? [
         {
-          label: "Total Deposited",
-          value: formatUsd(stats.totalDeposited),
-          change: null as string | null,
+          label: "Current Value",
+          value: formatUsd(stats.totalDeposited + stats.totalYield),
+          sub: null as string | null,
           icon: Layers,
         },
         {
-          label: "Blended APY",
-          value: stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%",
-          change: stats.blendedApy === 0 && projectedApy > 0 ? "Projected" : null as string | null,
-          icon: TrendingUp,
+          label: "Net Deposited",
+          value: formatUsd(stats.totalDeposited),
+          sub: null as string | null,
+          icon: Layers,
         },
         {
-          label: "Yield Earned",
+          label: "Net Earned",
           value: formatUsd(stats.totalYield),
-          change: null as string | null,
+          sub: null as string | null,
           icon: TrendingUp,
         },
         {
-          label: "Last Rebalance",
-          value: stats.lastRebalanceLabel,
-          change: null as string | null,
-          icon: Clock,
+          label: "APR",
+          value: stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%",
+          sub: stats.blendedApy === 0 && projectedApy > 0 ? "Projected" : null,
+          icon: TrendingUp,
         },
       ]
     : [];
@@ -399,7 +191,7 @@ export default function DashboardPage() {
           </h1>
           <div className="mt-0.5 flex items-center gap-2">
             <p className="text-[13px] text-slate-500">
-              Portfolio overview and optimization activity.
+              Monitor your agent and track performance.
             </p>
             {smartAccountAddress && (
               <a
@@ -415,45 +207,32 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
-        {portfolio?.lastRebalanceAt && (
-          <RebalanceCountdown lastRebalance={portfolio.lastRebalanceAt} />
+        {stats && (
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Clock className="h-3 w-3" />
+            <span>Last rebalance: {stats.lastRebalanceLabel}</span>
+            {stats.activeProtocols > 0 && (
+              <>
+                <span className="text-[#D4CEC7]">·</span>
+                <span>{stats.activeProtocols} active market{stats.activeProtocols !== 1 ? "s" : ""}</span>
+              </>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Activation Banner */}
-      {needsActivation && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative overflow-hidden rounded-xl border-2 border-[#E84142] bg-gradient-to-br from-[#E84142]/[0.08] via-[#E84142]/[0.04] to-transparent p-6"
-        >
-          <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-[#E84142]/10 blur-3xl" />
-          <div className="relative flex items-center justify-between gap-4">
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#E84142] text-white">
-                <Sparkles className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-[#1A1715]">
-                  Activate Your AI Agent
-                </h3>
-                <p className="mt-1 max-w-xl text-sm text-[#5C5550]">
-                  Your smart account is ready. Deposit USDC and activate the agent to start earning optimized yield across Avalanche protocols — 24/7, fully autonomous.
-                </p>
-              </div>
-            </div>
-            <Link
-              href="/onboarding"
-              className="flex shrink-0 items-center gap-2 rounded-lg bg-[#E84142] px-5 py-3 font-semibold text-white transition-all hover:bg-[#E84142]/90 hover:scale-105"
-            >
-              <Sparkles className="h-4 w-4" />
-              Activate Agent
-            </Link>
-          </div>
-        </motion.div>
+      {/* Agent status pulse — live monitoring indicator */}
+      {stats && (
+        <ErrorBoundary name="agent-status">
+          <AgentStatusPulse
+            lastRebalance={portfolio?.lastRebalanceAt ?? null}
+            isActive={!!sessionKey?.isActive}
+            activeProtocols={stats.activeProtocols}
+          />
+        </ErrorBoundary>
       )}
 
-      {/* Stats grid */}
+      {/* Static overview metrics */}
       {isLoading || !stats ? (
         <StatsSkeleton />
       ) : (
@@ -474,17 +253,10 @@ export default function DashboardPage() {
                 <stat.icon className="h-3.5 w-3.5 text-slate-600" />
               </div>
               <p className="metric-value mt-2 text-xl">{stat.value}</p>
-              {stat.change && (
+              {stat.sub && (
                 <div className="mt-1 flex items-center gap-1">
-                  {stat.change === "Projected" ? (
-                    <TrendingUp className="h-2.5 w-2.5 text-glacier" />
-                  ) : (
-                    <ArrowUpRight className="h-2.5 w-2.5 text-mint" />
-                  )}
-                  <span className={`text-[11px] font-medium ${stat.change === "Projected" ? "text-glacier" : "text-mint"}`}>
-                    {stat.change}
-                  </span>
-                  <span className="text-[11px] text-slate-500">24h</span>
+                  <TrendingUp className="h-2.5 w-2.5 text-glacier" />
+                  <span className="text-[11px] font-medium text-glacier">{stat.sub}</span>
                 </div>
               )}
             </motion.div>
@@ -492,49 +264,123 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Quick Actions */}
-      <QuickActions
-        smartAccountAddress={smartAccountAddress}
-        rebalanceStatus={rebalanceData?.status}
-        protocolCount={portfolio?.allocations.filter(a => a.protocolId !== "idle").length ?? 0}
-        idleUsdc={Number(portfolio?.allocations.find(a => a.protocolId === "idle")?.amountUsdc ?? "0")}
-        onOptimized={() => refetchPortfolio()}
-      />
+      {/* Tabs */}
+      <div className="flex gap-1 rounded-lg bg-[#EDE8E3] p-1">
+        {TABS.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-xs font-medium transition-all ${
+                isActive
+                  ? "bg-white text-[#1A1715] shadow-sm"
+                  : "text-[#8A837C] hover:text-[#5C5550]"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
 
-      {/* Live Tx Feed + Allocation */}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <div className="lg:col-span-2">
-          <LiveTxFeed history={historyData?.logs ?? []} />
-        </div>
-        <div className="lg:col-span-3">
+      {/* Tab content */}
+      {activeTab === "markets" && (
+        <div className="space-y-4">
+          {/* Best Opportunity banner — inspired by ZYF.AI */}
+          {bestRate && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center justify-between rounded-xl border border-glacier/20 bg-glacier/[0.04] px-5 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-glacier/10">
+                  <Sparkles className="h-4 w-4 text-glacier" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-glacier/70">
+                    Best Opportunity
+                  </p>
+                  <p className="text-sm font-medium text-arctic">
+                    {bestRate.name}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-lg font-bold text-glacier">
+                  {formatPct(bestRate.currentApy * 100)}
+                </p>
+                <p className="text-[10px] text-muted-foreground">APY</p>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Allocation chart */}
           <ErrorBoundary name="allocation-chart">
             <AllocationChart
               allocations={portfolio?.allocations ?? []}
               totalDeposited={portfolio ? Number(portfolio.totalDepositedUsd) : 0}
             />
           </ErrorBoundary>
+
+          {/* Live protocol rates */}
+          <ErrorBoundary name="live-rates">
+            <LiveRates />
+          </ErrorBoundary>
         </div>
-      </div>
+      )}
 
-      {/* Rebalance History — only show actual protocol moves */}
-      {(() => {
-        const protocolMoves = (historyData?.logs ?? []).filter(
-          (log) => (log.status === "executed" || log.status === "completed") && log.txHash
-        );
-        return protocolMoves.length > 0 ? (
-          <RebalanceHistory history={protocolMoves} total={protocolMoves.length} />
-        ) : null;
-      })()}
+      {activeTab === "performance" && (
+        <div className="space-y-4">
+          {/* Rebalance History — only protocol moves */}
+          {(() => {
+            const protocolMoves = (historyData?.logs ?? []).filter(
+              (log) => (log.status === "executed" || log.status === "completed") && log.txHash,
+            );
+            return protocolMoves.length > 0 ? (
+              <RebalanceHistory history={protocolMoves} total={protocolMoves.length} />
+            ) : (
+              <div className="crystal-card flex flex-col items-center justify-center py-12 text-center">
+                <LineChart className="h-8 w-8 text-slate-400" />
+                <p className="mt-3 text-sm font-medium text-arctic">No performance data yet</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Rebalance history will appear here once the agent starts optimizing.
+                </p>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
-      {/* Live Rates */}
-      <ErrorBoundary name="live-rates">
-        <LiveRates />
-      </ErrorBoundary>
+      {activeTab === "agent-log" && (
+        <div className="space-y-4">
+          {/* Decision reasoning header */}
+          <div className="flex items-center gap-2 rounded-lg bg-glacier/[0.04] px-4 py-2.5 border border-glacier/10">
+            <Sparkles className="h-3.5 w-3.5 text-glacier" />
+            <p className="text-[11px] text-muted-foreground">
+              Every agent action is verifiable on-chain. View reasoning and transaction proofs below.
+            </p>
+          </div>
+          <LiveTxFeed history={historyData?.logs ?? []} />
+        </div>
+      )}
 
-      {/* Emergency Withdrawal — MOST IMPORTANT, must never crash */}
-      <ErrorBoundary name="emergency-panel">
-        <EmergencyPanel />
-      </ErrorBoundary>
+      {activeTab === "security" && (
+        <div className="space-y-4">
+          <ErrorBoundary name="safety-checks">
+            <SafetyChecks />
+          </ErrorBoundary>
+          <ErrorBoundary name="session-key-scope">
+            <SessionKeyScope
+              sessionKey={sessionKey ?? null}
+              smartAccountAddress={smartAccountAddress ?? null}
+            />
+          </ErrorBoundary>
+        </div>
+      )}
     </div>
   );
 }
