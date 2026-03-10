@@ -16,6 +16,8 @@ import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { usePortfolio } from "@/hooks/usePortfolio";
+import { useSessionKey } from "@/hooks/useSessionKey";
+import { usePortfolioStore } from "@/stores/portfolio.store";
 import ConnectButton from "@/components/wallet/ConnectButton";
 import SmartAccountSetup from "@/components/wallet/SmartAccountSetup";
 
@@ -135,14 +137,20 @@ export default function AppLayout({
   const { authenticated, ready, login, logout, activeWallet, eoaAddress, isLoading: authLoading } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const { data: portfolio } = usePortfolio(smartAccount.address ?? undefined);
+  const { data: sessionKey } = useSessionKey(smartAccount.address ?? undefined);
+  const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const [setupOpen, setSetupOpen] = useState(false);
 
   const hasAccount = smartAccount.hasAccount;
 
-  // Agent is "active" when funds are deployed to at least one protocol (not idle)
-  const isAgentActive = portfolio?.allocations?.some(
+  // Agent is "active" when it has an active session key (backend can auto-rebalance)
+  // OR the store flag is set (immediate after activation, before query refetch)
+  // OR funds are already deployed to protocols
+  const hasProtocolAllocations = portfolio?.allocations?.some(
     (a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0,
   ) ?? false;
+  const hasActiveSessionKey = sessionKey?.isActive ?? false;
+  const isAgentActive = storeActivated || hasActiveSessionKey || hasProtocolAllocations;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -164,12 +172,12 @@ export default function AppLayout({
 
   // Gate: redirect to onboarding if agent NOT active and accessing protected pages
   useEffect(() => {
-    if (!portfolio) return; // still loading — don't redirect yet
+    if (!portfolio && !storeActivated) return; // still loading — don't redirect yet
     const protectedPaths = ["/dashboard", "/portfolio", "/settings"];
     if (!isAgentActive && protectedPaths.includes(pathname)) {
       router.replace("/onboarding");
     }
-  }, [portfolio, isAgentActive, pathname, router]);
+  }, [portfolio, storeActivated, isAgentActive, pathname, router]);
 
   // Gate: redirect to dashboard if agent IS active and on onboarding
   useEffect(() => {

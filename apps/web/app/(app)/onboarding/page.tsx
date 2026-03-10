@@ -75,6 +75,7 @@ const PHASE_LABELS: Record<ActivationPhase, string> = {
 export default function OnboardingPage() {
   const router = useRouter();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
   const wallet =
@@ -86,6 +87,7 @@ export default function OnboardingPage() {
   const [activated, setActivated] = useState(false);
   const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const activateGuardRef = useRef(false);
 
   const balanceNum = parseFloat(usdcBalance);
   const hasFunds = balanceNum >= 0.01;
@@ -131,6 +133,8 @@ export default function OnboardingPage() {
   // Giza-style activation: single atomic flow with granular progress
   const handleActivate = async () => {
     if (!wallet || !smartAccountAddress || !hasFunds) return;
+    if (activateGuardRef.current) return; // prevent double invocation
+    activateGuardRef.current = true;
     setActivating(true);
     setActivationPhase("creating-client");
 
@@ -207,6 +211,7 @@ export default function OnboardingPage() {
 
       // Done — refresh dashboard data
       setActivationPhase("done");
+      setAgentActivated(true);
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
       queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
       queryClient.invalidateQueries({ queryKey: ["account-detail"] });
@@ -216,6 +221,7 @@ export default function OnboardingPage() {
       setTimeout(() => router.push("/dashboard"), 2000);
     } catch (err) {
       setActivationPhase("error");
+      activateGuardRef.current = false; // allow retry
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         toast.error("Transaction cancelled.");
