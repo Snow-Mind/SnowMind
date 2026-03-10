@@ -9,6 +9,11 @@ import {
   ArrowUpFromLine,
   Copy,
   ChevronDown,
+  LogOut,
+  Settings,
+  X,
+  Loader2,
+  CheckCircle2,
   ShieldOff,
 } from "lucide-react";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
@@ -27,30 +32,26 @@ function TopBar({
   isAgentActive,
   onDeposit,
   onWithdraw,
-  onDeactivate,
+  onAgentDetails,
+  onDisconnect,
 }: {
   smartAccountAddress: string | null;
   eoaAddress: string | null;
   isAgentActive: boolean;
   onDeposit: () => void;
   onWithdraw: () => void;
-  onDeactivate: () => void;
+  onAgentDetails: () => void;
+  onDisconnect: () => void;
 }) {
   const [accountOpen, setAccountOpen] = useState(false);
-  const displayAddress = smartAccountAddress ?? eoaAddress;
-  const truncated = displayAddress
-    ? `${displayAddress.slice(0, 6)}...${displayAddress.slice(-4)}`
+  const truncatedEoa = eoaAddress
+    ? `${eoaAddress.slice(0, 6)}...${eoaAddress.slice(-4)}`
     : "Connected";
-
-  const copyAddress = (addr: string) => {
-    navigator.clipboard.writeText(addr);
-    toast.success("Address copied");
-  };
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[#E8E2DA] bg-[#FAFAF8]/90 px-6 backdrop-blur-xl">
       {/* Left: Logo */}
-      <Link href="/dashboard" className="flex items-center gap-2">
+      <Link href="/" className="flex items-center gap-2">
         <NeuralSnowflakeLogo className="h-5 w-5" />
         <span className="font-display text-sm font-semibold text-[#E84142]">
           SnowMind
@@ -68,80 +69,58 @@ function TopBar({
               <ArrowDownToLine className="h-3.5 w-3.5" />
               Deposit
             </button>
-            <button
-              onClick={onWithdraw}
-              className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
-            >
-              <ArrowUpFromLine className="h-3.5 w-3.5" />
-              Withdraw
-            </button>
           </>
         )}
 
-        {/* Account dropdown */}
+        {/* Account dropdown — Giza-style */}
         <div className="relative">
           <button
             onClick={() => setAccountOpen(!accountOpen)}
             className="flex items-center gap-2 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 transition-colors hover:border-[#D4CEC7]"
           >
             <span className="inline-block h-2 w-2 rounded-full bg-[#059669]" />
-            <span className="font-mono text-xs text-[#5C5550]">{truncated}</span>
+            <span className="font-mono text-xs text-[#5C5550]">{truncatedEoa}</span>
             <ChevronDown className="h-3 w-3 text-[#8A837C]" />
           </button>
 
           {accountOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setAccountOpen(false)} />
-              <div className="absolute right-0 top-full z-50 mt-1 w-72 rounded-xl border border-[#E8E2DA] bg-white p-3 shadow-lg">
-                {/* Smart Account */}
-                {smartAccountAddress && (
-                  <div className="mb-3">
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">
-                      Smart Account
-                    </p>
-                    <div className="mt-1 flex items-center gap-2">
-                      <code className="flex-1 truncate font-mono text-xs text-[#1A1715]">
-                        {smartAccountAddress}
-                      </code>
-                      <button onClick={() => copyAddress(smartAccountAddress)} className="text-[#8A837C] hover:text-[#1A1715]">
-                        <Copy className="h-3 w-3" />
-                      </button>
-                      <a href={EXPLORER.address(smartAccountAddress)} target="_blank" rel="noopener noreferrer" className="text-[#8A837C] hover:text-[#1A1715]">
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </div>
-                  </div>
-                )}
-
-                {/* EOA Wallet */}
+              <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-xl border border-[#E8E2DA] bg-white shadow-lg overflow-hidden">
+                {/* EOA address header */}
                 {eoaAddress && (
-                  <div className="mb-3">
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">
-                      Owner Wallet
+                  <div className="border-b border-[#E8E2DA] px-4 py-3">
+                    <p className="font-mono text-xs text-[#1A1715]">
+                      {eoaAddress.slice(0, 6)}...{eoaAddress.slice(-4)}
                     </p>
-                    <div className="mt-1 flex items-center gap-2">
-                      <code className="flex-1 truncate font-mono text-xs text-[#5C5550]">
-                        {eoaAddress}
-                      </code>
-                      <button onClick={() => copyAddress(eoaAddress)} className="text-[#8A837C] hover:text-[#1A1715]">
-                        <Copy className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Dropdown footer intentionally left clean — no disconnect/back links */}
-                {isAgentActive && (
-                  <div className="mt-1 border-t border-[#E8E2DA] pt-3">
                     <button
-                      onClick={() => { setAccountOpen(false); onDeactivate(); }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-[#DC2626] transition-colors hover:bg-[#DC2626]/5"
+                      onClick={() => { navigator.clipboard.writeText(eoaAddress); toast.success("Address copied"); }}
+                      className="mt-0.5 text-[10px] text-[#8A837C] hover:text-[#5C5550] transition-colors"
                     >
-                      <ShieldOff className="h-3.5 w-3.5" />
-                      Deactivate Agent
+                      Copy address
                     </button>
                   </div>
                 )}
+
+                {/* Menu items */}
+                <div className="py-1">
+                  {isAgentActive && smartAccountAddress && (
+                    <button
+                      onClick={() => { setAccountOpen(false); onAgentDetails(); }}
+                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
+                    >
+                      <Settings className="h-3.5 w-3.5 text-[#8A837C]" />
+                      Agent account details
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setAccountOpen(false); onDisconnect(); }}
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
+                  >
+                    <LogOut className="h-3.5 w-3.5 text-[#8A837C]" />
+                    Disconnect
+                  </button>
+                </div>
               </div>
             </>
           )}
@@ -166,10 +145,12 @@ export default function AppLayout({
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
+  const [showAgentDetails, setShowAgentDetails] = useState(false);
 
   const handleDeactivateAgent = async () => {
     const addr = smartAccount.address;
     setAgentActivated(false);
+    setShowAgentDetails(false);
     router.push("/onboarding");
 
     // Revoke session key on the backend (non-blocking but critical)
@@ -183,6 +164,11 @@ export default function AppLayout({
     } else {
       toast.success("Agent deactivated.");
     }
+  };
+
+  const handleDisconnect = () => {
+    logout();
+    router.push("/");
   };
 
   // Agent is "active" when it has an active session key (backend can auto-rebalance)
@@ -276,7 +262,8 @@ export default function AppLayout({
           isAgentActive={isAgentActive}
           onDeposit={() => setShowDeposit(true)}
           onWithdraw={() => setShowWithdraw(true)}
-          onDeactivate={handleDeactivateAgent}
+          onAgentDetails={() => setShowAgentDetails(true)}
+          onDisconnect={handleDisconnect}
         />
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
           {/* Pass deposit/withdraw modal state to children via data attributes */}
@@ -297,6 +284,16 @@ export default function AppLayout({
       {/* Withdraw Modal */}
       {showWithdraw && (
         <WithdrawModal onClose={() => setShowWithdraw(false)} />
+      )}
+
+      {/* Agent Details Modal — Giza-style */}
+      {showAgentDetails && smartAccount.address && (
+        <AgentDetailsModal
+          smartAccountAddress={smartAccount.address}
+          onClose={() => setShowAgentDetails(false)}
+          onWithdraw={() => { setShowAgentDetails(false); setShowWithdraw(true); }}
+          onDeactivate={handleDeactivateAgent}
+        />
       )}
 
 
@@ -601,6 +598,133 @@ function WithdrawModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Agent Details Modal (Giza-style) ────────────────────────
+
+function AgentDetailsModal({
+  smartAccountAddress,
+  onClose,
+  onWithdraw,
+  onDeactivate,
+}: {
+  smartAccountAddress: string;
+  onClose: () => void;
+  onWithdraw: () => void;
+  onDeactivate: () => void;
+}) {
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
+  const { data: portfolio } = usePortfolio(smartAccountAddress);
+
+  // Compute USDC balance across all allocations
+  const totalUsdc = portfolio?.allocations?.reduce(
+    (sum, a) => sum + Number(a.amountUsdc),
+    0,
+  ) ?? 0;
+
+  const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
+
+  async function handleDeactivate() {
+    setDeactivating(true);
+    await onDeactivate();
+    setDeactivating(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-md rounded-2xl border border-[#E8E2DA] bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-[#E8E2DA] px-6 py-4">
+          <h2 className="text-base font-semibold text-[#1A1715]">Agent Details</h2>
+          <button onClick={onClose} className="text-[#8A837C] hover:text-[#1A1715] transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Agent address section */}
+        <div className="px-6 py-5">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#059669]/10 mb-3">
+            <span className="inline-block h-3 w-3 rounded-full bg-[#059669]" />
+          </div>
+          <p className="font-mono text-sm font-medium text-[#1A1715]">{truncated}</p>
+          <div className="mt-1.5 flex items-center gap-4">
+            <button
+              onClick={() => { navigator.clipboard.writeText(smartAccountAddress); toast.success("Address copied"); }}
+              className="flex items-center gap-1 text-xs text-[#8A837C] hover:text-[#5C5550] transition-colors"
+            >
+              <Copy className="h-3 w-3" />
+              Copy address
+            </button>
+            <a
+              href={EXPLORER.address(smartAccountAddress)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-[#8A837C] hover:text-[#5C5550] transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open in explorer
+            </a>
+          </div>
+        </div>
+
+        {/* Withdraw section */}
+        <div className="border-t border-[#E8E2DA] px-6 py-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-[#1A1715]">Withdraw Agent Account balance</p>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="inline-block h-4 w-4 rounded-full bg-[#2775CA] text-[8px] font-bold text-white flex items-center justify-center">$</span>
+                <span className="font-mono text-sm text-[#5C5550]">{totalUsdc.toFixed(2)} USDC</span>
+              </div>
+            </div>
+            <button
+              onClick={onWithdraw}
+              className="rounded-lg border border-[#E8E2DA] bg-white px-5 py-2 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
+            >
+              Withdraw
+            </button>
+          </div>
+        </div>
+
+        {/* Deactivate section */}
+        <div className="border-t border-[#E8E2DA] px-6 py-5">
+          <p className="text-sm font-medium text-[#1A1715]">Deactivate agent</p>
+          <p className="mt-1 text-xs text-[#8A837C] leading-relaxed">
+            Once you deactivate your agent, all tokens will need to be withdrawn manually and your agent will be turned off.
+          </p>
+          <div className="mt-4 flex items-center justify-between">
+            {!confirmDeactivate ? (
+              <button
+                onClick={() => setConfirmDeactivate(true)}
+                className="rounded-lg border border-[#E8E2DA] px-5 py-2 text-xs font-medium text-[#8A837C] transition-all hover:border-[#DC2626]/30 hover:text-[#DC2626]"
+              >
+                Deactivate
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDeactivate}
+                  disabled={deactivating}
+                  className="flex items-center gap-1.5 rounded-lg bg-[#DC2626] px-4 py-2 text-xs font-semibold text-white transition-all hover:bg-[#B91C1C] disabled:opacity-50"
+                >
+                  {deactivating && <Loader2 className="h-3 w-3 animate-spin" />}
+                  <ShieldOff className="h-3 w-3" />
+                  Confirm Deactivation
+                </button>
+                <button
+                  onClick={() => setConfirmDeactivate(false)}
+                  className="rounded-lg border border-[#E8E2DA] px-3 py-2 text-xs text-[#8A837C] hover:bg-[#F5F0EB]"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

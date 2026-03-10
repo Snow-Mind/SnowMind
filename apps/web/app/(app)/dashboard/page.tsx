@@ -11,7 +11,6 @@ import {
   BarChart3,
   LineChart,
   ScrollText,
-  Shield,
   Sparkles,
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -19,19 +18,13 @@ import AllocationChart from "@/components/dashboard/AllocationChart";
 import RebalanceHistory from "@/components/dashboard/RebalanceHistory";
 import LiveRates from "@/components/dashboard/LiveRates";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
-import AgentStatusPulse from "@/components/dashboard/AgentStatusPulse";
-import SafetyChecks from "@/components/dashboard/SafetyChecks";
-import SessionKeyScope from "@/components/dashboard/SessionKeyScope";
-import FundTransparency from "@/components/dashboard/FundTransparency";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
-import { useSessionKey } from "@/hooks/useSessionKey";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { useAuth } from "@/hooks/useAuth";
 import { EXPLORER } from "@/lib/constants";
 import type { Portfolio } from "@snowmind/shared-types";
 
@@ -82,18 +75,16 @@ function StatsSkeleton() {
   );
 }
 
-type DashboardTab = "markets" | "performance" | "agent-log" | "security";
+type DashboardTab = "markets" | "performance" | "agent-log";
 
 const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
   { id: "markets", label: "Markets", icon: BarChart3 },
   { id: "performance", label: "Performance", icon: LineChart },
   { id: "agent-log", label: "Agent Log", icon: ScrollText },
-  { id: "security", label: "Security", icon: Shield },
 ];
 
 export default function DashboardPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
-  const { eoaAddress } = useAuth();
   const address = smartAccountAddress || undefined;
   const [activeTab, setActiveTab] = useState<DashboardTab>("markets");
 
@@ -103,10 +94,6 @@ export default function DashboardPage() {
     error: portfolioError,
     refetch: refetchPortfolio,
   } = usePortfolio(address);
-
-  const {
-    data: sessionKey,
-  } = useSessionKey(address);
 
   const {
     data: rebalanceData,
@@ -223,17 +210,6 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
-
-      {/* Agent status pulse — live monitoring indicator */}
-      {stats && (
-        <ErrorBoundary name="agent-status">
-          <AgentStatusPulse
-            lastRebalance={portfolio?.lastRebalanceAt ?? null}
-            isActive={!!sessionKey?.isActive}
-            activeProtocols={stats.activeProtocols}
-          />
-        </ErrorBoundary>
-      )}
 
       {/* Static overview metrics */}
       {isLoading || !stats ? (
@@ -368,29 +344,6 @@ export default function DashboardPage() {
             </p>
           </div>
           <LiveTxFeed history={historyData?.logs ?? []} />
-        </div>
-      )}
-
-      {activeTab === "security" && (
-        <div className="space-y-4">
-          {/* Fund Transparency — on-chain verifiability & explorer links */}
-          <ErrorBoundary name="fund-transparency">
-            <FundTransparency
-              portfolio={portfolio ?? null}
-              smartAccountAddress={smartAccountAddress ?? null}
-              eoaAddress={eoaAddress}
-              sessionKey={sessionKey ?? null}
-            />
-          </ErrorBoundary>
-          <ErrorBoundary name="safety-checks">
-            <SafetyChecks />
-          </ErrorBoundary>
-          <ErrorBoundary name="session-key-scope">
-            <SessionKeyScope
-              sessionKey={sessionKey ?? null}
-              smartAccountAddress={smartAccountAddress ?? null}
-            />
-          </ErrorBoundary>
         </div>
       )}
     </div>

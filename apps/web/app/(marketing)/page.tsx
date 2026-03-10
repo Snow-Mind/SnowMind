@@ -81,13 +81,6 @@ export default function LandingPage() {
   const cardsRef = useRef<HTMLDivElement>(null);
   const featuresRef = useRef<HTMLDivElement>(null);
 
-  // Auto-redirect to app when user is authenticated (single-click Create Agent flow)
-  useEffect(() => {
-    if (ready && authenticated) {
-      router.push("/dashboard");
-    }
-  }, [ready, authenticated, router]);
-
   useEffect(() => {
     let rafId: number;
     let progress = 0;
