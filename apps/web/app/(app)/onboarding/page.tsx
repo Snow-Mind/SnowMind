@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   CheckCircle2,
   Copy,
@@ -10,6 +10,8 @@ import {
   Loader2,
   Wallet,
   Zap,
+  Shield,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -25,7 +27,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
 import { EXPLORER, CONTRACTS } from "@/lib/constants";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { createSmartAccount, grantAndSerializeSessionKey, BENQI_ABI } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 
 const ERC20_ABI = [
@@ -48,6 +50,26 @@ const ERC20_ABI = [
   },
 ] as const;
 
+// Activation sub-steps (Giza-style progress)
+type ActivationPhase =
+  | "idle"
+  | "creating-client"
+  | "granting-session-key"
+  | "registering-backend"
+  | "deploying-funds"
+  | "done"
+  | "error";
+
+const PHASE_LABELS: Record<ActivationPhase, string> = {
+  idle: "",
+  "creating-client": "Connecting to your smart account…",
+  "granting-session-key": "Granting agent permissions…",
+  "registering-backend": "Registering with optimizer…",
+  "deploying-funds": "Deploying funds to protocols…",
+  done: "Agent activated!",
+  error: "Activation failed",
+};
+
 // ── Component ───────────────────────────────────────────────
 
 export default function OnboardingPage() {
@@ -62,8 +84,8 @@ export default function OnboardingPage() {
   const [usdcBalance, setUsdcBalance] = useState("0");
   const [activating, setActivating] = useState(false);
   const [activated, setActivated] = useState(false);
+  const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoActivateRef = useRef(false);
 
   const balanceNum = parseFloat(usdcBalance);
   const hasFunds = balanceNum >= 0.01;
@@ -98,15 +120,6 @@ export default function OnboardingPage() {
     };
   }, [smartAccountAddress]);
 
-  // Auto-activate when funds are detected
-  useEffect(() => {
-    if (hasFunds && wallet && !activating && !activated && !autoActivateRef.current) {
-      autoActivateRef.current = true;
-      handleActivate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasFunds, wallet, activating, activated]);
-
   const handleCopy = () => {
     if (!smartAccountAddress) return;
     navigator.clipboard.writeText(smartAccountAddress);
@@ -115,53 +128,94 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Giza-style activation: single atomic flow with granular progress
   const handleActivate = async () => {
     if (!wallet || !smartAccountAddress || !hasFunds) return;
     setActivating(true);
-    try {
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
-      const amountWei = parseUnits(balanceNum.toFixed(6), 6);
+    setActivationPhase("creating-client");
 
-      // Deploy USDC to Benqi (approve + mint)
-      await kernelClient.sendTransaction({
-        calls: [
-          {
-            to: CONTRACTS.USDC,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: ERC20_ABI,
-              functionName: "approve",
-              args: [CONTRACTS.BENQI_POOL, amountWei],
-            }),
-          },
-          {
-            to: CONTRACTS.BENQI_POOL,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: BENQI_ABI,
-              functionName: "mint",
-              args: [amountWei],
-            }),
-          },
-        ],
+    try {
+      // Phase 1: Create kernel client
+      const viemAccount = await toViemAccount({ wallet });
+      const { kernelAccount, kernelClient } = await createSmartAccount(viemAccount);
+
+      // Phase 2: Grant session key (required for autonomous rebalancing)
+      setActivationPhase("granting-session-key");
+      const sessionKeyResult = await grantAndSerializeSessionKey(
+        kernelAccount,
+        kernelClient,
+        {
+          AAVE_POOL: CONTRACTS.AAVE_POOL,
+          BENQI_POOL: CONTRACTS.BENQI_POOL,
+          EULER_VAULT: CONTRACTS.EULER_VAULT,
+          USDC: CONTRACTS.USDC,
+        },
+        {
+          maxAmountUSDC: 10_000,
+          durationDays: 30,
+          maxOpsPerDay: 20,
+        },
+      );
+
+      // Phase 3: Register account with session key
+      setActivationPhase("registering-backend");
+      await api.registerAccount({
+        smartAccountAddress,
+        ownerAddress: wallet.address,
+        sessionKeyData: {
+          serializedPermission: sessionKeyResult.serializedPermission,
+          sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
+          expiresAt: sessionKeyResult.expiresAt,
+        },
       });
 
-      // Register risk profile with backend (best-effort)
+      // Phase 4: Deploy idle USDC to Benqi (best-effort)
+      setActivationPhase("deploying-funds");
       try {
-        await api.saveRiskProfile(smartAccountAddress, "moderate");
-      } catch {
-        /* non-critical */
+        const amountWei = parseUnits(balanceNum.toFixed(6), 6);
+        await kernelClient.sendTransaction({
+          calls: [
+            {
+              to: CONTRACTS.USDC,
+              value: 0n,
+              data: encodeFunctionData({
+                abi: ERC20_ABI,
+                functionName: "approve",
+                args: [CONTRACTS.BENQI_POOL, amountWei],
+              }),
+            },
+            {
+              to: CONTRACTS.BENQI_POOL,
+              value: 0n,
+              data: encodeFunctionData({
+                abi: BENQI_ABI,
+                functionName: "mint",
+                args: [amountWei],
+              }),
+            },
+          ],
+        });
+      } catch (deployErr) {
+        // Non-fatal: scheduler will detect idle USDC and deploy it
+        console.warn("Initial fund deployment skipped — agent will handle it:", deployErr);
       }
 
-      // Invalidate queries so dashboard picks up the new allocation
+      // Best-effort risk profile
+      try {
+        await api.saveRiskProfile(smartAccountAddress, "moderate");
+      } catch { /* non-critical */ }
+
+      // Done — refresh dashboard data
+      setActivationPhase("done");
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
       queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
+      queryClient.invalidateQueries({ queryKey: ["account-detail"] });
 
       setActivated(true);
       toast.success("Agent activated! Redirecting to dashboard…");
-      setTimeout(() => router.push("/dashboard"), 1500);
+      setTimeout(() => router.push("/dashboard"), 2000);
     } catch (err) {
+      setActivationPhase("error");
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         toast.error("Transaction cancelled.");
@@ -169,7 +223,7 @@ export default function OnboardingPage() {
         toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
       }
     } finally {
-      setActivating(false);
+      if (!activated) setActivating(false);
     }
   };
 
@@ -249,6 +303,9 @@ export default function OnboardingPage() {
               Smart Account
             </span>
           </div>
+          <p className="mb-2 text-xs text-[#8A837C]">
+            Fully self-custodial. You control this account.
+          </p>
           <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
             <code className="flex-1 truncate font-mono text-xs text-[#1A1715]">
               {smartAccountAddress}
@@ -322,48 +379,128 @@ export default function OnboardingPage() {
           )}
         </div>
 
-        {/* Auto-deploying indicator */}
+        {/* Activation Card — Giza-style with phase progress */}
+        <AnimatePresence mode="wait">
         {hasFunds && !activated && (
           <motion.div
+            key="activate"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center gap-3 rounded-xl border border-[#E84142]/20 bg-white p-6 text-center"
+            exit={{ opacity: 0, y: -8 }}
+            className="rounded-xl border border-[#E84142]/20 bg-white p-6"
           >
             {activating ? (
-              <>
-                <Loader2 className="h-6 w-6 animate-spin text-[#E84142]" />
-                <p className="text-sm font-medium text-[#1A1715]">Deploying funds to Benqi…</p>
-                <p className="text-xs text-[#5C5550]">This may require a wallet signature</p>
-              </>
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-sm font-medium text-[#1A1715]">
+                  <Loader2 className="h-5 w-5 animate-spin text-[#E84142]" />
+                  Launching your agent…
+                </div>
+
+                {/* Phase progress indicators */}
+                <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
+                  {(["creating-client", "granting-session-key", "registering-backend", "deploying-funds"] as const).map((phase) => {
+                    const phaseIndex = ["creating-client", "granting-session-key", "registering-backend", "deploying-funds"].indexOf(phase);
+                    const currentIndex = ["creating-client", "granting-session-key", "registering-backend", "deploying-funds"].indexOf(activationPhase);
+                    const isDone = currentIndex > phaseIndex || activationPhase === "done";
+                    const isCurrent = activationPhase === phase;
+
+                    const icons: Record<string, typeof Shield> = {
+                      "creating-client": Zap,
+                      "granting-session-key": Shield,
+                      "registering-backend": ArrowRight,
+                      "deploying-funds": Wallet,
+                    };
+                    const Icon = icons[phase];
+
+                    return (
+                      <div key={phase} className="flex items-center gap-3">
+                        <div className={cn(
+                          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-all",
+                          isDone ? "bg-[#059669] text-white" :
+                          isCurrent ? "bg-[#E84142] text-white" :
+                          "bg-[#E8E2DA] text-[#8A837C]"
+                        )}>
+                          {isDone ? (
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          ) : isCurrent ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Icon className="h-3 w-3" />
+                          )}
+                        </div>
+                        <span className={cn(
+                          "text-xs",
+                          isDone ? "text-[#059669]" :
+                          isCurrent ? "font-medium text-[#1A1715]" :
+                          "text-[#8A837C]"
+                        )}>
+                          {PHASE_LABELS[phase]}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <p className="text-center text-xs text-[#8A837C]">
+                  This may require a wallet signature. Do not close this page.
+                </p>
+              </div>
+            ) : activationPhase === "error" ? (
+              <div className="flex flex-col items-center gap-3 text-center">
+                <p className="text-sm font-medium text-[#DC2626]">Activation failed</p>
+                <p className="text-xs text-[#5C5550]">You can retry — your funds are safe in your smart account.</p>
+                <button
+                  onClick={handleActivate}
+                  disabled={!wallet}
+                  className="flex items-center gap-2 rounded-xl bg-[#E84142] px-6 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+                >
+                  Retry Activation
+                </button>
+              </div>
             ) : (
-              <button
-                onClick={handleActivate}
-                disabled={!wallet}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
-              >
-                <Zap className="h-4 w-4" />
-                Activate Agent
-              </button>
+              <div className="flex flex-col items-center gap-4">
+                <div className="text-center">
+                  <p className="text-sm font-medium text-[#1A1715]">Ready to activate</p>
+                  <p className="mt-1 text-xs text-[#5C5550]">
+                    Your agent will optimize yield across Benqi and Aave V3 on Avalanche.
+                    Gas fees are covered. You can deactivate anytime.
+                  </p>
+                </div>
+                <button
+                  onClick={handleActivate}
+                  disabled={!wallet}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+                >
+                  <Zap className="h-4 w-4" />
+                  Activate Agent
+                </button>
+              </div>
             )}
           </motion.div>
         )}
 
-        {/* Activated state */}
+        {/* Activated state — Giza "Agent has landed" */}
         {activated && (
           <motion.div
+            key="activated"
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="flex flex-col items-center gap-3 rounded-xl bg-[#059669]/[0.05] border border-[#059669]/20 p-6 text-center"
+            className="flex flex-col items-center gap-3 rounded-xl bg-[#059669]/[0.05] border border-[#059669]/20 p-8 text-center"
           >
-            <CheckCircle2 className="h-8 w-8 text-[#059669]" />
-            <p className="text-sm font-medium text-[#1A1715]">
+            <CheckCircle2 className="h-10 w-10 text-[#059669]" />
+            <p className="text-base font-semibold text-[#1A1715]">
               Agent Activated
             </p>
-            <p className="text-xs text-[#5C5550]">
+            <p className="text-sm text-[#5C5550]">
+              Your agent is now optimizing yield across Avalanche protocols.
+              It will watch rates and rebalance automatically.
+            </p>
+            <p className="text-xs text-[#8A837C]">
               Redirecting to dashboard…
             </p>
           </motion.div>
         )}
+        </AnimatePresence>
       </motion.div>
     </div>
   );
