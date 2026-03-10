@@ -139,6 +139,7 @@ export default function AppLayout({
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(smartAccount.address ?? undefined);
   const { data: sessionKey, isLoading: sessionKeyLoading } = useSessionKey(smartAccount.address ?? undefined);
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
+  const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [setupOpen, setSetupOpen] = useState(false);
 
   const hasAccount = smartAccount.hasAccount;
@@ -150,6 +151,15 @@ export default function AppLayout({
     (a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0,
   ) ?? false;
   const hasActiveSessionKey = sessionKey?.isActive ?? false;
+
+  // Clear stale storeActivated flag when real data proves no activation
+  const dataLoaded = !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
+  useEffect(() => {
+    if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasProtocolAllocations) {
+      setAgentActivated(false);
+    }
+  }, [dataLoaded, storeActivated, hasActiveSessionKey, hasProtocolAllocations, setAgentActivated]);
+
   const isAgentActive = storeActivated || hasActiveSessionKey || hasProtocolAllocations;
 
   // Redirect to landing if not authenticated
