@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   TrendingUp,
   Layers,
@@ -14,6 +15,7 @@ import {
   Loader2,
   ArrowDown,
   CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -29,6 +31,7 @@ import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
+import { useSessionKey } from "@/hooks/useSessionKey";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
@@ -303,6 +306,10 @@ export default function DashboardPage() {
   } = usePortfolio(address);
 
   const {
+    data: sessionKey,
+  } = useSessionKey(address);
+
+  const {
     data: rebalanceData,
     isLoading: rebalanceLoading,
   } = useRebalanceStatus(address);
@@ -319,6 +326,8 @@ export default function DashboardPage() {
 
   const isLoading = portfolioLoading || rebalanceLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+  const hasActiveSessionKey = sessionKey?.isActive ?? false;
+  const needsActivation = stats && stats.totalDeposited === 0 && !hasActiveSessionKey;
 
   // Best available APY across active protocols (shown when blended APY is 0)
   const bestRate = rates
@@ -410,6 +419,39 @@ export default function DashboardPage() {
           <RebalanceCountdown lastRebalance={portfolio.lastRebalanceAt} />
         )}
       </div>
+
+      {/* Activation Banner */}
+      {needsActivation && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="relative overflow-hidden rounded-xl border-2 border-[#E84142] bg-gradient-to-br from-[#E84142]/[0.08] via-[#E84142]/[0.04] to-transparent p-6"
+        >
+          <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-[#E84142]/10 blur-3xl" />
+          <div className="relative flex items-center justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#E84142] text-white">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-[#1A1715]">
+                  Activate Your AI Agent
+                </h3>
+                <p className="mt-1 max-w-xl text-sm text-[#5C5550]">
+                  Your smart account is ready. Deposit USDC and activate the agent to start earning optimized yield across Avalanche protocols — 24/7, fully autonomous.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/onboarding"
+              className="flex shrink-0 items-center gap-2 rounded-lg bg-[#E84142] px-5 py-3 font-semibold text-white transition-all hover:bg-[#E84142]/90 hover:scale-105"
+            >
+              <Sparkles className="h-4 w-4" />
+              Activate Agent
+            </Link>
+          </div>
+        </motion.div>
+      )}
 
       {/* Stats grid */}
       {isLoading || !stats ? (
