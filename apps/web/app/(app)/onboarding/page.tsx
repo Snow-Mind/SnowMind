@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
 import { EXPLORER } from "@/lib/constants";
+import DepositPanel from "@/components/dashboard/DepositPanel";
 
 // ── Component ───────────────────────────────────────────────
 
@@ -128,25 +129,9 @@ export default function OnboardingPage() {
           </div>
         </div>
 
-        {/* How to deposit */}
-        <div className="mb-6 rounded-xl border border-[#E8E2DA] bg-[#FAFAF8] p-5">
-          <div className="mb-3 text-xs font-medium uppercase tracking-wider text-[#8A837C]">
-            How to Deposit
-          </div>
-          <ol className="space-y-3">
-            {[
-              "Send USDC to your smart account address above",
-              "SnowMind's AI agent will automatically allocate your funds",
-              "Sit back and watch your yield compound 24/7",
-            ].map((text, i) => (
-              <li key={i} className="flex items-start gap-3">
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#E84142]/10 text-[10px] font-bold text-[#E84142]">
-                  {i + 1}
-                </span>
-                <span className="text-sm text-[#5C5550]">{text}</span>
-              </li>
-            ))}
-          </ol>
+        {/* Deposit USDC */}
+        <div className="mb-6">
+          <DepositPanel />
         </div>
 
         {/* Features */}

@@ -1,22 +1,39 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowDown, Loader2, CheckCircle2, Wallet } from "lucide-react";
+import { ArrowDown, Loader2, CheckCircle2, Wallet, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import { parseUnits, encodeFunctionData, createWalletClient, custom } from "viem";
+import {
+  parseUnits,
+  encodeFunctionData,
+  createWalletClient,
+  createPublicClient,
+  custom,
+  http,
+} from "viem";
 import { avalancheFuji } from "viem/chains";
-import { useWallets } from "@privy-io/react-auth";
-import { CONTRACTS } from "@/lib/constants";
+import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { api } from "@/lib/api-client";
+import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 
-const ERC20_TRANSFER_ABI = [
+const ERC20_ABI = [
   {
     name: "transfer",
     type: "function",
     stateMutability: "nonpayable",
     inputs: [
       { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     outputs: [{ name: "", type: "bool" }],
@@ -28,7 +45,8 @@ type DepositStep = "idle" | "transferring" | "deploying" | "done";
 export default function DepositPanel() {
   const [amount, setAmount] = useState("");
   const [step, setStep] = useState<DepositStep>("idle");
-  const [txHash, setTxHash] = useState<string | null>(null);
+  const [transferTxHash, setTransferTxHash] = useState<string | null>(null);
+  const [mintTxHash, setMintTxHash] = useState<string | null>(null);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
 
@@ -40,18 +58,20 @@ export default function DepositPanel() {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
 
     setStep("transferring");
+    setTransferTxHash(null);
+    setMintTxHash(null);
+
     try {
-      // Get the EIP-1193 provider from Privy wallet
       const provider = await wallet.getEthereumProvider();
 
       // Switch to Fuji if needed
       try {
         await provider.request({
           method: "wallet_switchEthereumChain",
-          params: [{ chainId: "0xA869" }], // 43113
+          params: [{ chainId: "0xA869" }],
         });
       } catch {
-        // Chain may already be selected or user rejected
+        // Chain may already be selected
       }
 
       const walletClient = createWalletClient({
@@ -60,32 +80,61 @@ export default function DepositPanel() {
       });
 
       const [account] = await walletClient.getAddresses();
+      const amountWei = parseUnits(parsedAmount.toString(), 6);
 
-      // Send USDC.transfer(smartAccountAddress, amount) from EOA
-      const hash = await walletClient.sendTransaction({
+      // Step 1: Transfer USDC from EOA → Smart Account (MetaMask popup)
+      const transferHash = await walletClient.sendTransaction({
         account,
         to: CONTRACTS.USDC,
         data: encodeFunctionData({
-          abi: ERC20_TRANSFER_ABI,
+          abi: ERC20_ABI,
           functionName: "transfer",
-          args: [
-            smartAccountAddress as `0x${string}`,
-            parseUnits(parsedAmount.toString(), 6),
-          ],
+          args: [smartAccountAddress as `0x${string}`, amountWei],
         }),
       });
 
-      setTxHash(hash);
+      setTransferTxHash(transferHash);
       toast.success("USDC transferred to your smart account!");
 
-      // Now trigger the optimizer to deploy idle USDC to protocols
+      // Wait for transfer to be mined
+      const publicClient = createPublicClient({
+        chain: avalancheFuji,
+        transport: http(AVALANCHE_RPC_URL),
+      });
+      await publicClient.waitForTransactionReceipt({ hash: transferHash });
+
+      // Step 2: Deposit to Benqi via smart account (UserOp — signs via wallet)
       setStep("deploying");
-      try {
-        await api.triggerRebalance(smartAccountAddress);
-        toast.success("Funds being deployed to optimal protocols!");
-      } catch {
-        toast.info("Funds deposited. They'll be auto-deployed in the next optimization cycle.");
-      }
+      const viemAccount = await toViemAccount({ wallet });
+      const { kernelClient } = await createSmartAccount(viemAccount);
+
+      const mintHash = await kernelClient.sendTransaction({
+        calls: [
+          // Approve USDC to Benqi Pool
+          {
+            to: CONTRACTS.USDC,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: ERC20_ABI,
+              functionName: "approve",
+              args: [CONTRACTS.BENQI_POOL, amountWei],
+            }),
+          },
+          // Mint (deposit) to Benqi
+          {
+            to: CONTRACTS.BENQI_POOL,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: BENQI_ABI,
+              functionName: "mint",
+              args: [amountWei],
+            }),
+          },
+        ],
+      });
+
+      setMintTxHash(mintHash);
+      toast.success("Deposited to Benqi! Now earning yield.");
 
       setStep("done");
       setAmount("");
@@ -98,8 +147,8 @@ export default function DepositPanel() {
 
   const buttonLabel = {
     idle: "Deposit",
-    transferring: "Confirming Transfer…",
-    deploying: "Deploying to Protocols…",
+    transferring: "Transferring USDC…",
+    deploying: "Depositing to Benqi…",
     done: "Deposited!",
   }[step];
 
@@ -112,7 +161,7 @@ export default function DepositPanel() {
         <div>
           <h2 className="text-sm font-medium text-arctic">Deposit USDC</h2>
           <p className="text-[11px] text-slate-500">
-            Funds auto-deploy to optimal yield protocols
+            Funds deposit directly to Benqi for yield
           </p>
         </div>
       </div>
@@ -142,7 +191,7 @@ export default function DepositPanel() {
         <div className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">
           <ArrowDown className="h-3 w-3" />
           <span>
-            {parsedAmount.toFixed(2)} USDC → Your Smart Account → Optimal Protocols
+            {parsedAmount.toFixed(2)} USDC → Smart Account → Benqi (earning yield)
           </span>
         </div>
       )}
@@ -160,20 +209,39 @@ export default function DepositPanel() {
         {buttonLabel}
       </button>
 
-      {/* Success info */}
-      {step === "done" && txHash && (
-        <div className="mt-3 rounded-lg border border-mint/20 bg-mint/5 px-3 py-2">
-          <p className="text-[11px] text-mint">
-            Deposit confirmed!{" "}
-            <a
-              href={`https://testnet.snowtrace.io/tx/${txHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline"
-            >
-              View on Snowtrace
-            </a>
-          </p>
+      {/* Transaction links */}
+      {(transferTxHash || mintTxHash) && (
+        <div className="mt-3 space-y-2">
+          {transferTxHash && (
+            <div className="flex items-center gap-2 rounded-lg border border-mint/20 bg-mint/5 px-3 py-2">
+              <CheckCircle2 className="h-3 w-3 shrink-0 text-mint" />
+              <span className="text-[11px] text-mint">USDC Transfer</span>
+              <a
+                href={EXPLORER.tx(transferTxHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto flex items-center gap-1 text-[10px] text-mint underline"
+              >
+                {transferTxHash.slice(0, 6)}…{transferTxHash.slice(-4)}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            </div>
+          )}
+          {mintTxHash && (
+            <div className="flex items-center gap-2 rounded-lg border border-glacier/20 bg-glacier/5 px-3 py-2">
+              <CheckCircle2 className="h-3 w-3 shrink-0 text-glacier" />
+              <span className="text-[11px] text-glacier">Benqi Deposit</span>
+              <a
+                href={EXPLORER.tx(mintTxHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto flex items-center gap-1 text-[10px] text-glacier underline"
+              >
+                {mintTxHash.slice(0, 6)}…{mintTxHash.slice(-4)}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            </div>
+          )}
         </div>
       )}
     </div>

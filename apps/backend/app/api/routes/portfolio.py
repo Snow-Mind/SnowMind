@@ -12,6 +12,7 @@ from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.validators import validate_eth_address
 from app.models.allocation import AllocationResponse, PortfolioResponse
+from app.services.protocols import get_adapter, ACTIVE_ADAPTERS
 from app.models.rebalance_log import RebalanceHistoryResponse, RebalanceLogResponse
 
 logger = logging.getLogger("snowmind")
@@ -51,6 +52,28 @@ async def _get_idle_usdc(address: str) -> Decimal:
         return Decimal("0")
 
 
+async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal:
+    """Read on-chain underlying balance for a protocol."""
+    try:
+        settings = get_settings()
+        adapter = get_adapter(protocol_id)
+        balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
+        return Decimal(str(balance_wei)) / Decimal("1000000")
+    except Exception as exc:
+        logger.warning("On-chain balance read failed for %s/%s: %s", protocol_id, address, exc)
+        return Decimal("0")
+
+
+async def _get_protocol_apy(protocol_id: str) -> Decimal:
+    """Get current live APY for a protocol."""
+    try:
+        adapter = get_adapter(protocol_id)
+        rate = await adapter.get_rate()
+        return rate.apy
+    except Exception:
+        return Decimal("0")
+
+
 # ── GET /portfolio/{address} ──────────────────────────────
 
 @router.get("/{address}", response_model=PortfolioResponse)
@@ -85,9 +108,11 @@ async def get_portfolio(
 
     allocations: list[AllocationResponse] = []
     total_deposited = Decimal(0)
+    db_protocol_ids: set[str] = set()
     for row in allocs.data or []:
         amt = Decimal(str(row["amount_usdc"]))
         total_deposited += amt
+        db_protocol_ids.add(row["protocol_id"])
         allocations.append(
             AllocationResponse(
                 protocol_id=row["protocol_id"],
@@ -98,25 +123,56 @@ async def get_portfolio(
             )
         )
 
+    # Check on-chain protocol balances for active protocols not in DB
+    for pid in ACTIVE_ADAPTERS:
+        onchain_balance = await _get_protocol_balance(address, pid)
+        if onchain_balance > Decimal("0.01"):
+            existing = next((a for a in allocations if a.protocol_id == pid), None)
+            if existing:
+                # Prefer on-chain balance if significantly different from DB
+                if abs(onchain_balance - existing.amount_usdc) > Decimal("0.5"):
+                    total_deposited -= existing.amount_usdc
+                    existing.amount_usdc = onchain_balance
+                    total_deposited += onchain_balance
+            else:
+                # Protocol balance found on-chain but not in DB (direct deposit)
+                live_apy = await _get_protocol_apy(pid)
+                allocations.append(
+                    AllocationResponse(
+                        protocol_id=pid,
+                        name=_NAMES.get(pid, pid),
+                        amount_usdc=onchain_balance,
+                        allocation_pct=Decimal("0"),
+                        current_apy=live_apy,
+                    )
+                )
+                total_deposited += onchain_balance
+
+    # Fetch live APY for all protocol allocations (overwrite stale DB values)
+    for alloc in allocations:
+        if alloc.protocol_id in ACTIVE_ADAPTERS:
+            live_apy = await _get_protocol_apy(alloc.protocol_id)
+            if live_apy > Decimal("0"):
+                alloc.current_apy = live_apy
+
     # Read on-chain idle USDC balance (not yet deployed to any protocol)
     idle_usdc = await _get_idle_usdc(address)
     if idle_usdc > Decimal("0.01"):
         total_deposited += idle_usdc
-        # Add idle USDC as its own "allocation" entry so the dashboard shows it
-        total_for_pct = total_deposited if total_deposited > 0 else Decimal("1")
         allocations.append(
             AllocationResponse(
                 protocol_id="idle",
                 name="Idle USDC (Wallet)",
                 amount_usdc=idle_usdc,
-                allocation_pct=idle_usdc / total_for_pct,
+                allocation_pct=Decimal("0"),
                 current_apy=Decimal("0"),
             )
         )
-        # Recalculate allocation_pct for all entries
-        if total_deposited > 0:
-            for alloc in allocations:
-                alloc.allocation_pct = alloc.amount_usdc / total_deposited
+
+    # Recalculate allocation_pct for all entries
+    if total_deposited > 0:
+        for alloc in allocations:
+            alloc.allocation_pct = alloc.amount_usdc / total_deposited
 
     # Last rebalance timestamp
     last_rb = (

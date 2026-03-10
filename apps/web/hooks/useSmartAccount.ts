@@ -133,11 +133,29 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
   }, [wallet, setSmartAccountAddress]);
 
   // Auto-initialize when wallet is available and no stored address
+  // Delay slightly to allow Zustand persist hydration to settle
   useEffect(() => {
-    if (wallet && !storedAddress && state.setupStep === "idle") {
-      initializeAccount();
+    if (!wallet || state.setupStep !== "idle") return;
+    const timer = setTimeout(() => {
+      const currentStored = usePortfolioStore.getState().smartAccountAddress;
+      if (!currentStored) {
+        initializeAccount();
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [wallet, state.setupStep, initializeAccount]);
+
+  // Sync state when storedAddress becomes available after Zustand hydration
+  useEffect(() => {
+    if (storedAddress && !state.address && state.setupStep === "idle") {
+      setState((prev) => ({
+        ...prev,
+        address: storedAddress as Address,
+        isDeployed: true,
+        setupStep: "ready",
+      }));
     }
-  }, [wallet, storedAddress, state.setupStep, initializeAccount]);
+  }, [storedAddress, state.address, state.setupStep]);
 
   // If we have a stored address but no wallet yet, keep showing "ready"
   // Once wallet connects, re-register and ensure backend has a session key

@@ -10,11 +10,25 @@ import {
   Zap,
   Wallet,
   Loader2,
+  CheckCircle2,
 } from "lucide-react";
-import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG } from "@/lib/constants";
-import { api } from "@/lib/api-client";
+import { createPublicClient, http, encodeFunctionData } from "viem";
+import { avalancheFuji } from "viem/chains";
+import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
+import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+
+const BALANCE_OF_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
 
 type WithdrawPath = "snowmind" | "direct" | null;
 
@@ -22,16 +36,55 @@ export default function EmergencyPanel() {
   const [expanded, setExpanded] = useState(false);
   const [activePath, setActivePath] = useState<WithdrawPath>(null);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [txHash, setTxHash] = useState<string | null>(null);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const { wallets } = useWallets();
+  const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
 
   async function handleWithdrawAll() {
-    if (!smartAccountAddress) return;
+    if (!wallet || !smartAccountAddress) return;
     setWithdrawing(true);
+    setTxHash(null);
     try {
-      await api.withdrawAll(smartAccountAddress);
-      toast.success("Withdrawal initiated — USDC returning to your smart account");
-    } catch {
-      toast.error("Withdrawal failed. Try the direct EOA path.");
+      // Read qiToken balance on-chain
+      const publicClient = createPublicClient({
+        chain: avalancheFuji,
+        transport: http(AVALANCHE_RPC_URL),
+      });
+      const qiBalance = await publicClient.readContract({
+        address: CONTRACTS.BENQI_POOL,
+        abi: BALANCE_OF_ABI,
+        functionName: "balanceOf",
+        args: [smartAccountAddress as `0x${string}`],
+      });
+
+      if (qiBalance === 0n) {
+        toast.info("No funds deposited in Benqi to withdraw.");
+        return;
+      }
+
+      // Create kernel client and send redeem UserOp (MetaMask signs)
+      const viemAccount = await toViemAccount({ wallet });
+      const { kernelClient } = await createSmartAccount(viemAccount);
+
+      const hash = await kernelClient.sendTransaction({
+        calls: [
+          {
+            to: CONTRACTS.BENQI_POOL,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: BENQI_ABI,
+              functionName: "redeem",
+              args: [qiBalance],
+            }),
+          },
+        ],
+      });
+
+      setTxHash(hash);
+      toast.success("Withdrawal successful! USDC returned to your smart account.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Withdrawal failed");
     } finally {
       setWithdrawing(false);
     }
@@ -168,12 +221,28 @@ export default function EmergencyPanel() {
                   </ol>
                   <button
                     onClick={handleWithdrawAll}
-                    disabled={withdrawing || !smartAccountAddress}
+                    disabled={withdrawing || !smartAccountAddress || !wallet}
                     className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-crimson/80 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-crimson disabled:opacity-50"
                   >
                     {withdrawing && <Loader2 className="h-4 w-4 animate-spin" />}
                     {withdrawing ? "Withdrawing…" : "Withdraw All Funds"}
                   </button>
+
+                  {txHash && (
+                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-mint/20 bg-mint/5 px-3 py-2">
+                      <CheckCircle2 className="h-3 w-3 shrink-0 text-mint" />
+                      <span className="text-[11px] text-mint">Withdrawn</span>
+                      <a
+                        href={EXPLORER.tx(txHash)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-auto flex items-center gap-1 text-[10px] text-mint underline"
+                      >
+                        {txHash.slice(0, 6)}…{txHash.slice(-4)}
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
