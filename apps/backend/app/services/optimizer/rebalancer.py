@@ -9,7 +9,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import httpx
-from web3 import AsyncWeb3, AsyncHTTPProvider, Web3
+from web3 import Web3
 
 from app.core.config import get_settings
 from app.core.database import get_supabase
@@ -28,19 +28,11 @@ from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.optimizer.rate_validator import RateValidator, apply_max_move_cap
 from app.services.optimizer.risk_scorer import RiskScorer
 from app.services.protocols import get_adapter
+from app.services.protocols.base import get_shared_async_web3
 
 logger = logging.getLogger("snowmind")
 
 MAX_UINT256 = 2**256 - 1
-
-# Module-level shared AsyncWeb3 instance — avoids creating new aiohttp sessions per request
-_shared_w3: AsyncWeb3 | None = None
-
-def _get_async_web3() -> AsyncWeb3:
-    global _shared_w3
-    if _shared_w3 is None:
-        _shared_w3 = AsyncWeb3(AsyncHTTPProvider(get_settings().AVALANCHE_RPC_URL))
-    return _shared_w3
 
 # -- ERC-20 balanceOf ABI -------------------------------------------------
 ERC20_BALANCE_ABI = [
@@ -76,7 +68,7 @@ class Rebalancer:
         self.rate_fetcher = RateFetcher()
         self.rate_validator = RateValidator()
         self.risk_scorer = RiskScorer()
-        self.w3 = _get_async_web3()
+        self.w3 = get_shared_async_web3()
         self._protocol_addresses: dict[str, str] = {
             "aave_v3": self.settings.AAVE_V3_POOL,
             "benqi": self.settings.BENQI_POOL,
@@ -119,6 +111,13 @@ class Rebalancer:
          10. Return log dict
         """
         db = get_supabase()
+
+        # 0. Early session-key check — skip expensive pipeline if no key
+        session_key = get_active_session_key(db, UUID(account_id))
+        if not session_key:
+            logger.debug("No active session key for %s — skipping", account_id)
+            return await self._log(db, account_id, "skipped",
+                                   reason="No active session key")
 
         # 1. Fetch live spot rates
         spot_rates_raw = await self.rate_fetcher.fetch_active_rates()

@@ -5,7 +5,6 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supabase import Client
-from web3 import AsyncWeb3, AsyncHTTPProvider
 
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -13,6 +12,7 @@ from app.core.limiter import limiter
 from app.core.validators import validate_eth_address
 from app.models.allocation import AllocationResponse, PortfolioResponse
 from app.services.protocols import get_adapter, ACTIVE_ADAPTERS
+from app.services.protocols.base import get_shared_async_web3
 from app.models.rebalance_log import RebalanceHistoryResponse, RebalanceLogResponse
 
 logger = logging.getLogger("snowmind")
@@ -38,7 +38,7 @@ async def _get_idle_usdc(address: str) -> Decimal:
     """Read the on-chain USDC balance sitting idle in the smart account."""
     try:
         settings = get_settings()
-        w3 = AsyncWeb3(AsyncHTTPProvider(settings.AVALANCHE_RPC_URL))
+        w3 = get_shared_async_web3()
         usdc = w3.eth.contract(
             address=w3.to_checksum_address(settings.USDC_ADDRESS),
             abi=_ERC20_ABI,

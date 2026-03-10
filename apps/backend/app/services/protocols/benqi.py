@@ -4,10 +4,8 @@ import asyncio
 import time
 from decimal import Decimal
 
-from web3 import AsyncWeb3, AsyncHTTPProvider
-
 from app.core.config import get_settings
-from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata
+from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
 
 # ── Benqi qiToken ABI — same on mainnet and MockBenqiPool ────────────────────
 BENQI_QITOKEN_ABI = [
@@ -81,7 +79,7 @@ class BenqiAdapter(BaseProtocolAdapter):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.w3 = AsyncWeb3(AsyncHTTPProvider(settings.AVALANCHE_RPC_URL))
+        self.w3 = get_shared_async_web3()
 
         # Fuji → MockBenqiPool; mainnet → real qiUSDCn
         self.pool_address = (

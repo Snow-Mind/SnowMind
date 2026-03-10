@@ -5,11 +5,10 @@ import time
 from decimal import Decimal
 
 import httpx
-from web3 import AsyncWeb3, AsyncHTTPProvider
 from web3.contract import AsyncContract
 
 from app.core.config import get_settings
-from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata
+from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +98,7 @@ class AaveV3Adapter(BaseProtocolAdapter):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.w3 = AsyncWeb3(AsyncHTTPProvider(settings.AVALANCHE_RPC_URL))
+        self.w3 = get_shared_async_web3()
         self.pool_address = (
             settings.AAVE_V3_POOL if settings.IS_TESTNET else _AAVE_V3_POOL_MAINNET
         )

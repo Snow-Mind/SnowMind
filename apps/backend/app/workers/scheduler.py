@@ -178,6 +178,10 @@ class SnowMindScheduler:
                     smart_account_address=address,
                 )
                 return "ok" if result else "skip"
+            except ValueError as e:
+                # Non-retryable (e.g. missing session key, no positions)
+                logger.debug("Non-retryable error for %s: %s", account_id, e)
+                return "skip"
             except Exception as e:
                 last_err = e
                 if attempt < self.MAX_RETRIES - 1:
@@ -242,10 +246,10 @@ class SnowMindScheduler:
     async def _accrue_benqi_interest(self) -> None:
         if not self.settings.IS_TESTNET or not self.settings.DEPLOYER_PRIVATE_KEY:
             return
-        from web3 import AsyncWeb3, AsyncHTTPProvider
+        from app.services.protocols.base import get_shared_async_web3
         from eth_account import Account
 
-        w3 = AsyncWeb3(AsyncHTTPProvider(self.settings.AVALANCHE_RPC_URL))
+        w3 = get_shared_async_web3()
         deployer = Account.from_key(self.settings.DEPLOYER_PRIVATE_KEY)
         abi = [
             {

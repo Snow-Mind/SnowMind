@@ -5,6 +5,20 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 import time
 
+from web3 import AsyncWeb3, AsyncHTTPProvider
+
+# ── Shared AsyncWeb3 singleton — avoids creating multiple aiohttp sessions ───
+_shared_async_w3: AsyncWeb3 | None = None
+
+
+def get_shared_async_web3() -> AsyncWeb3:
+    """Return a module-level shared AsyncWeb3 instance."""
+    global _shared_async_w3
+    if _shared_async_w3 is None:
+        from app.core.config import get_settings
+        _shared_async_w3 = AsyncWeb3(AsyncHTTPProvider(get_settings().AVALANCHE_RPC_URL))
+    return _shared_async_w3
+
 
 @dataclass
 class ProtocolRate:

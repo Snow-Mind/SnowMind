@@ -3,10 +3,8 @@
 import time
 from decimal import Decimal
 
-from web3 import AsyncWeb3, AsyncHTTPProvider
-
 from app.core.config import get_settings
-from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata
+from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
 
 # ── ERC-4626 + MockEulerVault ABI ────────────────────────────────────────────
 EULER_V2_ABI = [
@@ -73,7 +71,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.w3 = AsyncWeb3(AsyncHTTPProvider(settings.AVALANCHE_RPC_URL))
+        self.w3 = get_shared_async_web3()
         self.vault_address: str | None = (
             settings.EULER_VAULT if settings.IS_TESTNET else None
         )
