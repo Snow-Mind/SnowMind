@@ -456,11 +456,15 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Rebalance History */}
-      <RebalanceHistory
-        history={historyData?.logs ?? []}
-        total={historyData?.total ?? 0}
-      />
+      {/* Rebalance History — only show actual protocol moves */}
+      {(() => {
+        const protocolMoves = (historyData?.logs ?? []).filter(
+          (log) => (log.status === "executed" || log.status === "completed") && log.txHash
+        );
+        return protocolMoves.length > 0 ? (
+          <RebalanceHistory history={protocolMoves} total={protocolMoves.length} />
+        ) : null;
+      })()}
 
       {/* Live Rates */}
       <ErrorBoundary name="live-rates">

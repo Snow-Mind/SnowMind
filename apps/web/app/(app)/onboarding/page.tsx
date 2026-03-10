@@ -63,6 +63,7 @@ export default function OnboardingPage() {
   const [activating, setActivating] = useState(false);
   const [activated, setActivated] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoActivateRef = useRef(false);
 
   const balanceNum = parseFloat(usdcBalance);
   const hasFunds = balanceNum >= 0.01;
@@ -96,6 +97,15 @@ export default function OnboardingPage() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [smartAccountAddress]);
+
+  // Auto-activate when funds are detected
+  useEffect(() => {
+    if (hasFunds && wallet && !activating && !activated && !autoActivateRef.current) {
+      autoActivateRef.current = true;
+      handleActivate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasFunds, wallet, activating, activated]);
 
   const handleCopy = () => {
     if (!smartAccountAddress) return;
@@ -312,32 +322,29 @@ export default function OnboardingPage() {
           )}
         </div>
 
-        {/* Activate Button */}
+        {/* Auto-deploying indicator */}
         {hasFunds && !activated && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col items-center gap-3 rounded-xl border border-[#E84142]/20 bg-white p-6 text-center"
           >
-            <button
-              onClick={handleActivate}
-              disabled={activating || !wallet}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
-            >
-              {activating ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Activating Agent…
-                </>
-              ) : (
-                <>
-                  <Zap className="h-4 w-4" />
-                  Activate Agent
-                </>
-              )}
-            </button>
-            <p className="mt-2 text-center text-[10px] text-[#8A837C]">
-              Deploys your USDC to Benqi and starts the AI optimizer
-            </p>
+            {activating ? (
+              <>
+                <Loader2 className="h-6 w-6 animate-spin text-[#E84142]" />
+                <p className="text-sm font-medium text-[#1A1715]">Deploying funds to Benqi…</p>
+                <p className="text-xs text-[#5C5550]">This may require a wallet signature</p>
+              </>
+            ) : (
+              <button
+                onClick={handleActivate}
+                disabled={!wallet}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+              >
+                <Zap className="h-4 w-4" />
+                Activate Agent
+              </button>
+            )}
           </motion.div>
         )}
 
