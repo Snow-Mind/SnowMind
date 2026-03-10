@@ -33,7 +33,7 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { api } from "@/lib/api-client";
+import { api, APIError } from "@/lib/api-client";
 import { EXPLORER, CONTRACTS } from "@/lib/constants";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 import type { Portfolio } from "@snowmind/shared-types";
@@ -128,8 +128,12 @@ function QuickActions({
         toast.info("Current allocation is already optimal — no rebalance needed.");
       }
       onOptimized();
-    } catch {
-      toast.error("Optimizer run failed. Try again later.");
+    } catch (err) {
+      if (err instanceof APIError && err.status === 400) {
+        toast.error("No funds deployed yet. Deposit and deploy funds first to run the optimizer.");
+      } else {
+        toast.error("Optimizer run failed. Try again later.");
+      }
     } finally {
       setRunning(false);
     }

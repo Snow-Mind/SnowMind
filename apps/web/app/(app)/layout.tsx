@@ -136,8 +136,8 @@ export default function AppLayout({
   const pathname = usePathname();
   const { authenticated, ready, login, logout, activeWallet, eoaAddress, isLoading: authLoading } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
-  const { data: portfolio } = usePortfolio(smartAccount.address ?? undefined);
-  const { data: sessionKey } = useSessionKey(smartAccount.address ?? undefined);
+  const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(smartAccount.address ?? undefined);
+  const { data: sessionKey, isLoading: sessionKeyLoading } = useSessionKey(smartAccount.address ?? undefined);
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const [setupOpen, setSetupOpen] = useState(false);
 
@@ -171,13 +171,14 @@ export default function AppLayout({
   }, [smartAccount.setupStep, smartAccount.address, pathname, router]);
 
   // Gate: redirect to onboarding if agent NOT active and accessing protected pages
+  const dataReady = storeActivated || (!portfolioLoading && !sessionKeyLoading);
   useEffect(() => {
-    if (!portfolio && !storeActivated) return; // still loading — don't redirect yet
+    if (!dataReady) return; // still loading — don't redirect yet
     const protectedPaths = ["/dashboard", "/portfolio", "/settings"];
     if (!isAgentActive && protectedPaths.includes(pathname)) {
       router.replace("/onboarding");
     }
-  }, [portfolio, storeActivated, isAgentActive, pathname, router]);
+  }, [dataReady, isAgentActive, pathname, router]);
 
   // Gate: redirect to dashboard if agent IS active and on onboarding
   useEffect(() => {
@@ -215,6 +216,16 @@ export default function AppLayout({
   }
 
   if (!authenticated) return null;
+
+  // Show loading spinner while determining routing (prevents dashboard flash for new accounts)
+  const protectedPaths = ["/dashboard", "/portfolio", "/settings"];
+  if (!storeActivated && !isAgentActive && protectedPaths.includes(pathname) && !dataReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="app-light min-h-screen bg-[#F5F0EB] text-[#1A1715]">
