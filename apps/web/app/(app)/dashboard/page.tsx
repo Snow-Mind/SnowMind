@@ -12,17 +12,20 @@ import {
   RefreshCw,
   ExternalLink,
   Loader2,
+  ArrowDown,
+  CheckCircle2,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
+import { parseUnits, encodeFunctionData } from "viem";
+import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useQueryClient } from "@tanstack/react-query";
 import AllocationChart from "@/components/dashboard/AllocationChart";
 import RebalanceHistory from "@/components/dashboard/RebalanceHistory";
 import LiveRates from "@/components/dashboard/LiveRates";
-import OptimizerPreview from "@/components/dashboard/OptimizerPreview";
 import EmergencyPanel from "@/components/dashboard/EmergencyPanel";
 import RebalanceCountdown from "@/components/dashboard/RebalanceCountdown";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
-import DepositPanel from "@/components/dashboard/DepositPanel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -30,8 +33,20 @@ import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHis
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
-import { EXPLORER } from "@/lib/constants";
+import { EXPLORER, CONTRACTS } from "@/lib/constants";
+import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 import type { Portfolio } from "@snowmind/shared-types";
+
+const ERC20_APPROVE_ABI = [
+  {
+    name: "approve", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount",  type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
 
 function deriveOverviewStats(p: Portfolio) {
   const totalDep = Number(p.totalDepositedUsd);
@@ -79,14 +94,22 @@ function QuickActions({
   smartAccountAddress,
   rebalanceStatus,
   protocolCount,
+  idleUsdc,
   onOptimized,
 }: {
   smartAccountAddress: string | null;
   rebalanceStatus: string | undefined;
   protocolCount: number;
+  idleUsdc: number;
   onOptimized: () => void;
 }) {
   const [running, setRunning] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  const [deployTxHash, setDeployTxHash] = useState<string | null>(null);
+  const { wallets } = useWallets();
+  const queryClient = useQueryClient();
+
+  const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
 
   async function handleRunOptimizer() {
     if (!smartAccountAddress) {
@@ -111,54 +134,154 @@ function QuickActions({
     }
   }
 
+  async function handleDeployToBenqi() {
+    if (!wallet || !smartAccountAddress || idleUsdc < 0.01) return;
+    setDeploying(true);
+    setDeployTxHash(null);
+    try {
+      const viemAccount = await toViemAccount({ wallet });
+      const { kernelClient } = await createSmartAccount(viemAccount);
+
+      const amountWei = parseUnits(idleUsdc.toFixed(6), 6);
+
+      const txHash = await kernelClient.sendTransaction({
+        calls: [
+          {
+            to: CONTRACTS.USDC,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: ERC20_APPROVE_ABI,
+              functionName: "approve",
+              args: [CONTRACTS.BENQI_POOL, amountWei],
+            }),
+          },
+          {
+            to: CONTRACTS.BENQI_POOL,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: BENQI_ABI,
+              functionName: "mint",
+              args: [amountWei],
+            }),
+          },
+        ],
+      });
+
+      setDeployTxHash(txHash);
+      toast.success("Deposited to Benqi! Now earning yield.");
+
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-history"] });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("User denied") || msg.includes("User rejected")) {
+        toast.error("Transaction cancelled.");
+      } else if (msg.length > 120) {
+        toast.error(msg.slice(0, 100) + "…");
+      } else {
+        toast.error(msg);
+      }
+    } finally {
+      setDeploying(false);
+    }
+  }
+
   const statusLabel =
     rebalanceStatus === "idle"
       ? "Idle — monitoring rates"
       : rebalanceStatus ?? "Loading…";
 
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
-      <button
-        onClick={handleRunOptimizer}
-        disabled={running || !smartAccountAddress}
-        className="crystal-card flex items-center gap-3 p-4 text-left transition-all hover:border-glacier/20 disabled:opacity-50"
-      >
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-glacier/[0.06]">
-          {running ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-glacier" />
-          ) : (
-            <Zap className="h-3.5 w-3.5 text-glacier" />
-          )}
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <button
+          onClick={handleRunOptimizer}
+          disabled={running || !smartAccountAddress}
+          className="crystal-card flex items-center gap-3 p-4 text-left transition-all hover:border-glacier/20 disabled:opacity-50"
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-glacier/[0.06]">
+            {running ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-glacier" />
+            ) : (
+              <Zap className="h-3.5 w-3.5 text-glacier" />
+            )}
+          </div>
+          <div>
+            <p className="text-[13px] font-medium text-arctic">
+              {running ? "Running…" : "Run Optimizer"}
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Solve MILP for current rates
+            </p>
+          </div>
+        </button>
+        <div className="crystal-card flex items-center gap-3 p-4">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-mint/[0.06]">
+            <Activity className="h-3.5 w-3.5 text-mint" />
+          </div>
+          <div>
+            <p className="text-[13px] font-medium text-arctic">Status</p>
+            <p className="text-[11px] text-slate-500">{statusLabel}</p>
+          </div>
         </div>
-        <div>
-          <p className="text-[13px] font-medium text-arctic">
-            {running ? "Running…" : "Run Optimizer"}
-          </p>
-          <p className="text-[11px] text-slate-500">
-            Solve MILP for current rates
-          </p>
-        </div>
-      </button>
-      <div className="crystal-card flex items-center gap-3 p-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-mint/[0.06]">
-          <Activity className="h-3.5 w-3.5 text-mint" />
-        </div>
-        <div>
-          <p className="text-[13px] font-medium text-arctic">Status</p>
-          <p className="text-[11px] text-slate-500">{statusLabel}</p>
+        <div className="crystal-card flex items-center gap-3 p-4">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-frost/[0.06]">
+            <Layers className="h-3.5 w-3.5 text-frost" />
+          </div>
+          <div>
+            <p className="text-[13px] font-medium text-arctic">Protocols</p>
+            <p className="text-[11px] text-slate-500">
+              {protocolCount} active
+            </p>
+          </div>
         </div>
       </div>
-      <div className="crystal-card flex items-center gap-3 p-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-frost/[0.06]">
-          <Layers className="h-3.5 w-3.5 text-frost" />
+
+      {/* Deploy idle USDC to Benqi */}
+      {idleUsdc >= 0.01 && (
+        <div className="crystal-card flex items-center justify-between gap-4 p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E84142]/[0.06]">
+              {deploying ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E84142]" />
+              ) : deployTxHash ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-mint" />
+              ) : (
+                <ArrowDown className="h-3.5 w-3.5 text-[#E84142]" />
+              )}
+            </div>
+            <div>
+              <p className="text-[13px] font-medium text-arctic">
+                {formatUsd(idleUsdc)} USDC idle in wallet
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Deploy to Benqi to start earning yield
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {deployTxHash && (
+              <a
+                href={EXPLORER.tx(deployTxHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-[10px] text-mint underline"
+              >
+                View
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
+            <button
+              onClick={handleDeployToBenqi}
+              disabled={deploying || !wallet || !smartAccountAddress}
+              className="rounded-lg bg-[#E84142] px-4 py-2 text-xs font-semibold text-white transition-all hover:bg-[#E84142]/90 disabled:opacity-50"
+            >
+              {deploying ? "Deploying…" : "Deploy to Benqi"}
+            </button>
+          </div>
         </div>
-        <div>
-          <p className="text-[13px] font-medium text-arctic">Protocols</p>
-          <p className="text-[11px] text-slate-500">
-            {protocolCount} active
-          </p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -309,22 +432,14 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Deposit + Quick Actions row */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-1">
-          <ErrorBoundary name="deposit-panel">
-            <DepositPanel />
-          </ErrorBoundary>
-        </div>
-        <div className="lg:col-span-2">
-          <QuickActions
-            smartAccountAddress={smartAccountAddress}
-            rebalanceStatus={rebalanceData?.status}
-            protocolCount={portfolio?.allocations.length ?? 0}
-            onOptimized={() => refetchPortfolio()}
-          />
-        </div>
-      </div>
+      {/* Quick Actions */}
+      <QuickActions
+        smartAccountAddress={smartAccountAddress}
+        rebalanceStatus={rebalanceData?.status}
+        protocolCount={portfolio?.allocations.filter(a => a.protocolId !== "idle").length ?? 0}
+        idleUsdc={Number(portfolio?.allocations.find(a => a.protocolId === "idle")?.amountUsdc ?? "0")}
+        onOptimized={() => refetchPortfolio()}
+      />
 
       {/* Live Tx Feed + Allocation */}
       <div className="grid gap-4 lg:grid-cols-5">
@@ -347,13 +462,10 @@ export default function DashboardPage() {
         total={historyData?.total ?? 0}
       />
 
-      {/* Live Rates + Optimizer Preview */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ErrorBoundary name="live-rates">
-          <LiveRates />
-        </ErrorBoundary>
-        <OptimizerPreview />
-      </div>
+      {/* Live Rates */}
+      <ErrorBoundary name="live-rates">
+        <LiveRates />
+      </ErrorBoundary>
 
       {/* Emergency Withdrawal — MOST IMPORTANT, must never crash */}
       <ErrorBoundary name="emergency-panel">

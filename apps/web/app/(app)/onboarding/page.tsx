@@ -18,7 +18,6 @@ import { toast } from "sonner";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
 import { EXPLORER } from "@/lib/constants";
-import DepositPanel from "@/components/dashboard/DepositPanel";
 
 // ── Component ───────────────────────────────────────────────
 
@@ -129,9 +128,12 @@ export default function OnboardingPage() {
           </div>
         </div>
 
-        {/* Deposit USDC */}
-        <div className="mb-6">
-          <DepositPanel />
+        {/* Fund instructions */}
+        <div className="mb-6 rounded-xl border border-[#E8E2DA] bg-[#FAFAF8] p-5">
+          <p className="text-sm font-medium text-[#1A1715]">Fund your account</p>
+          <p className="mt-1 text-[12px] text-[#5C5550]">
+            Send USDC to your smart account address above. Once received, deploy it to Benqi from the dashboard to start earning yield.
+          </p>
         </div>
 
         {/* Features */}
