@@ -531,7 +531,6 @@ export default function OnboardingPage() {
 
               <p className="text-xs text-[#8A837C]">
                 Select which lending protocols your agent can allocate funds to.
-                All markets are selected by default for maximum yield.
               </p>
 
               {/* APY summary */}
@@ -546,48 +545,74 @@ export default function OnboardingPage() {
               <div className="space-y-2">
                 {ALL_PROTOCOLS.map((protocol) => {
                   const isSelected = selectedProtocols.has(protocol.id);
+                  const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
+                  const tvl = rateData?.tvlUsd;
                   return (
-                    <button
+                    <div
                       key={protocol.id}
-                      onClick={() => toggleProtocol(protocol.id)}
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-all",
+                        "rounded-lg border p-3 transition-all",
                         isSelected
                           ? "border-[#E84142]/30 bg-[#E84142]/[0.03]"
                           : "border-[#E8E2DA] bg-white opacity-60",
                       )}
                     >
-                      <Image
-                        src={protocol.logoPath}
-                        alt={protocol.name}
-                        width={32}
-                        height={32}
-                        className="rounded-full"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-[#1A1715]">{protocol.name}</p>
-                        <p className="text-[10px] text-[#8A837C] truncate">{protocol.shortName}</p>
-                      </div>
-                      {protocol.isComingSoon && (
-                        <span className="rounded-full bg-[#F59E0B]/10 px-2 py-0.5 text-[9px] font-medium text-[#F59E0B]">
-                          Soon
-                        </span>
-                      )}
-                      {/* Toggle indicator */}
-                      <div
-                        className={cn(
-                          "flex h-5 w-9 items-center rounded-full p-0.5 transition-colors",
-                          isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => toggleProtocol(protocol.id)}
+                          className="flex flex-1 items-center gap-3 text-left"
+                        >
+                          <Image
+                            src={protocol.logoPath}
+                            alt={protocol.name}
+                            width={32}
+                            height={32}
+                            className="rounded-full"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-[#1A1715]">{protocol.name}</p>
+                            <p className="text-[10px] text-[#8A837C] truncate">{protocol.shortName} · USDC</p>
+                          </div>
+                        </button>
+                        {tvl != null && tvl > 0 && (
+                          <span className="font-mono text-[10px] text-[#8A837C]">
+                            TVL ${tvl >= 1e9 ? `${(tvl / 1e9).toFixed(2)}B` : tvl >= 1e6 ? `${(tvl / 1e6).toFixed(2)}M` : `${(tvl / 1e3).toFixed(0)}K`}
+                          </span>
                         )}
-                      >
-                        <div
+                        {protocol.isComingSoon && (
+                          <span className="rounded-full bg-[#F59E0B]/10 px-2 py-0.5 text-[9px] font-medium text-[#F59E0B]">
+                            Soon
+                          </span>
+                        )}
+                        {protocol.vaultUrl && (
+                          <a
+                            href={protocol.vaultUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex h-6 w-6 items-center justify-center rounded-md border border-[#E8E2DA] text-[#8A837C] hover:text-[#E84142] hover:border-[#E84142]/30 transition-colors"
+                            title={`View ${protocol.name} vault`}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                        {/* Toggle */}
+                        <button
+                          onClick={() => toggleProtocol(protocol.id)}
                           className={cn(
-                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                            isSelected ? "translate-x-4" : "translate-x-0",
+                            "flex h-5 w-9 items-center rounded-full p-0.5 transition-colors shrink-0",
+                            isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
                           )}
-                        />
+                        >
+                          <div
+                            className={cn(
+                              "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                              isSelected ? "translate-x-4" : "translate-x-0",
+                            )}
+                          />
+                        </button>
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>

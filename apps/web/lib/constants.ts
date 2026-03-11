@@ -68,6 +68,7 @@ export const PROTOCOL_CONFIG = {
     description: 'Battle-tested lending protocol with $10B+ TVL globally',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.AAVE_POOL),
+    vaultUrl: 'https://app.aave.com/reserve-overview/?underlyingAsset=0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e&marketName=proto_avalanche_v3',
   },
   benqi: {
     id: 'benqi' as const,
@@ -86,6 +87,7 @@ export const PROTOCOL_CONFIG = {
     description: 'Native Avalanche lending protocol — the original Avalanche DeFi pillar',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.BENQI_POOL),
+    vaultUrl: 'https://app.benqi.fi/lending',
   },
   euler_v2: {
     id: 'euler_v2' as const,
@@ -104,6 +106,7 @@ export const PROTOCOL_CONFIG = {
     description: 'Next-gen modular lending (ERC-4626). Live on Ethereum, coming to Avalanche.',
     auditBadge: 'Audited (Ethereum)',
     explorerUrl: EXPLORER.address(CONTRACTS.EULER_VAULT),
+    vaultUrl: 'https://app.euler.finance/vault/0x797DD80692c3b2dAdabCe8e30C07fDE5307D48a9',
   },
   spark: {
     id: 'spark' as const,
@@ -122,6 +125,7 @@ export const PROTOCOL_CONFIG = {
     description: 'MakerDAO-backed lending protocol with competitive rates.',
     auditBadge: 'Audited',
     explorerUrl: '',
+    vaultUrl: 'https://app.spark.fi/markets/',
   },
 } as const
 
