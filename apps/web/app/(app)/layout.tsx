@@ -45,7 +45,6 @@ function TopBar({
   eoaAddress,
   isAgentActive,
   onDeposit,
-  onWithdraw,
   onAgentDetails,
   onDisconnect,
 }: {
@@ -53,7 +52,6 @@ function TopBar({
   eoaAddress: string | null;
   isAgentActive: boolean;
   onDeposit: () => void;
-  onWithdraw: () => void;
   onAgentDetails: () => void;
   onDisconnect: () => void;
 }) {
@@ -75,22 +73,13 @@ function TopBar({
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
         {isAgentActive && (
-          <>
-            <button
-              onClick={onDeposit}
-              className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
-            >
-              <ArrowDownToLine className="h-3.5 w-3.5" />
-              Deposit
-            </button>
-            <button
-              onClick={onWithdraw}
-              className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
-            >
-              <ArrowUpFromLine className="h-3.5 w-3.5" />
-              Withdraw
-            </button>
-          </>
+          <button
+            onClick={onDeposit}
+            className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
+          >
+            <ArrowDownToLine className="h-3.5 w-3.5" />
+            Deposit
+          </button>
         )}
 
         {/* Account dropdown — Giza-style */}
@@ -165,14 +154,12 @@ export default function AppLayout({
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [showDeposit, setShowDeposit] = useState(false);
-  const [showWithdraw, setShowWithdraw] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
 
   const handleDeactivateAgent = async () => {
     const addr = smartAccount.address;
     setAgentActivated(false);
     setShowAgentDetails(false);
-    setShowWithdraw(false);
 
     // Revoke session key on the backend (non-blocking but critical)
     if (addr) {
@@ -280,7 +267,6 @@ export default function AppLayout({
           eoaAddress={eoaAddress}
           isAgentActive={isAgentActive}
           onDeposit={() => setShowDeposit(true)}
-          onWithdraw={() => setShowWithdraw(true)}
           onAgentDetails={() => setShowAgentDetails(true)}
           onDisconnect={handleDisconnect}
         />
@@ -288,7 +274,6 @@ export default function AppLayout({
           {/* Pass deposit/withdraw modal state to children via data attributes */}
           <div
             data-show-deposit={showDeposit ? "true" : "false"}
-            data-show-withdraw={showWithdraw ? "true" : "false"}
           >
             {children}
           </div>
@@ -300,20 +285,12 @@ export default function AppLayout({
         <DepositModal onClose={() => setShowDeposit(false)} />
       )}
 
-      {/* Withdraw Modal */}
-      {showWithdraw && (
-        <WithdrawModal
-          onClose={() => setShowWithdraw(false)}
-          onDeactivate={handleDeactivateAgent}
-        />
-      )}
-
       {/* Agent Details Modal — Giza-style */}
       {showAgentDetails && smartAccount.address && (
         <AgentDetailsModal
           smartAccountAddress={smartAccount.address}
           onClose={() => setShowAgentDetails(false)}
-          onWithdraw={() => { setShowAgentDetails(false); setShowWithdraw(true); }}
+          onDeactivate={handleDeactivateAgent}
         />
       )}
 
@@ -452,29 +429,6 @@ function DepositModal({ onClose }: { onClose: () => void }) {
               MAX
             </button>
           )}
-        </div>
-
-        {/* Info rows */}
-        <div className="space-y-3 border-t border-[#E8E2DA] pt-4 mb-5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#8A837C]">Markets</span>
-            <span className="text-xs font-medium text-[#1A1715]">Benqi, Aave V3</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#8A837C]">Strategy</span>
-            <span className="text-xs font-medium text-[#1A1715]">AI-optimized allocation</span>
-          </div>
-        </div>
-
-        {/* Optimizer info */}
-        <div className="rounded-xl border border-[#E8E2DA] bg-[#F5F0EB] p-4 mb-5">
-          <div className="flex items-center gap-1.5 mb-1">
-            <Lock className="h-3.5 w-3.5 text-[#8A837C]" />
-            <span className="text-xs font-medium text-[#1A1715]">Automated optimizer</span>
-          </div>
-          <p className="text-[11px] text-[#8A837C] leading-relaxed">
-            AI agent continuously monitors rates and rebalances across protocols for optimal yield. System constraints take precedence.
-          </p>
         </div>
 
         {/* Deposit button */}
@@ -687,9 +641,9 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
             <span className="text-xs text-[#8A837C]">Loading...</span>
           ) : (
             <>
-              <span className="text-xs text-[#8A837C]">{availableUsdc.toFixed(6)} USDC available</span>
+              <span className="text-xs text-[#8A837C]">{availableUsdc.toFixed(2)} USDC available</span>
               <button
-                onClick={() => setAmount(availableUsdc.toFixed(6))}
+                onClick={() => setAmount(availableUsdc.toFixed(2))}
                 className="rounded border border-[#E8E2DA] px-2 py-0.5 text-[10px] font-semibold text-[#1A1715] hover:bg-[#F5F0EB] transition-colors"
               >
                 MAX
@@ -738,13 +692,17 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
 function AgentDetailsModal({
   smartAccountAddress,
   onClose,
-  onWithdraw,
+  onDeactivate,
 }: {
   smartAccountAddress: string;
   onClose: () => void;
-  onWithdraw: () => void;
+  onDeactivate: () => Promise<void>;
 }) {
   const { data: portfolio } = usePortfolio(smartAccountAddress);
+  const { wallets } = useWallets();
+  const queryClient = useQueryClient();
+  const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
+  const [withdrawStep, setWithdrawStep] = useState<"idle" | "processing" | "deactivating">("idle");
 
   // Compute USDC balance across all allocations
   const totalUsdc = portfolio?.allocations?.reduce(
@@ -753,6 +711,76 @@ function AgentDetailsModal({
   ) ?? 0;
 
   const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
+
+  async function handleFullWithdraw() {
+    if (!wallet || !smartAccountAddress) return;
+    setWithdrawStep("processing");
+    try {
+      const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+
+      // Step 1: Redeem all from protocol
+      const qiBalance = await publicClient.readContract({
+        address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf",
+        args: [smartAccountAddress as `0x${string}`],
+      });
+
+      const viemAccount = await toViemAccount({ wallet });
+      const { kernelClient } = await createSmartAccount(viemAccount);
+
+      if ((qiBalance as bigint) > 0n) {
+        await kernelClient.sendTransaction({
+          calls: [{ to: CONTRACTS.BENQI_POOL, value: 0n, data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [qiBalance as bigint] }) }],
+        });
+      }
+
+      // Step 2: Transfer ALL USDC to EOA
+      const usdcBalance = await publicClient.readContract({
+        address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf",
+        args: [smartAccountAddress as `0x${string}`],
+      });
+
+      if ((usdcBalance as bigint) > 0n) {
+        await kernelClient.sendTransaction({
+          calls: [{ to: CONTRACTS.USDC, value: 0n, data: encodeFunctionData({ abi: ERC20_TRANSFER_ONLY_ABI, functionName: "transfer", args: [wallet.address as `0x${string}`, usdcBalance as bigint] }) }],
+        });
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+
+      // Step 3: Deactivate agent
+      setWithdrawStep("deactivating");
+      toast.success("Successfully withdrawn funds!");
+      await new Promise((r) => setTimeout(r, 1500));
+      await onDeactivate();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("User denied") || msg.includes("User rejected")) toast.error("Transaction cancelled.");
+      else toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
+      setWithdrawStep("idle");
+    }
+  }
+
+  // Deactivation confirmation screen
+  if (withdrawStep === "deactivating") {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div className="relative w-full max-w-md rounded-2xl border border-[#E8E2DA] bg-white p-8 shadow-xl text-center">
+          <button onClick={onClose} className="absolute right-4 top-4 text-[#8A837C] hover:text-[#1A1715]"><X className="h-4 w-4" /></button>
+          <p className="text-sm font-medium text-[#1A1715] mb-6">Deactivation request received</p>
+          <div className="flex items-center justify-center mb-6">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#3B82F6]">
+              <CheckCircle2 className="h-8 w-8 text-white" />
+            </div>
+          </div>
+          <h3 className="text-2xl font-bold text-[#1A1715] mb-2">In progress</h3>
+          <p className="text-sm text-[#8A837C] leading-relaxed">
+            We received your deactivation request.<br />
+            This can take a few minutes to process.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
@@ -802,9 +830,11 @@ function AgentDetailsModal({
               </div>
             </div>
             <button
-              onClick={onWithdraw}
-              className="rounded-lg border border-[#E8E2DA] bg-white px-5 py-2 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
+              onClick={handleFullWithdraw}
+              disabled={withdrawStep === "processing" || totalUsdc <= 0}
+              className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
             >
+              {withdrawStep === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Withdraw
             </button>
           </div>

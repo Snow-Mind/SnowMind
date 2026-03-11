@@ -25,7 +25,7 @@ const DETAILED_STEPS = [
   },
   {
     icon: Cpu,
-    title: "AI Optimization",
+    title: "Optimization",
     description:
       "Our backend continuously solves a Mixed-Integer Linear Programming (MILP) problem to find the mathematically optimal allocation of your funds across lending protocols.",
     details: [

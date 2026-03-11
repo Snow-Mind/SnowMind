@@ -8,11 +8,11 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "SnowMind — Autonomous Yield on Avalanche",
   description:
-    "AI-powered yield optimization on Avalanche C-Chain. Non-custodial, autonomous, mathematically optimal.",
+    "Autonomous yield optimization on Avalanche C-Chain. Non-custodial, mathematically optimal.",
   openGraph: {
     title: "SnowMind — Autonomous Yield on Avalanche",
     description:
-      "AI-powered yield optimization on Avalanche C-Chain. Non-custodial, autonomous, mathematically optimal.",
+      "Autonomous yield optimization on Avalanche C-Chain. Non-custodial, mathematically optimal.",
     type: "website",
   },
 };

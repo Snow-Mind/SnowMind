@@ -743,3 +743,12 @@
 .scroll-indicator {
   animation: scroll-bounce 2s ease-in-out infinite;
 }
+
+@keyframes animate-scroll-dot {
+  0%, 100% { opacity: 1; transform: translateY(0); }
+  50% { opacity: 0.3; transform: translateY(6px); }
+}
+
+.animate-scroll-dot {
+  animation: animate-scroll-dot 1.5s ease-in-out infinite;
+}

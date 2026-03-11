@@ -3,19 +3,13 @@
 import { useState } from "react";
 import {
   TrendingUp,
-  Layers,
-  Clock,
   AlertCircle,
   RefreshCw,
-  ExternalLink,
   BarChart3,
-  LineChart,
   ScrollText,
   Sparkles,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import AllocationChart from "@/components/dashboard/AllocationChart";
-import RebalanceHistory from "@/components/dashboard/RebalanceHistory";
 import LiveRates from "@/components/dashboard/LiveRates";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -25,7 +19,6 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { EXPLORER } from "@/lib/constants";
 import type { Portfolio } from "@snowmind/shared-types";
 
 function deriveOverviewStats(p: Portfolio) {
@@ -75,11 +68,10 @@ function StatsSkeleton() {
   );
 }
 
-type DashboardTab = "markets" | "performance" | "agent-log";
+type DashboardTab = "markets" | "agent-log";
 
 const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
   { id: "markets", label: "Markets", icon: BarChart3 },
-  { id: "performance", label: "Performance", icon: LineChart },
   { id: "agent-log", label: "Agent Log", icon: ScrollText },
 ];
 
@@ -117,33 +109,11 @@ export default function DashboardPage() {
     .sort((a, b) => b.currentApy - a.currentApy)[0];
   const projectedApy = bestRate ? bestRate.currentApy * 100 : 0;
 
-  const OVERVIEW_CARDS = stats
-    ? [
-        {
-          label: "Current Value",
-          value: formatUsd(stats.totalDeposited + stats.totalYield),
-          sub: null as string | null,
-          icon: Layers,
-        },
-        {
-          label: "Net Deposited",
-          value: formatUsd(stats.totalDeposited),
-          sub: null as string | null,
-          icon: Layers,
-        },
-        {
-          label: "Net Earned",
-          value: formatUsd(stats.totalYield),
-          sub: null as string | null,
-          icon: TrendingUp,
-        },
-        {
-          label: "APR",
-          value: stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%",
-          sub: stats.blendedApy === 0 && projectedApy > 0 ? "Projected" : null,
-          icon: TrendingUp,
-        },
-      ]
+  // Active protocol IDs for highlighting in LiveRates
+  const activeProtocolIds = portfolio
+    ? portfolio.allocations
+        .filter((a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0)
+        .map((a) => a.protocolId)
     : [];
 
   // Error state
@@ -174,73 +144,46 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-display text-xl font-bold text-arctic">
-            Dashboard
-          </h1>
-          <div className="mt-0.5 flex items-center gap-2">
-            <p className="text-[13px] text-slate-500">
-              Monitor your agent and track performance.
-            </p>
-            {smartAccountAddress && (
-              <a
-                href={EXPLORER.address(smartAccountAddress)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 rounded-md bg-glacier/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-glacier/70 hover:bg-glacier/[0.10] transition-colors"
-                title="View smart account on Snowtrace"
-              >
-                {smartAccountAddress.slice(0, 6)}…{smartAccountAddress.slice(-4)}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            )}
-          </div>
-        </div>
-        {stats && (
-          <div className="flex items-center gap-1.5 text-xs text-slate-500">
-            <Clock className="h-3 w-3" />
-            <span>Last rebalance: {stats.lastRebalanceLabel}</span>
-            {stats.activeProtocols > 0 && (
-              <>
-                <span className="text-[#D4CEC7]">·</span>
-                <span>{stats.activeProtocols} active market{stats.activeProtocols !== 1 ? "s" : ""}</span>
-              </>
-            )}
-          </div>
-        )}
+      <div>
+        <h1 className="font-display text-xl font-bold text-arctic">
+          Dashboard
+        </h1>
       </div>
 
-      {/* Static overview metrics */}
+      {/* Overview stats */}
       {isLoading || !stats ? (
         <StatsSkeleton />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {OVERVIEW_CARDS.map((stat, i) => (
-            <motion.div
-              key={stat.label}
-              className="crystal-card p-4"
-              variants={fadeUp}
-              initial="hidden"
-              animate="visible"
-              custom={i}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
-                  {stat.label}
-                </p>
-                <stat.icon className="h-3.5 w-3.5 text-slate-600" />
-              </div>
-              <p className="metric-value mt-2 text-xl">{stat.value}</p>
-              {stat.sub && (
-                <div className="mt-1 flex items-center gap-1">
-                  <TrendingUp className="h-2.5 w-2.5 text-glacier" />
-                  <span className="text-[11px] font-medium text-glacier">{stat.sub}</span>
-                </div>
-              )}
-            </motion.div>
-          ))}
-        </div>
+        <motion.div
+          className="crystal-card p-6"
+          variants={fadeUp}
+          initial="hidden"
+          animate="visible"
+          custom={0}
+        >
+          <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Current value</p>
+          <p className="mt-1 font-display text-3xl font-bold text-[#E84142]">{formatUsd(stats.totalDeposited + stats.totalYield)}</p>
+          <div className="mt-4 grid grid-cols-2 gap-4 border-t border-[#E8E2DA] pt-4 sm:grid-cols-4">
+            <div>
+              <p className="text-[10px] text-[#8A837C]">Net deposited</p>
+              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalDeposited)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-[#8A837C]">Net earned</p>
+              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalYield)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-[#8A837C]">APR</p>
+              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
+                {stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%"}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-[#8A837C]">Active markets</p>
+              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{stats.activeProtocols}</p>
+            </div>
+          </div>
+        </motion.div>
       )}
 
       {/* Tabs */}
@@ -268,69 +211,10 @@ export default function DashboardPage() {
       {/* Tab content */}
       {activeTab === "markets" && (
         <div className="space-y-4">
-          {/* Best Opportunity banner — inspired by ZYF.AI */}
-          {bestRate && (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-center justify-between rounded-xl border border-glacier/20 bg-glacier/[0.04] px-5 py-3"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-glacier/10">
-                  <Sparkles className="h-4 w-4 text-glacier" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-glacier/70">
-                    Best Opportunity
-                  </p>
-                  <p className="text-sm font-medium text-arctic">
-                    {bestRate.name}
-                  </p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="font-mono text-lg font-bold text-glacier">
-                  {formatPct(bestRate.currentApy * 100)}
-                </p>
-                <p className="text-[10px] text-muted-foreground">APY</p>
-              </div>
-            </motion.div>
-          )}
-
-          {/* Allocation chart */}
-          <ErrorBoundary name="allocation-chart">
-            <AllocationChart
-              allocations={portfolio?.allocations ?? []}
-              totalDeposited={portfolio ? Number(portfolio.totalDepositedUsd) : 0}
-            />
-          </ErrorBoundary>
-
           {/* Live protocol rates */}
           <ErrorBoundary name="live-rates">
-            <LiveRates />
+            <LiveRates activeProtocolIds={activeProtocolIds} />
           </ErrorBoundary>
-        </div>
-      )}
-
-      {activeTab === "performance" && (
-        <div className="space-y-4">
-          {/* Rebalance History — only protocol moves */}
-          {(() => {
-            const protocolMoves = (historyData?.logs ?? []).filter(
-              (log) => (log.status === "executed" || log.status === "completed") && log.txHash,
-            );
-            return protocolMoves.length > 0 ? (
-              <RebalanceHistory history={protocolMoves} total={protocolMoves.length} />
-            ) : (
-              <div className="crystal-card flex flex-col items-center justify-center py-12 text-center">
-                <LineChart className="h-8 w-8 text-slate-400" />
-                <p className="mt-3 text-sm font-medium text-arctic">No performance data yet</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Rebalance history will appear here once the agent starts optimizing.
-                </p>
-              </div>
-            );
-          })()}
         </div>
       )}
 

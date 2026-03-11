@@ -28,7 +28,7 @@ const steps = [
     num: "02",
     title: "Optimize",
     description:
-      "Our AI agent monitors lending rates across Avalanche and moves your capital to where it earns the most, within safe boundaries.",
+      "Our agent monitors lending rates across Avalanche and moves your capital to where it earns the most, within safe boundaries.",
     icon: TrendingUp,
   },
   {
@@ -272,7 +272,7 @@ export default function LandingPage() {
             </h1>
 
             <p className="hero-fadein-2 font-sans font-normal text-[15px] md:text-[18px] text-[#5C5550] max-w-[520px] leading-[1.6] mt-5">
-          Your AI agent that finds the best yield on Avalanche. Safely and
+          Your agent that finds the best yield on Avalanche. Safely and
           automatically.
             </p>
 
@@ -305,15 +305,14 @@ export default function LandingPage() {
             style={{ opacity: 0 }}
           />
 
-          {/* Scroll indicator */}
+          {/* Scroll indicator — mouse icon */}
           <div
             ref={scrollIndicatorRef}
-            className="absolute bottom-8 left-0 right-0 z-10 flex flex-col items-center justify-center gap-1 pointer-events-none scroll-indicator"
+            className="absolute bottom-10 left-0 right-0 z-10 flex flex-col items-center justify-center pointer-events-none scroll-indicator"
           >
-            <span className="font-sans text-xs text-[#8A837C] tracking-[0.08em] uppercase">
-              Scroll
-            </span>
-            <ChevronDown className="w-5 h-5 text-[#8A837C]" />
+            <div className="flex h-9 w-6 items-start justify-center rounded-full border-2 border-[#8A837C] pt-1.5">
+              <div className="h-2 w-1 rounded-full bg-[#8A837C] animate-scroll-dot" />
+            </div>
           </div>
         </div>
       </div>

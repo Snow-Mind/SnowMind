@@ -2,11 +2,15 @@
 
 import { Activity, RefreshCw, TrendingUp, Clock, Loader2 } from "lucide-react";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
-import { formatPct, formatTvl } from "@/lib/format";
+import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
 
-export default function LiveRates() {
+interface LiveRatesProps {
+  activeProtocolIds?: string[];
+}
+
+export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
   const { data: rates, isLoading, dataUpdatedAt, isFetching } = useProtocolRates();
   const queryClient = useQueryClient();
 
@@ -32,10 +36,10 @@ export default function LiveRates() {
           </div>
           <div>
             <h2 className="text-sm font-medium text-arctic">
-              Live Protocol Rates
+              Protocol Rates
             </h2>
             <p className="text-xs text-muted-foreground">
-              Real-time APY comparison across protocols.
+              APY comparison across protocols
             </p>
           </div>
         </div>
@@ -69,7 +73,9 @@ export default function LiveRates() {
                 className={`rounded-xl border p-4 transition-colors ${
                   r.isComingSoon
                     ? "border-border/20 bg-void-2/10 opacity-50"
-                    : "border-border/50 bg-void-2/30"
+                    : activeProtocolIds.includes(r.protocolId)
+                      ? "border-[#E84142] bg-[#E84142]/[0.06]"
+                      : "border-border/50 bg-void-2/30"
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -98,63 +104,7 @@ export default function LiveRates() {
                   )}
                 </div>
 
-                {!r.isComingSoon && (
-                  <div className="mt-3 flex items-center gap-4">
-                    {/* TVL */}
-                    <div>
-                      <span className="text-[10px] text-muted-foreground">
-                        TVL
-                      </span>
-                      <p className="font-mono text-xs text-arctic">
-                        {formatTvl(r.tvlUsd)}
-                      </p>
-                    </div>
-                    {/* Risk score badge */}
-                    <div>
-                      <span className="text-[10px] text-muted-foreground">
-                        Risk
-                      </span>
-                      <div className="mt-0.5 flex items-center gap-1.5">
-                        <div className="flex gap-0.5">
-                          {Array.from({ length: 5 }).map((_, di) => (
-                            <div
-                              key={di}
-                              className="h-1.5 w-3 rounded-full"
-                              style={{
-                                backgroundColor:
-                                  di < Math.ceil(r.riskScore / 2)
-                                    ? r.riskScore <= 3
-                                      ? "#00FF88"
-                                      : r.riskScore <= 6
-                                        ? "#F59E0B"
-                                        : "#FF4444"
-                                    : "rgba(255,255,255,0.08)",
-                              }}
-                            />
-                          ))}
-                        </div>
-                        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
-                          r.riskScore <= 3
-                            ? "bg-mint/10 text-mint"
-                            : r.riskScore <= 6
-                              ? "bg-amber/10 text-amber"
-                              : "bg-crimson/10 text-crimson"
-                        }`}>
-                          {r.riskScore <= 3 ? "Low" : r.riskScore <= 6 ? "Medium" : "High"}
-                        </span>
-                      </div>
-                    </div>
-                    {/* Max allocation enforced */}
-                    <div>
-                      <span className="text-[10px] text-muted-foreground">
-                        Max Allocation
-                      </span>
-                      <p className="font-mono text-xs text-arctic">
-                        {((meta?.maxAllocationPct ?? 0.6) * 100).toFixed(0)}%
-                      </p>
-                    </div>
-                  </div>
-                )}
+
               </div>
             );
           })
