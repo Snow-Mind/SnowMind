@@ -35,8 +35,8 @@ class RateValidator:
 
     # Protocol IDs to DefiLlama pool IDs on Avalanche
     DEFILLAMA_POOL_IDS = {
-        "aave_v3": "747c1d2a-c668-4682-b9f9-296571049571",   # Aave v3 Avalanche USDC
-        "benqi":   "cefa9bb8-c230-459a-a855-3b94571bf081",   # Benqi USDC
+        "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",   # Aave v3 Avalanche USDC
+        "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",   # Benqi USDC
     }
 
     def __init__(self):

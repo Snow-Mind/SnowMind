@@ -31,8 +31,8 @@ class ValidationResult:
 # DefiLlama pool-ID mapping — Avalanche pools (Fuji uses the same IDs
 # in production; for testnet we simply skip cross-validation if missing).
 _DEFILLAMA_POOL_MAP: dict[str, str] = {
-    "aave_v3": "747c1d2a-c668-4682-b9f9-296571049571",
-    "benqi":   "cefa9bb8-c230-459a-a855-3b94571bf081",
+    "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",
+    "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",
 }
 
 
