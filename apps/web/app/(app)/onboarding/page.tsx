@@ -12,6 +12,7 @@ import {
   Zap,
   Shield,
   ArrowRight,
+  LayoutGrid,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -30,7 +31,9 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
 import { api } from "@/lib/api-client";
-import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL } from "@/lib/constants";
+import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG } from "@/lib/constants";
+import { useProtocolRates } from "@/hooks/useProtocolRates";
+import Image from "next/image";
 import { createSmartAccount, grantAndSerializeSessionKey, BENQI_ABI } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 
@@ -86,8 +89,11 @@ const PHASE_LABELS: Record<ActivationPhase, string> = {
   error: "Activation failed",
 };
 
-// Multi-step form: 1) Account  2) Deposit  3) Activate
-type FormStep = "account" | "deposit" | "activate";
+// Multi-step form: 1) Account  2) Strategy  3) Deposit  4) Activate
+type FormStep = "account" | "strategy" | "deposit" | "activate";
+
+// All protocols available for user selection
+const ALL_PROTOCOLS = Object.values(PROTOCOL_CONFIG);
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -102,14 +108,35 @@ export default function OnboardingPage() {
 
   // Multi-step form state
   const isAccountReady = smartAccount.setupStep === "ready" && !!smartAccountAddress;
-  const [formStep, setFormStep] = useState<FormStep>(isAccountReady ? "deposit" : "account");
+  const [formStep, setFormStep] = useState<FormStep>(isAccountReady ? "strategy" : "account");
 
   // Keep formStep in sync with account readiness
   useEffect(() => {
     if (isAccountReady && formStep === "account") {
-      setFormStep("deposit");
+      setFormStep("strategy");
     }
   }, [isAccountReady, formStep]);
+
+  // Protocol selection for Strategy step — all selected by default
+  const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
+    () => new Set(ALL_PROTOCOLS.map((p) => p.id)),
+  );
+
+  const toggleProtocol = (id: string) => {
+    setSelectedProtocols((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        if (next.size <= 1) return prev; // Must keep at least 1
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Get live protocol rates for APY display
+  const { data: protocolRates } = useProtocolRates();
 
   const [copied, setCopied] = useState(false);
   const [eoaBalance, setEoaBalance] = useState("0");
@@ -124,6 +151,17 @@ export default function OnboardingPage() {
   const parsedAmount = parseFloat(depositAmount);
   const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
   const hasWalletFunds = eoaBalanceNum >= 1;
+
+  // Best APY from selected protocols (for now, show Benqi APY as highest)
+  const bestApy = (() => {
+    if (!protocolRates) return 0;
+    const selected = protocolRates.filter((r) => selectedProtocols.has(r.protocolId));
+    const best = selected.reduce((max, r) => (r.currentApy > max ? r.currentApy : max), 0);
+    return best * 100; // convert to percentage
+  })();
+
+  const selectedCount = selectedProtocols.size;
+  const yearlyEarning = !isNaN(parsedAmount) && parsedAmount > 0 ? parsedAmount * (bestApy / 100) : 0;
 
   // Poll USDC balance of user's EOA wallet
   useEffect(() => {
@@ -304,6 +342,7 @@ export default function OnboardingPage() {
   // Step config for the progress bar
   const steps: { id: FormStep; label: string }[] = [
     { id: "account", label: "Account" },
+    { id: "strategy", label: "Strategy" },
     { id: "deposit", label: "Deposit" },
     { id: "activate", label: "Activate" },
   ];
@@ -461,7 +500,7 @@ export default function OnboardingPage() {
                   </div>
 
                   <button
-                    onClick={() => setFormStep("deposit")}
+                    onClick={() => setFormStep("strategy")}
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031]"
                   >
                     Continue
@@ -472,7 +511,107 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
-          {/* ─── Step 2: Deposit ─── */}
+          {/* ─── Step 2: Strategy ─── */}
+          {formStep === "strategy" && !activated && (
+            <motion.div
+              key="step-strategy"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="rounded-xl border border-[#E8E2DA] bg-white p-6 space-y-5"
+            >
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#E84142]/10">
+                  <LayoutGrid className="h-3.5 w-3.5 text-[#E84142]" />
+                </div>
+                <span className="text-sm font-medium text-[#1A1715]">
+                  Choose Markets
+                </span>
+              </div>
+
+              <p className="text-xs text-[#8A837C]">
+                Select which lending protocols your agent can allocate funds to.
+                All markets are selected by default for maximum yield.
+              </p>
+
+              {/* APY summary */}
+              {bestApy > 0 && (
+                <div className="rounded-lg bg-[#F5F0EB] p-3 flex items-center justify-between">
+                  <span className="text-xs text-[#8A837C]">Best available APY</span>
+                  <span className="font-mono text-sm font-bold text-[#059669]">{bestApy.toFixed(2)}%</span>
+                </div>
+              )}
+
+              {/* Protocol list */}
+              <div className="space-y-2">
+                {ALL_PROTOCOLS.map((protocol) => {
+                  const isSelected = selectedProtocols.has(protocol.id);
+                  return (
+                    <button
+                      key={protocol.id}
+                      onClick={() => toggleProtocol(protocol.id)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-all",
+                        isSelected
+                          ? "border-[#E84142]/30 bg-[#E84142]/[0.03]"
+                          : "border-[#E8E2DA] bg-white opacity-60",
+                      )}
+                    >
+                      <Image
+                        src={protocol.logoPath}
+                        alt={protocol.name}
+                        width={32}
+                        height={32}
+                        className="rounded-full"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-[#1A1715]">{protocol.name}</p>
+                        <p className="text-[10px] text-[#8A837C] truncate">{protocol.shortName}</p>
+                      </div>
+                      {protocol.isComingSoon && (
+                        <span className="rounded-full bg-[#F59E0B]/10 px-2 py-0.5 text-[9px] font-medium text-[#F59E0B]">
+                          Soon
+                        </span>
+                      )}
+                      {/* Toggle indicator */}
+                      <div
+                        className={cn(
+                          "flex h-5 w-9 items-center rounded-full p-0.5 transition-colors",
+                          isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                            isSelected ? "translate-x-4" : "translate-x-0",
+                          )}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setFormStep("account")}
+                  className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => setFormStep("deposit")}
+                  disabled={selectedCount === 0}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+                >
+                  Continue
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ─── Step 3: Deposit ─── */}
           {formStep === "deposit" && !activated && (
             <motion.div
               key="step-deposit"
@@ -529,7 +668,7 @@ export default function OnboardingPage() {
 
               <div className="flex gap-3">
                 <button
-                  onClick={() => setFormStep("account")}
+                  onClick={() => setFormStep("strategy")}
                   className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
                 >
                   Back
@@ -546,7 +685,7 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
-          {/* ─── Step 3: Activate ─── */}
+          {/* ─── Step 4: Activate ─── */}
           {formStep === "activate" && !activated && (
             <motion.div
               key="step-activate"
@@ -635,22 +774,24 @@ export default function OnboardingPage() {
                     </span>
                   </div>
 
-                  <div className="space-y-2 rounded-lg bg-[#F5F0EB] p-4">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[#8A837C]">Deposit</span>
-                      <span className="font-mono font-medium text-[#1A1715]">${parsedAmount.toFixed(2)} USDC</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[#8A837C]">Smart account</span>
-                      <span className="font-mono text-[#5C5550]">{smartAccountAddress?.slice(0, 6)}…{smartAccountAddress?.slice(-4)}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[#8A837C]">Strategy</span>
-                      <span className="text-[#1A1715]">Auto (AI-optimized)</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[#8A837C]">Gas fees</span>
-                      <span className="text-[#059669]">Covered by SnowMind</span>
+                  <div className="rounded-lg bg-[#F5F0EB] p-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-[10px] text-[#8A837C]">Deposit</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">${parsedAmount.toFixed(2)} USDC</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8A837C]">APY</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">{bestApy.toFixed(2)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8A837C]">You&apos;ll earn /per year</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-[#059669]">${yearlyEarning.toFixed(2)} USDC</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8A837C]">Markets</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">{selectedCount} {selectedCount === 1 ? 'market' : 'markets'}</p>
+                      </div>
                     </div>
                   </div>
 

@@ -94,8 +94,8 @@ export const PROTOCOL_CONFIG = {
     contractAddress: CONTRACTS.EULER_VAULT,
     usdcAddress: CONTRACTS.USDC,
     riskScore: 5.0,   // From document: Euler V2 = 5 (newer, add with caution)
-    color: '#F59E0B', // amber
-    bgColor: 'rgba(245, 158, 11, 0.12)',
+    color: '#4A6CF6', // euler blue
+    bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler.svg',
     isActive: false,  // Not in optimizer yet
     isComingSoon: true,
@@ -104,6 +104,24 @@ export const PROTOCOL_CONFIG = {
     description: 'Next-gen modular lending (ERC-4626). Live on Ethereum, coming to Avalanche.',
     auditBadge: 'Audited (Ethereum)',
     explorerUrl: EXPLORER.address(CONTRACTS.EULER_VAULT),
+  },
+  spark: {
+    id: 'spark' as const,
+    name: 'Spark',
+    shortName: 'Spark',
+    contractAddress: '0x0000000000000000000000000000000000000000' as `0x${string}`, // placeholder
+    usdcAddress: CONTRACTS.USDC,
+    riskScore: 3.0,
+    color: '#F77725', // spark orange
+    bgColor: 'rgba(247, 119, 37, 0.12)',
+    logoPath: '/protocols/spark.svg',
+    isActive: false,
+    isComingSoon: true,
+    minAllocation: 500,
+    maxAllocationPct: 0.60,
+    description: 'MakerDAO-backed lending protocol with competitive rates.',
+    auditBadge: 'Audited',
+    explorerUrl: '',
   },
 } as const
 
@@ -135,5 +153,9 @@ export const SESSION_KEY_SELECTORS = {
   euler_v2: {
     deposit: '0x6e553f65',  // deposit(uint256,address)  — ERC-4626
     redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+  },
+  spark: {
+    supply:   '0x00000000',  // placeholder — coming soon
+    withdraw: '0x00000000',  // placeholder — coming soon
   },
 } as const
