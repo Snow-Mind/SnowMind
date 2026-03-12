@@ -99,7 +99,6 @@ export const PROTOCOL_CONFIG = {
     color: '#4A6CF6', // Euler brand blue
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-brand.svg',
-    logoPath: '/protocols/euler.svg',
     isActive: false,  // Not in optimizer yet
     isComingSoon: true,
     minAllocation: 500,
