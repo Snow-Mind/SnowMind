@@ -12,6 +12,7 @@ import {
 import { motion } from "framer-motion";
 import LiveRates from "@/components/dashboard/LiveRates";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
+import PortfolioChart from "@/components/dashboard/PortfolioChart";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -214,6 +215,11 @@ export default function DashboardPage() {
           {/* Live protocol rates */}
           <ErrorBoundary name="live-rates">
             <LiveRates activeProtocolIds={activeProtocolIds} />
+          </ErrorBoundary>
+          
+          {/* Portfolio allocation pie chart */}
+          <ErrorBoundary name="portfolio-chart">
+            <PortfolioChart portfolio={portfolio ?? null} />
           </ErrorBoundary>
         </div>
       )}

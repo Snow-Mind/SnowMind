@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { ArrowUpRight, History, AlertCircle, RefreshCw, Layers } from "lucide-react";
 import { motion } from "framer-motion";
 import {
@@ -17,6 +18,7 @@ import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
+import AllocationChart from "@/components/dashboard/AllocationChart";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
 
 function derivePositions(allocations: ProtocolAllocation[]) {
@@ -33,6 +35,7 @@ function derivePositions(allocations: ProtocolAllocation[]) {
       apy: a.currentApy * 100,
       allocation: a.allocationPct * 100,
       color: meta?.color ?? "#8899AA",
+      logoPath: meta?.logoPath ?? null,
     };
   });
 }
@@ -207,11 +210,12 @@ export default function PortfolioPage() {
         ))}
       </div>
 
-      {/* Positions table */}
-      <div className="crystal-card overflow-hidden">
-        <div className="border-b border-border/30 px-6 py-4">
-          <h2 className="text-sm font-medium text-arctic">Positions</h2>
-        </div>
+      {/* Positions table + Allocation pie chart */}
+      <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
+        <div className="crystal-card overflow-hidden">
+          <div className="border-b border-border/30 px-6 py-4">
+            <h2 className="text-sm font-medium text-arctic">Positions</h2>
+          </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -240,10 +244,20 @@ export default function PortfolioPage() {
                 >
                   <td className="whitespace-nowrap px-6 py-4">
                     <div className="flex items-center gap-2">
-                      <span
-                        className="inline-block h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: pos.color }}
-                      />
+                      {pos.logoPath ? (
+                        <Image
+                          src={pos.logoPath}
+                          alt={pos.protocol}
+                          width={20}
+                          height={20}
+                          className="rounded-full"
+                        />
+                      ) : (
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: pos.color }}
+                        />
+                      )}
                       <span className="text-sm font-medium text-arctic">
                         {pos.protocol}
                       </span>
@@ -291,6 +305,12 @@ export default function PortfolioPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+        {/* Allocation pie chart */}
+        <div className="min-w-[320px]">
+          <AllocationChart allocations={allocations} totalDeposited={totalDeposited} />
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   ExternalLink,
   Shield,
@@ -159,10 +160,19 @@ export default function FundTransparency({
                   className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-[#F5F0EB]/50 px-3 py-2.5"
                 >
                   <div className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: cfg?.color ?? "#8899AA" }}
-                    />
+                    {cfg ? (
+                      <Image
+                        src={cfg.logoPath}
+                        alt={cfg.name}
+                        width={18}
+                        height={18}
+                        className="rounded-full"
+                      />
+                    ) : (
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full bg-[#8899AA]"
+                      />
+                    )}
                     <span className="text-xs font-medium text-[#1A1715]">
                       {alloc.name}
                     </span>
@@ -244,9 +254,12 @@ export default function FundTransparency({
               className="flex items-center justify-between py-2"
             >
               <div className="flex items-center gap-2">
-                <span
-                  className="inline-block h-2 w-2 rounded-full"
-                  style={{ backgroundColor: cfg.color }}
+                <Image
+                  src={cfg.logoPath}
+                  alt={cfg.name}
+                  width={16}
+                  height={16}
+                  className="rounded-full"
                 />
                 <span className="text-xs text-[#5C5550]">{cfg.name}</span>
                 <span className="rounded border border-[#E8E2DA] px-1 py-0.5 text-[9px] text-[#8A837C]">

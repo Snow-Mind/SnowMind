@@ -58,9 +58,9 @@ export const PROTOCOL_CONFIG = {
     contractAddress: CONTRACTS.AAVE_POOL,
     usdcAddress: CONTRACTS.USDC,
     riskScore: 2.0,   // From document: Aave = 2 (safest)
-    color: '#7C3AED', // frost purple
-    bgColor: 'rgba(124, 58, 237, 0.12)',
-    logoPath: '/protocols/aave.svg',
+    color: '#8381D9', // Aave brand purple
+    bgColor: 'rgba(131, 129, 217, 0.12)',
+    logoPath: '/protocols/aave-brand.svg',
     isActive: true,
     isComingSoon: false,
     minAllocation: 500,        // $500 minimum position
@@ -77,9 +77,9 @@ export const PROTOCOL_CONFIG = {
     contractAddress: CONTRACTS.BENQI_POOL,
     usdcAddress: CONTRACTS.USDC,
     riskScore: 3.0,   // From document: Benqi = 3
-    color: '#00C4FF', // glacier blue
+    color: '#00C4FF', // Benqi brand cyan
     bgColor: 'rgba(0, 196, 255, 0.12)',
-    logoPath: '/protocols/benqi.svg',
+    logoPath: '/protocols/benqi-brand.svg',
     isActive: true,
     isComingSoon: false,
     minAllocation: 500,
@@ -96,8 +96,9 @@ export const PROTOCOL_CONFIG = {
     contractAddress: CONTRACTS.EULER_VAULT,
     usdcAddress: CONTRACTS.USDC,
     riskScore: 5.0,   // From document: Euler V2 = 5 (newer, add with caution)
-    color: '#4A6CF6', // euler blue
+    color: '#4A6CF6', // Euler brand blue
     bgColor: 'rgba(74, 108, 246, 0.12)',
+    logoPath: '/protocols/euler-brand.svg',
     logoPath: '/protocols/euler.svg',
     isActive: false,  // Not in optimizer yet
     isComingSoon: true,
@@ -115,9 +116,9 @@ export const PROTOCOL_CONFIG = {
     contractAddress: '0x0000000000000000000000000000000000000000' as `0x${string}`, // placeholder
     usdcAddress: CONTRACTS.USDC,
     riskScore: 3.0,
-    color: '#F77725', // spark orange
-    bgColor: 'rgba(247, 119, 37, 0.12)',
-    logoPath: '/protocols/spark.svg',
+    color: '#FFB347', // Spark brand orange
+    bgColor: 'rgba(255, 179, 71, 0.12)',
+    logoPath: '/protocols/spark-brand.svg',
     isActive: false,
     isComingSoon: true,
     minAllocation: 500,

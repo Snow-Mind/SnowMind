@@ -10,7 +10,11 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 let supabase: SupabaseClient | null = null
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    realtime: {
+      params: { eventsPerSecond: 2 },
+    },
+  })
 }
 
 /**
@@ -18,7 +22,8 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
  * Uses Supabase Realtime Postgres Changes with an account-scoped filter
  * so only events for this user's account trigger refetches.
  *
- * @param smartAccountAddress - the smart account address (used as React Query key)
+ * Gracefully handles WebSocket connection failures (e.g. missing env vars,
+ * network issues) instead of throwing uncaught errors.
  */
 export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
   const qc = useQueryClient()
@@ -62,7 +67,12 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
         // Allocation changed — refresh portfolio
         qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
       })
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn("[SnowMind] Supabase Realtime subscription failed:", status, err?.message ?? "")
+          // Silently degrade — the dashboard still works via polling / React Query refetch
+        }
+      })
 
     channelRef.current = channel
 

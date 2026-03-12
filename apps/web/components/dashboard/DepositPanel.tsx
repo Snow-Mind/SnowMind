@@ -88,8 +88,20 @@ export default function DepositPanel() {
           method: "wallet_switchEthereumChain",
           params: [{ chainId: "0xA869" }],
         });
-      } catch {
-        // Chain may already be selected
+      } catch (switchErr: unknown) {
+        const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
+        if (code === 4902 || code === -32603) {
+          await provider.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId: "0xA869",
+              chainName: "Avalanche Fuji Testnet",
+              nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
+              rpcUrls: ["https://api.avax-test.network/ext/bc/C/rpc"],
+              blockExplorerUrls: ["https://testnet.snowtrace.io"],
+            }],
+          });
+        }
       }
 
       const walletClient = createWalletClient({

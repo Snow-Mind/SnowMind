@@ -18,6 +18,7 @@ import {
   Lock,
 } from "lucide-react";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
+import { ChainGuard } from "@/components/ChainGuard";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -272,11 +273,13 @@ export default function AppLayout({
         />
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
           {/* Pass deposit/withdraw modal state to children via data attributes */}
-          <div
-            data-show-deposit={showDeposit ? "true" : "false"}
-          >
-            {children}
-          </div>
+          <ChainGuard>
+            <div
+              data-show-deposit={showDeposit ? "true" : "false"}
+            >
+              {children}
+            </div>
+          </ChainGuard>
         </main>
       </div>
 

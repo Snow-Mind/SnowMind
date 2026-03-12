@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { Activity, RefreshCw, TrendingUp, Clock, Loader2 } from "lucide-react";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
@@ -80,9 +81,12 @@ export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-3 w-3 rounded-full"
-                      style={{ backgroundColor: meta.color }}
+                    <Image
+                      src={meta.logoPath}
+                      alt={meta.name}
+                      width={24}
+                      height={24}
+                      className="rounded-full"
                     />
                     <span className="text-sm font-medium text-arctic">
                       {r.name}

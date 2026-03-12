@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   PieChart,
   Pie,
@@ -33,6 +34,7 @@ export default function AllocationChart({
       apy: a.currentApy * 100,
       color: meta?.color ?? "#8899AA",
       riskScore: meta?.riskScore ?? 0,
+      logoPath: !isIdle && 'logoPath' in (meta ?? {}) ? (meta as typeof PROTOCOL_CONFIG[keyof typeof PROTOCOL_CONFIG]).logoPath : null,
     };
   });
 
@@ -107,10 +109,20 @@ export default function AllocationChart({
               {data.map((d) => (
                 <div key={d.name} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span
-                      className="inline-block h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: d.color }}
-                    />
+                    {d.logoPath ? (
+                      <Image
+                        src={d.logoPath}
+                        alt={d.name}
+                        width={18}
+                        height={18}
+                        className="rounded-full"
+                      />
+                    ) : (
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: d.color }}
+                      />
+                    )}
                     <span className="text-sm text-arctic">{d.name}</span>
                   </div>
                   <div className="flex items-center gap-4">
