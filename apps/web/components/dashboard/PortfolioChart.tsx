@@ -7,9 +7,10 @@ import { formatUsd } from "@/lib/format";
 
 interface PortfolioChartProps {
   portfolio: Portfolio | null;
+  compact?: boolean;
 }
 
-export default function PortfolioChart({ portfolio }: PortfolioChartProps) {
+export default function PortfolioChart({ portfolio, compact = false }: PortfolioChartProps) {
   if (!portfolio || portfolio.allocations.length === 0) {
     return null;
   }
@@ -33,10 +34,44 @@ export default function PortfolioChart({ portfolio }: PortfolioChartProps) {
 
   const totalAllocated = chartData.reduce((sum, item) => sum + item.value, 0);
 
+  if (compact) {
+    return (
+      <div className="h-[180px] w-[220px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={chartData}
+              cx="50%"
+              cy="50%"
+              innerRadius={44}
+              outerRadius={70}
+              paddingAngle={2}
+              labelLine={false}
+              dataKey="value"
+            >
+              {chartData.map((entry, index) => (
+                <Cell key={`compact-cell-${index}`} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip
+              formatter={(value?: number) => value ? formatUsd(value) : "—"}
+              contentStyle={{
+                backgroundColor: "#050A14",
+                border: "1px solid #E8E2DA",
+                borderRadius: "8px",
+                color: "#E8F4FF",
+              }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
   return (
     <div className="crystal-card p-6">
-      <h3 className="text-sm font-semibold text-arctic mb-4">Portfolio Allocation</h3>
-      <div className="w-full h-64">
+      <h3 className="mb-4 text-sm font-semibold text-arctic">Portfolio Allocation</h3>
+      <div className="h-64 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie

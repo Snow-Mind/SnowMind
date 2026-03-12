@@ -60,7 +60,7 @@ export const PROTOCOL_CONFIG = {
     riskScore: 2.0,   // From document: Aave = 2 (safest)
     color: '#8381D9', // Aave brand purple
     bgColor: 'rgba(131, 129, 217, 0.12)',
-    logoPath: '/protocols/aave-brand.svg',
+    logoPath: '/protocols/aave-official.svg',
     isActive: true,
     isComingSoon: false,
     minAllocation: 500,        // $500 minimum position
@@ -79,7 +79,7 @@ export const PROTOCOL_CONFIG = {
     riskScore: 3.0,   // From document: Benqi = 3
     color: '#00C4FF', // Benqi brand cyan
     bgColor: 'rgba(0, 196, 255, 0.12)',
-    logoPath: '/protocols/benqi-brand.svg',
+    logoPath: '/protocols/benqi-official.png',
     isActive: true,
     isComingSoon: false,
     minAllocation: 500,
@@ -98,7 +98,7 @@ export const PROTOCOL_CONFIG = {
     riskScore: 5.0,   // From document: Euler V2 = 5 (newer, add with caution)
     color: '#4A6CF6', // Euler brand blue
     bgColor: 'rgba(74, 108, 246, 0.12)',
-    logoPath: '/protocols/euler-brand.svg',
+    logoPath: '/protocols/euler-official.svg',
     isActive: false,  // Not in optimizer yet
     isComingSoon: true,
     minAllocation: 500,
@@ -117,7 +117,7 @@ export const PROTOCOL_CONFIG = {
     riskScore: 3.0,
     color: '#FFB347', // Spark brand orange
     bgColor: 'rgba(255, 179, 71, 0.12)',
-    logoPath: '/protocols/spark-brand.svg',
+    logoPath: '/protocols/spark-official.svg',
     isActive: false,
     isComingSoon: true,
     minAllocation: 500,

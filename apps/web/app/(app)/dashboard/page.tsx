@@ -162,26 +162,33 @@ export default function DashboardPage() {
           animate="visible"
           custom={0}
         >
-          <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Current value</p>
-          <p className="mt-1 font-display text-3xl font-bold text-[#E84142]">{formatUsd(stats.totalDeposited + stats.totalYield)}</p>
-          <div className="mt-4 grid grid-cols-2 gap-4 border-t border-[#E8E2DA] pt-4 sm:grid-cols-4">
-            <div>
-              <p className="text-[10px] text-[#8A837C]">Net deposited</p>
-              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalDeposited)}</p>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Current value</p>
+              <p className="mt-1 font-display text-3xl font-bold text-[#E84142]">{formatUsd(stats.totalDeposited + stats.totalYield)}</p>
+              <div className="mt-4 grid grid-cols-2 gap-4 border-t border-[#E8E2DA] pt-4 sm:grid-cols-4">
+                <div>
+                  <p className="text-[10px] text-[#8A837C]">Net deposited</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalDeposited)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-[#8A837C]">Net earned</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalYield)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-[#8A837C]">APR</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
+                    {stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-[#8A837C]">Active markets</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{stats.activeProtocols}</p>
+                </div>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] text-[#8A837C]">Net earned</p>
-              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalYield)}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-[#8A837C]">APR</p>
-              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
-                {stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%"}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] text-[#8A837C]">Active markets</p>
-              <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{stats.activeProtocols}</p>
+            <div className="mx-auto lg:mx-0">
+              <PortfolioChart portfolio={portfolio ?? null} compact />
             </div>
           </div>
         </motion.div>
@@ -215,11 +222,6 @@ export default function DashboardPage() {
           {/* Live protocol rates */}
           <ErrorBoundary name="live-rates">
             <LiveRates activeProtocolIds={activeProtocolIds} />
-          </ErrorBoundary>
-          
-          {/* Portfolio allocation pie chart */}
-          <ErrorBoundary name="portfolio-chart">
-            <PortfolioChart portfolio={portfolio ?? null} />
           </ErrorBoundary>
         </div>
       )}

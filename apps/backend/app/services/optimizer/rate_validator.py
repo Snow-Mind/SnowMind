@@ -8,6 +8,7 @@ from decimal import Decimal
 from collections import defaultdict, deque
 from dataclasses import dataclass
 import logging
+from app.core.config import get_settings
 
 logger = logging.getLogger("snowmind")
 
@@ -40,6 +41,7 @@ class RateValidator:
     }
 
     def __init__(self):
+        self._settings = get_settings()
         self._readings: dict[str, deque[RateReading]] = defaultdict(
             lambda: deque(maxlen=50)
         )
@@ -153,6 +155,16 @@ class RateValidator:
 
         divergence = abs(on_chain_apy - defillama_apy) / defillama_apy
         if divergence > self.DEFILLAMA_DIVERGENCE_THRESHOLD:
+            if self._settings.IS_TESTNET:
+                logger.warning(
+                    "DefiLlama divergence on %s in testnet: on-chain=%.2f%% DefiLlama=%.2f%% "
+                    "divergence=%.1f%% — continuing (testnet mode)",
+                    protocol_id,
+                    float(on_chain_apy * 100),
+                    float(defillama_apy * 100),
+                    float(divergence * 100),
+                )
+                return True
             logger.error(
                 "DefiLlama divergence on %s: on-chain=%.2f%% DefiLlama=%.2f%% "
                 "divergence=%.1f%% — HALTING",
