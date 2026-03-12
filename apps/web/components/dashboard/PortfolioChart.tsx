@@ -33,11 +33,16 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
   }
 
   const totalAllocated = chartData.reduce((sum, item) => sum + item.value, 0);
+  const topAllocation = [...chartData].sort((a, b) => b.value - a.value)[0];
+  const topAllocationPct = topAllocation
+    ? ((topAllocation.value / totalAllocated) * 100).toFixed(1)
+    : "0.0";
 
   if (compact) {
     return (
-      <div className="h-[180px] w-[220px]">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="w-[220px]">
+        <div className="h-[180px]">
+          <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
               data={chartData}
@@ -61,9 +66,17 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
                 borderRadius: "8px",
                 color: "#E8F4FF",
               }}
+              itemStyle={{ color: "#E8F4FF" }}
+              labelStyle={{ color: "#E8F4FF" }}
             />
           </PieChart>
-        </ResponsiveContainer>
+          </ResponsiveContainer>
+        </div>
+        <div className="-mt-2 text-center">
+          <p className="text-[11px] font-medium text-[#5C5550]">
+            {topAllocation?.name} {topAllocationPct}%
+          </p>
+        </div>
       </div>
     );
   }
@@ -96,6 +109,8 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
                 borderRadius: "8px",
                 color: "#E8F4FF",
               }}
+              itemStyle={{ color: "#E8F4FF" }}
+              labelStyle={{ color: "#E8F4FF" }}
             />
           </PieChart>
         </ResponsiveContainer>
