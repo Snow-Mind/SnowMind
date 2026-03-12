@@ -77,9 +77,9 @@ export const PROTOCOL_CONFIG = {
     contractAddress: CONTRACTS.BENQI_POOL,
     usdcAddress: CONTRACTS.USDC,
     riskScore: 3.0,   // From document: Benqi = 3
-    color: '#00C4FF', // Benqi brand cyan
-    bgColor: 'rgba(0, 196, 255, 0.12)',
-    logoPath: '/protocols/benqi-official.png',
+    color: '#2A72FF', // Benqi brand blue (higher contrast for charts)
+    bgColor: 'rgba(42, 114, 255, 0.12)',
+    logoPath: '/protocols/benqi-official.svg',
     isActive: true,
     isComingSoon: false,
     minAllocation: 500,
