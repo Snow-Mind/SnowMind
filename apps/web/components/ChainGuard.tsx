@@ -1,27 +1,45 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useAccount, useSwitchChain } from "wagmi";
+import { useWallets } from "@privy-io/react-auth";
 import { AlertCircle } from "lucide-react";
-import { CHAIN, CHAIN_ID } from "@/lib/constants";
+import { CHAIN_ID } from "@/lib/constants";
 
 interface ChainGuardProps {
   children: React.ReactNode;
 }
 
 export function ChainGuard({ children }: ChainGuardProps) {
-  const { chainId, isConnected } = useAccount();
-  const { switchChain, isPending } = useSwitchChain();
+  const { wallets } = useWallets();
   const [showAlert, setShowAlert] = useState(false);
+  const [isSwitching, setIsSwitching] = useState(false);
+
+  const activeWallet =
+    wallets.find((w) => w.walletClientType !== "privy") ??
+    wallets.find((w) => w.walletClientType === "privy") ??
+    wallets[0] ??
+    null;
 
   useEffect(() => {
-    // Only show alert if wallet is connected and on wrong chain
-    if (isConnected && chainId && chainId !== CHAIN_ID) {
-      setShowAlert(true);
-    } else {
+    if (!activeWallet) {
       setShowAlert(false);
+      return;
     }
-  }, [isConnected, chainId]);
+    const walletChainId = parseInt(activeWallet.chainId.replace("eip155:", ""), 10);
+    setShowAlert(walletChainId !== CHAIN_ID);
+  }, [activeWallet, activeWallet?.chainId]);
+
+  const handleSwitch = async () => {
+    if (!activeWallet) return;
+    setIsSwitching(true);
+    try {
+      await activeWallet.switchChain(CHAIN_ID);
+    } catch {
+      // user rejected or chain not added — silently ignore
+    } finally {
+      setIsSwitching(false);
+    }
+  };
 
   if (!showAlert) {
     return <>{children}</>;
@@ -35,22 +53,21 @@ export function ChainGuard({ children }: ChainGuardProps) {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-[#1A1715]">Wrong Network</p>
           <p className="text-xs text-[#8A837C] mt-1">
-            Your wallet is connected to the wrong network. Please switch to Avalanche Fuji testnet.
+            Your wallet is connected to the wrong network. Please switch to
+            Avalanche Fuji testnet.
           </p>
           <button
-            onClick={() => switchChain({ chainId: CHAIN_ID })}
-            disabled={isPending}
+            onClick={handleSwitch}
+            disabled={isSwitching}
             className="mt-3 bg-[#E84142] text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-[#D63031] disabled:opacity-50 transition-colors"
           >
-            {isPending ? "Switching..." : "Switch to Avalanche Fuji"}
+            {isSwitching ? "Switching..." : "Switch to Avalanche Fuji"}
           </button>
         </div>
       </div>
-      
+
       {/* Dimmed content */}
-      <div className="opacity-50 pointer-events-none">
-        {children}
-      </div>
+      <div className="opacity-50 pointer-events-none">{children}</div>
     </div>
   );
 }
