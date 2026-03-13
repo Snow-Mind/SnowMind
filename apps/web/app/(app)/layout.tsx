@@ -180,21 +180,25 @@ export default function AppLayout({
 
   // Agent is "active" when it has an active session key (backend can auto-rebalance)
   // OR the store flag is set (immediate after activation, before query refetch)
-  // OR funds are already deployed to protocols
+  // OR funds exist (deployed to protocols OR idle USDC waiting for optimizer)
   const hasProtocolAllocations = portfolio?.allocations?.some(
     (a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0,
   ) ?? false;
+  const hasFunds = portfolio?.allocations?.some(
+    (a) => Number(a.amountUsdc) > 0,
+  ) ?? false;
   const hasActiveSessionKey = sessionKey?.isActive ?? false;
 
-  // Clear stale storeActivated flag when real data proves no activation
+  // Clear stale storeActivated flag ONLY when real data proves no activation
+  // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
   const dataLoaded = !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
   useEffect(() => {
-    if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasProtocolAllocations) {
+    if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasFunds) {
       setAgentActivated(false);
     }
-  }, [dataLoaded, storeActivated, hasActiveSessionKey, hasProtocolAllocations, setAgentActivated]);
+  }, [dataLoaded, storeActivated, hasActiveSessionKey, hasFunds, setAgentActivated]);
 
-  const isAgentActive = storeActivated || hasActiveSessionKey || hasProtocolAllocations;
+  const isAgentActive = storeActivated || hasActiveSessionKey || hasFunds;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
