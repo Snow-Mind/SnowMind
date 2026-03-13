@@ -5,6 +5,7 @@ import "forge-std/Script.sol";
 import "../src/SnowMindRegistry.sol";
 import "../src/MockBenqiPool.sol";
 import "../src/MockEulerVault.sol";
+import "../src/MockSparkVault.sol";
 
 contract DeployScript is Script {
     function run() external {
@@ -19,8 +20,11 @@ contract DeployScript is Script {
         // Deploy MockBenqiPool (Fuji testnet only)
         MockBenqiPool benqi = new MockBenqiPool(usdcFuji);
 
-        // Deploy MockEulerVault (Fuji testnet only, shown as Coming Soon)
+        // Deploy MockEulerVault (Fuji testnet only)
         MockEulerVault euler = new MockEulerVault(usdcFuji);
+
+        // Deploy MockSparkVault (Fuji testnet only)
+        MockSparkVault spark = new MockSparkVault(usdcFuji);
 
         vm.stopBroadcast();
 
@@ -29,6 +33,7 @@ contract DeployScript is Script {
         console.log("REGISTRY_CONTRACT_ADDRESS=", address(registry));
         console.log("BENQI_POOL_FUJI=", address(benqi));
         console.log("EULER_VAULT_FUJI=", address(euler));
+        console.log("SPARK_VAULT_FUJI=", address(spark));
         console.log("AAVE_V3_POOL_FUJI=0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29");
         console.log("USDC_FUJI=0x5425890298aed601595a70AB815c96711a31Bc65");
         console.log("");
@@ -36,5 +41,6 @@ contract DeployScript is Script {
         console.log("Registry: https://testnet.snowtrace.io/address/", address(registry));
         console.log("MockBenqi: https://testnet.snowtrace.io/address/", address(benqi));
         console.log("MockEuler: https://testnet.snowtrace.io/address/", address(euler));
+        console.log("MockSpark: https://testnet.snowtrace.io/address/", address(spark));
     }
 }

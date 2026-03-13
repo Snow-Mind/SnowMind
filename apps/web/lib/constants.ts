@@ -30,7 +30,7 @@ export const CONTRACTS = {
   // MockEuler vault on Fuji
   EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x372193056e6c57040548ce833ee406509a457632') as `0x${string}`,
   // MockSpark vault on Fuji (ERC-4626, same interface as Euler mock)
-  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0x0000000000000000000000000000000000000000') as `0x${string}`,
+  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0xEb0841215dE4ea652c26C0b146E1DE2610844Ff0') as `0x${string}`,
 
   // Test tokens
   USDC:        '0x5425890298aed601595a70AB815c96711a31Bc65' as `0x${string}`,
