@@ -434,6 +434,7 @@ class Rebalancer:
                     "serializedSessionKey" in err_msg
                     or "No signer" in err_msg
                     or "Session key/account mismatch" in err_msg
+                    or "validateUserOp" in err_msg
                 ):
                     logger.warning(
                         "Invalid session key for %s — revoking",
