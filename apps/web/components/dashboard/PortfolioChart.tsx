@@ -49,8 +49,8 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
   if (compact) {
     return (
       <div className="w-[220px]">
-        <div className="h-[180px]">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-[180px] min-h-[180px]">
+          <ResponsiveContainer width={220} height={180} minWidth={220} minHeight={180}>
           <PieChart>
             <Pie
               data={chartData}
@@ -92,8 +92,8 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
   return (
     <div className="crystal-card p-6">
       <h3 className="mb-4 text-sm font-semibold text-arctic">Portfolio Allocation</h3>
-      <div className="h-64 w-full">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-64 min-h-64 w-full">
+        <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={256}>
           <PieChart>
             <Pie
               data={chartData}

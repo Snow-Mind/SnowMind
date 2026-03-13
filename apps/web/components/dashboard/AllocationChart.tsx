@@ -58,8 +58,8 @@ export default function AllocationChart({
         <>
           {/* Donut chart */}
           <div className="mt-4 flex items-center gap-6">
-            <div className="relative h-44 w-44 shrink-0">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <div className="relative h-44 min-h-44 w-44 min-w-44 shrink-0">
+              <ResponsiveContainer width="100%" height="100%" minWidth={176} minHeight={176}>
                 <PieChart>
                   <Pie
                     data={data}

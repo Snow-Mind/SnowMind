@@ -122,6 +122,7 @@ export default function OnboardingPage() {
   const router = useRouter();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
+  const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const { activeWallet } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const { wallets } = useWallets();
@@ -238,7 +239,21 @@ export default function OnboardingPage() {
     const amountWei = parseUnits(parsedAmount.toFixed(6), 6);
 
     try {
-      // Phase 0: Transfer USDC from EOA wallet → smart account
+      // Phase 0: Derive canonical smart account first to prevent stale-address drift.
+      setActivationPhase("creating-client");
+      const viemAccount = await toViemAccount({ wallet });
+      const {
+        kernelAccount,
+        kernelClient,
+        smartAccountAddress: derivedSmartAccountAddress,
+      } = await createSmartAccount(viemAccount);
+
+      if (derivedSmartAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+        setSmartAccountAddress(derivedSmartAccountAddress);
+        setFormStep("activate");
+      }
+
+      // Phase 1: Transfer USDC from EOA wallet → canonical smart account
       setActivationPhase("transferring-usdc");
       const provider = await wallet.getEthereumProvider();
 
@@ -275,7 +290,7 @@ export default function OnboardingPage() {
         data: encodeFunctionData({
           abi: ERC20_ABI,
           functionName: "transfer",
-          args: [smartAccountAddress as `0x${string}`, amountWei],
+          args: [derivedSmartAccountAddress as `0x${string}`, amountWei],
         }),
       });
 
@@ -286,12 +301,7 @@ export default function OnboardingPage() {
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
       toast.success("USDC transferred to smart account!");
 
-      // Phase 1: Create kernel client
-      setActivationPhase("creating-client");
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelAccount, kernelClient } = await createSmartAccount(viemAccount);
-
-      // Phase 1b: Deploy smart account on-chain & approve USDC for all protocols
+      // Phase 2: Deploy smart account on-chain & approve USDC for all protocols
       // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
       // and sets max USDC approvals so the optimizer can deposit into any protocol.
       setActivationPhase("approving-protocols");
@@ -303,7 +313,7 @@ export default function OnboardingPage() {
         SPARK_VAULT: CONTRACTS.SPARK_VAULT,
       });
 
-      // Phase 2: Grant session key
+      // Phase 3: Grant session key
       setActivationPhase("granting-session-key");
       const sessionKeyResult = await grantAndSerializeSessionKey(
         kernelAccount,
@@ -322,10 +332,10 @@ export default function OnboardingPage() {
         },
       );
 
-      // Phase 3: Register account with session key
+      // Phase 4: Register account with session key
       setActivationPhase("registering-backend");
       await api.registerAccount({
-        smartAccountAddress,
+        smartAccountAddress: derivedSmartAccountAddress,
         ownerAddress: wallet.address,
         diversificationPreference: diversificationPref,
         sessionKeyData: {
@@ -340,7 +350,7 @@ export default function OnboardingPage() {
 
       // Best-effort diversification preference save
       try {
-        await api.saveDiversificationPreference(smartAccountAddress, diversificationPref);
+        await api.saveDiversificationPreference(derivedSmartAccountAddress, diversificationPref);
       } catch { /* non-critical — default is balanced */ }
 
       setActivationPhase("done");

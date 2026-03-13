@@ -141,7 +141,12 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
     }
   }
 
-  return createKernelAccountClient(clientConfig)
+  const client = createKernelAccountClient(clientConfig)
+
+  return {
+    client,
+    permissionAccountAddress: permissionAccount.address,
+  }
 }
 
 function resolveContractKey(protocol, contracts) {
@@ -165,7 +170,13 @@ export async function executeRebalance({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
-  const kernelClient = await getKernelClient(serializedPermission, { withPaymaster: true })
+  const { client: kernelClient, permissionAccountAddress } = await getKernelClient(serializedPermission, { withPaymaster: true })
+
+  if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+    throw new Error(
+      `Session key/account mismatch: permissionAccount=${permissionAccountAddress} sender=${smartAccountAddress}`,
+    )
+  }
   const calls = []
 
   // ── WITHDRAWALS FIRST — ensure funds available before deposits ─────────────
@@ -305,7 +316,7 @@ export async function executeRebalance({
   } catch (err) {
     // Fallback: if sponsorship fails, retry without paymaster.
     if (isLikelyPaymasterError(err)) {
-      const noPaymasterClient = await getKernelClient(serializedPermission, { withPaymaster: false })
+      const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
       const txHash = await noPaymasterClient.sendTransaction({ calls })
       return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
     }

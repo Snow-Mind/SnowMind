@@ -430,7 +430,11 @@ class Rebalancer:
                     err_msg = body.get("error", "")
                 except Exception:
                     err_msg = resp.text
-                if "serializedSessionKey" in err_msg or "No signer" in err_msg:
+                if (
+                    "serializedSessionKey" in err_msg
+                    or "No signer" in err_msg
+                    or "Session key/account mismatch" in err_msg
+                ):
                     logger.warning(
                         "Invalid session key for %s — revoking",
                         smart_account_address,
