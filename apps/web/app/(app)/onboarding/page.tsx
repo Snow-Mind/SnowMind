@@ -545,13 +545,18 @@ export default function OnboardingPage() {
                 Select which lending protocols your agent can allocate funds to.
               </p>
 
+              {/* Best APY summary */}
+              <div className="flex items-center justify-between rounded-lg bg-[#F5F0EB] px-3 py-2.5">
+                <span className="text-xs text-[#8A837C]">Best available APY</span>
+                <span className="font-mono text-sm font-bold text-[#059669]">{bestApy.toFixed(2)}%</span>
+              </div>
+
               {/* Protocol table */}
               <div className="overflow-hidden rounded-lg border border-[#E8E2DA]">
                 {/* Table header */}
-                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
+                <div className="grid grid-cols-[1fr_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-right w-20">TVL</span>
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-14">Status</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-12">Active</span>
                 </div>
 
@@ -564,7 +569,7 @@ export default function OnboardingPage() {
                     <div
                       key={protocol.id}
                       className={cn(
-                        "grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
+                        "grid grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
                         idx > 0 && "border-t border-[#E8E2DA]",
                         isSelected
                           ? "bg-[#E84142]/[0.03]"
@@ -608,19 +613,6 @@ export default function OnboardingPage() {
                           : "—"}
                       </span>
 
-                      {/* Status badge */}
-                      <div className="flex justify-center w-14">
-                        {protocol.isComingSoon ? (
-                          <span className="rounded-full bg-[#F59E0B]/10 px-2 py-0.5 text-[9px] font-medium text-[#F59E0B]">
-                            Soon
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-[#059669]/10 px-2 py-0.5 text-[9px] font-medium text-[#059669]">
-                            Live
-                          </span>
-                        )}
-                      </div>
-
                       {/* Toggle */}
                       <div className="flex justify-center w-12">
                         <button
@@ -641,12 +633,6 @@ export default function OnboardingPage() {
                     </div>
                   );
                 })}
-              </div>
-
-              {/* Selected count */}
-              <div className="flex items-center justify-between rounded-lg bg-[#F5F0EB] px-3 py-2">
-                <span className="text-xs text-[#8A837C]">Selected markets</span>
-                <span className="font-mono text-sm font-bold text-[#1A1715]">{selectedCount} / {ALL_PROTOCOLS.length}</span>
               </div>
 
               <div className="flex gap-3">
