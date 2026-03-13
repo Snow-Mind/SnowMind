@@ -36,6 +36,29 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
 import { createSmartAccount, grantAndSerializeSessionKey, BENQI_ABI } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
+import type { DiversificationPreference } from "@snowmind/shared-types";
+
+const DIVERSIFICATION_OPTIONS: {
+  value: DiversificationPreference;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "max_yield",
+    label: "Max Yield",
+    description: "100% in the single best protocol. Maximum return, no splitting.",
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    description: "Split across up to 2 protocols, max 60% each. Good default.",
+  },
+  {
+    value: "diversified",
+    label: "Diversified",
+    description: "Spread across up to 4 protocols, max 40% each. Maximum safety.",
+  },
+];
 
 const ERC20_ABI = [
   {
@@ -121,6 +144,10 @@ export default function OnboardingPage() {
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
     () => new Set(ALL_PROTOCOLS.map((p) => p.id)),
   );
+
+  // Diversification preference — defaults to balanced
+  const [diversificationPref, setDiversificationPref] =
+    useState<DiversificationPreference>("balanced");
 
   const toggleProtocol = (id: string) => {
     setSelectedProtocols((prev) => {
@@ -287,6 +314,7 @@ export default function OnboardingPage() {
       await api.registerAccount({
         smartAccountAddress,
         ownerAddress: wallet.address,
+        diversificationPreference: diversificationPref,
         sessionKeyData: {
           serializedPermission: sessionKeyResult.serializedPermission,
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
@@ -323,10 +351,10 @@ export default function OnboardingPage() {
         console.warn("Initial fund deployment skipped — agent will handle it:", deployErr);
       }
 
-      // Best-effort risk profile
+      // Best-effort diversification preference save
       try {
-        await api.saveRiskProfile(smartAccountAddress, "moderate");
-      } catch { /* non-critical */ }
+        await api.saveDiversificationPreference(smartAccountAddress, diversificationPref);
+      } catch { /* non-critical — default is balanced */ }
 
       setActivationPhase("done");
       setAgentActivated(true);
@@ -633,6 +661,43 @@ export default function OnboardingPage() {
                     </div>
                   );
                 })}
+              </div>
+
+              {/* Diversification preference */}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-[#5C5550]">Allocation Strategy</p>
+                <div className="space-y-2">
+                  {DIVERSIFICATION_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setDiversificationPref(opt.value)}
+                      className={cn(
+                        "flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition-all",
+                        diversificationPref === opt.value
+                          ? "border-[#E84142] bg-[#E84142]/[0.04]"
+                          : "border-[#E8E2DA] bg-white hover:border-[#D4CEC7]",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+                          diversificationPref === opt.value
+                            ? "border-[#E84142] bg-[#E84142]"
+                            : "border-[#C4BEB8]",
+                        )}
+                      >
+                        {diversificationPref === opt.value && (
+                          <div className="h-1.5 w-1.5 rounded-full bg-white" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-[#1A1715]">{opt.label}</p>
+                        <p className="text-[11px] text-[#8A837C]">{opt.description}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex gap-3">

@@ -1,9 +1,15 @@
 """MILP solver for optimal yield allocation using PuLP (CBC backend).
 
-Formulation:
-  MAXIMIZE  Σ(x_i × apy_i) − λ × Σ(x_i × risk_i / 10)
-  subject to 6 constraint families (budget, max-alloc %, max-alloc $,
-  min-alloc, min-protocols, max-protocols, big-M linkage).
+Two-tier routing:
+    * Below SPLIT_THRESHOLD ($10 000): pick_best_protocol() — 100 % to highest APY,
+        no MILP overhead.
+    * At/above SPLIT_THRESHOLD: solve() — pure-yield MILP whose diversification is
+        controlled by max_protocols / max_allocation_pct from DIVERSIFICATION_CONFIGS.
+
+MILP formulation:
+    MAXIMIZE  Σ(x_i × apy_i)
+    subject to 6 constraint families (budget, max-alloc %, max-alloc $,
+    min-alloc, min-protocols, max-protocols, big-M linkage).
 """
 
 import logging
@@ -19,6 +25,19 @@ _ZERO = Decimal("0")
 _ONE = Decimal("1")
 _TEN = Decimal("10")
 _365 = Decimal("365")
+
+# ── Two-tier routing constants ────────────────────────────────────────────────
+
+SPLIT_THRESHOLD = Decimal("10000")          # Below this, always single-protocol
+
+DIVERSIFICATION_CONFIGS: dict[str, dict] = {
+    # max_yield: 100 % in single best protocol (uses pick_best_protocol)
+    "max_yield":   {"max_protocols": 1, "max_allocation_pct": Decimal("1.0")},
+    # balanced: MILP splits across ≤ 2 protocols, 60 % cap each
+    "balanced":    {"max_protocols": 2, "max_allocation_pct": Decimal("0.60")},
+    # diversified: MILP spreads across ≤ 4 protocols, 40 % cap each
+    "diversified": {"max_protocols": 4, "max_allocation_pct": Decimal("0.40")},
+}
 
 
 # ── USDC conversion helpers ──────────────────────────────────────────────────
@@ -150,6 +169,61 @@ def is_rebalance_worth_it(
 # ── Fallback ──────────────────────────────────────────────────────────────────
 
 
+# ── Simple-mode solver ────────────────────────────────────────────────────────
+
+
+def pick_best_protocol(inp: OptimizerInput) -> OptimizerOutput:
+    """Simple mode: allocate 100 % to the protocol with the highest APY.
+
+    Used when total_amount_usd < SPLIT_THRESHOLD or when the user's
+    diversification_preference is 'max_yield'.  Skips MILP entirely.
+    """
+    available = [p for p in inp.protocols if p.is_available]
+    if not available:
+        return OptimizerOutput(
+            allocations={},
+            expected_apy=_ZERO,
+            risk_score=_ZERO,
+            objective_value=_ZERO,
+            solve_time_ms=0.0,
+            status="infeasible",
+            is_rebalance_needed=False,
+            delta_from_current={},
+        )
+
+    best = max(available, key=lambda p: p.apy)
+    allocations = {best.protocol_id: inp.total_amount_usd}
+    rates = {p.protocol_id: p.apy for p in available}
+
+    delta = compute_delta(allocations, inp.current_allocations)
+    current_apy = compute_weighted_apy(inp.current_allocations, rates)
+    worth, reason = is_rebalance_worth_it(
+        delta,
+        inp.total_amount_usd,
+        inp.gas_cost_estimate_usd,
+        best.apy,
+        current_apy,
+    )
+    logger.info(
+        "pick_best_protocol → %s (APY %.2f%%): %s",
+        best.protocol_id, float(best.apy) * 100, reason,
+    )
+
+    return OptimizerOutput(
+        allocations=allocations,
+        expected_apy=best.apy,
+        risk_score=best.risk_score,
+        objective_value=best.apy * inp.total_amount_usd,
+        solve_time_ms=0.0,
+        status="optimal",
+        is_rebalance_needed=worth,
+        delta_from_current=delta,
+    )
+
+
+# ── Fallback (MILP failure) ────────────────────────────────────────────────────
+
+
 def fallback_equal_split(inp: OptimizerInput) -> OptimizerOutput:
     """If MILP fails, equally split between best 2 protocols by APY."""
     available = sorted(
@@ -208,7 +282,7 @@ def fallback_equal_split(inp: OptimizerInput) -> OptimizerOutput:
 
 def solve(inp: OptimizerInput) -> OptimizerOutput:
     """
-    MAXIMIZE  Σ(x_i × apy_i) − λ × Σ(x_i × risk_i / 10)
+    MAXIMIZE  Σ(x_i × apy_i)
 
     Constraints:
       1. Budget:        Σ x_i = total_amount_usd
@@ -232,7 +306,6 @@ def solve(inp: OptimizerInput) -> OptimizerOutput:
 
     # Convert Decimal → float at PuLP boundary
     f_total = float(inp.total_amount_usd)
-    f_risk_aversion = float(inp.risk_aversion)
 
     prob = pulp.LpProblem("SnowMind_Yield_Optimizer", pulp.LpMaximize)
 
@@ -246,14 +319,8 @@ def solve(inp: OptimizerInput) -> OptimizerOutput:
         for p in protocols
     }
 
-    # Objective: risk-adjusted yield
-    prob += pulp.lpSum(
-        [
-            x[p.protocol_id] * float(p.apy)
-            - f_risk_aversion * x[p.protocol_id] * (float(p.risk_score) / 10.0)
-            for p in protocols
-        ]
-    )
+    # Objective: pure yield — diversification enforced by constraint C5 (max_protocols)
+    prob += pulp.lpSum([x[p.protocol_id] * float(p.apy) for p in protocols])
 
     # C1 — Budget
     prob += pulp.lpSum([x[p.protocol_id] for p in protocols]) == f_total

@@ -1,10 +1,15 @@
 import type { Portfolio, ProtocolAllocation, ProtocolId } from "./portfolio";
 
+// --- Diversification preference ---
+
+export type DiversificationPreference = "max_yield" | "balanced" | "diversified";
+
 // --- Requests ---
 
 export interface RegisterAccountRequest {
   ownerAddress: string;
   smartAccountAddress: string;
+  diversificationPreference?: DiversificationPreference;
   sessionKeyData?: {
     serializedPermission: string;
     sessionKeyAddress: string;
@@ -102,10 +107,10 @@ export interface AccountDetailResponse {
   ownerAddress: string;
   isActive: boolean;
   createdAt: string;
+  diversificationPreference: DiversificationPreference;
   sessionKey: SessionKeyStatusResponse | null;
 }
 
-export interface RiskProfileResponse {
-  riskTolerance: "conservative" | "moderate" | "aggressive";
-  lambdaValue: number;
+export interface DiversificationPreferenceResponse {
+  diversificationPreference: DiversificationPreference;
 }

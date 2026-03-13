@@ -1,19 +1,25 @@
 """Unit tests for the MILP solver.
 
 Tests cover:
-  1. Equal APY → 50/50 split
-  2. Unequal APY → favours higher but respects 60% cap
-  3. $1000 total with $500 min → only 2 protocols can be active
-  4. All unavailable → fallback returns safely
-  5. Risk aversion = 1.0 → risky protocol penalised
-  6. is_rebalance_worth_it: delta < 5% → False
-  7. is_rebalance_worth_it: delta > 5% + yield improvement → True
+    1. Equal APY → 50/50 split
+    2. Unequal APY → favours higher but respects 60% cap
+    3. $1000 total with $500 min → only 2 protocols can be active
+    4. All unavailable → fallback returns safely
+    5. Pure yield → higher APY protocol favoured regardless of risk_score
+    6. is_rebalance_worth_it: delta < 5% → False
+    7. is_rebalance_worth_it: delta > 5% + yield improvement → True
+    8. pick_best_protocol → 100 % to highest APY
+    9. solve() with balanced config (max_protocols=2, 60% cap)
+ 10. solve() with diversified config (max_protocols=4, 40% cap)
+ 11. two-tier routing threshold: <$10K uses pick_best_protocol path
 """
 
 import pytest
 from decimal import Decimal
 
 from app.services.optimizer.milp_solver import (
+    DIVERSIFICATION_CONFIGS,
+    SPLIT_THRESHOLD,
     OptimizerInput,
     OptimizerOutput,
     ProtocolInput,
@@ -21,6 +27,7 @@ from app.services.optimizer.milp_solver import (
     compute_weighted_apy,
     fallback_equal_split,
     is_rebalance_worth_it,
+    pick_best_protocol,
     solve,
 )
 
@@ -133,12 +140,12 @@ def test_all_unavailable_returns_fallback():
     assert result.allocations == {}
 
 
-# ── Test 5: High risk aversion penalises risky protocol ─────────────────────
+# ── Test 5: Pure yield ignores risk score ────────────────────────────────────
 
-def test_risk_aversion_penalises_risky():
+def test_pure_yield_ignores_risk_score():
     """
-    risk_aversion=1.0: risky protocol (risk=9) should get less allocation
-    than safe protocol (risk=1) despite higher APY.
+    Pure-yield objective: higher APY protocol (6%) gets 60% cap,
+    lower APY protocol (4%) gets the rest — risk_score has no effect.
     """
     inp = OptimizerInput(
         total_amount_usd=D("10000"),
@@ -146,14 +153,13 @@ def test_risk_aversion_penalises_risky():
             ProtocolInput("safe", apy=D("0.04"), risk_score=D("1.0")),
             ProtocolInput("risky", apy=D("0.06"), risk_score=D("9.0")),
         ],
-        risk_aversion=D("1.0"),
     )
     result = solve(inp)
-    _print_result("Test 5 — High risk aversion", result)
+    _print_result("Test 5 — Pure yield ignores risk", result)
 
     assert result.status == "optimal"
-    # Safe should get more despite lower APY because risk penalty dominates
-    assert result.allocations["safe"] > result.allocations["risky"]
+    # Higher APY protocol should get more allocation (up to 60% cap)
+    assert result.allocations["risky"] >= result.allocations["safe"]
 
 
 # ── Test 6: is_rebalance_worth_it — delta < 5% → False ──────────────────────
@@ -198,6 +204,165 @@ def test_compute_delta():
     delta = compute_delta(proposed, current)
     assert delta["a"] == D("1000")
     assert delta["b"] == D("-1000")
+
+
+# ── Test 8: pick_best_protocol → 100 % to highest APY ───────────────────────
+
+def test_pick_best_protocol_returns_highest_apy():
+    """Three protocols: 5%, 2%, 3% → all funds go to 5% one."""
+    inp = OptimizerInput(
+        total_amount_usd=D("5000"),
+        protocols=[
+            ProtocolInput("high", apy=D("0.05"), risk_score=D("0")),
+            ProtocolInput("mid", apy=D("0.03"), risk_score=D("0")),
+            ProtocolInput("low", apy=D("0.02"), risk_score=D("0")),
+        ],
+    )
+    result = pick_best_protocol(inp)
+    _print_result("Test 8 — pick_best_protocol", result)
+
+    assert result.status == "optimal"
+    assert "high" in result.allocations
+    assert "mid" not in result.allocations
+    assert "low" not in result.allocations
+    assert float(result.allocations["high"]) == pytest.approx(5000.0, abs=0.01)
+    assert result.expected_apy == D("0.05")
+
+
+def test_pick_best_protocol_no_available_returns_infeasible():
+    """All protocols unavailable → infeasible result."""
+    inp = OptimizerInput(
+        total_amount_usd=D("5000"),
+        protocols=[
+            ProtocolInput("a", apy=D("0.05"), risk_score=D("0"), is_available=False),
+        ],
+    )
+    result = pick_best_protocol(inp)
+    assert result.status == "infeasible"
+    assert result.allocations == {}
+
+
+# ── Test 9: solve() balanced config (max_protocols=2, 60% cap) ───────────────
+
+def test_solve_balanced_config():
+    """Balanced: max 2 protocols, 60% cap — higher APY gets 60%, rest to second."""
+    config = DIVERSIFICATION_CONFIGS["balanced"]
+    protocols = [
+        ProtocolInput(
+            "high", apy=D("0.05"), risk_score=D("0"),
+            max_allocation_pct=config["max_allocation_pct"],
+        ),
+        ProtocolInput(
+            "mid", apy=D("0.03"), risk_score=D("0"),
+            max_allocation_pct=config["max_allocation_pct"],
+        ),
+        ProtocolInput(
+            "low", apy=D("0.02"), risk_score=D("0"),
+            max_allocation_pct=config["max_allocation_pct"],
+        ),
+    ]
+    inp = OptimizerInput(
+        total_amount_usd=D("15000"),
+        protocols=protocols,
+        max_protocols=config["max_protocols"],
+        min_protocols=2,
+    )
+    result = solve(inp)
+    _print_result("Test 9 — Balanced config", result)
+
+    assert result.status == "optimal"
+    active = [pid for pid, amt in result.allocations.items() if amt > D("1")]
+    assert len(active) <= 2
+    # 60% cap: no protocol > 9001 on $15K
+    for pid, amt in result.allocations.items():
+        assert float(amt) <= 9001.0, f"{pid} exceeds 60% cap"
+    # Budget constraint
+    assert float(sum(result.allocations.values())) == pytest.approx(15000.0, abs=1.0)
+
+
+# ── Test 10: solve() diversified config (max_protocols=4, 40% cap) ───────────
+
+def test_solve_diversified_config():
+    """Diversified: max 4 protocols, 40% cap. Budget must be fully allocated."""
+    config = DIVERSIFICATION_CONFIGS["diversified"]
+    protocols = [
+        ProtocolInput(
+            f"p{i}", apy=D(str(0.06 - i * 0.01)), risk_score=D("0"),
+            max_allocation_pct=config["max_allocation_pct"],
+        )
+        for i in range(4)
+    ]
+    inp = OptimizerInput(
+        total_amount_usd=D("20000"),
+        protocols=protocols,
+        max_protocols=config["max_protocols"],
+        min_protocols=2,
+    )
+    result = solve(inp)
+    _print_result("Test 10 — Diversified config", result)
+
+    assert result.status == "optimal"
+    active = [pid for pid, amt in result.allocations.items() if amt > D("1")]
+    assert len(active) <= 4
+    # 40% cap: no protocol > 8001 on $20K
+    for pid, amt in result.allocations.items():
+        assert float(amt) <= 8001.0, f"{pid} exceeds 40% cap"
+    assert float(sum(result.allocations.values())) == pytest.approx(20000.0, abs=1.0)
+
+
+# ── Test 11: routing threshold — $5K uses pick_best_protocol path ────────────
+
+def test_routing_threshold_small_deposit():
+    """Below SPLIT_THRESHOLD ($10K): pick_best_protocol gives optimal single protocol."""
+    assert D("5000") < SPLIT_THRESHOLD
+
+    inp = OptimizerInput(
+        total_amount_usd=D("5000"),
+        protocols=[
+            ProtocolInput("benqi", apy=D("0.05"), risk_score=D("0")),
+            ProtocolInput("aave_v3", apy=D("0.02"), risk_score=D("0")),
+        ],
+    )
+    result = pick_best_protocol(inp)
+    _print_result("Test 11 — Small deposit routing", result)
+
+    # Should go entirely to benqi (highest APY)
+    assert "benqi" in result.allocations
+    assert "aave_v3" not in result.allocations
+    assert float(result.allocations["benqi"]) == pytest.approx(5000.0, abs=0.01)
+
+
+def test_routing_threshold_large_deposit_uses_milp():
+    """Above SPLIT_THRESHOLD ($10K): solve() (MILP) is the right path."""
+    assert D("15000") >= SPLIT_THRESHOLD
+
+    config = DIVERSIFICATION_CONFIGS["balanced"]
+    protocols = [
+        ProtocolInput(
+            "benqi", apy=D("0.05"), risk_score=D("0"),
+            max_allocation_pct=config["max_allocation_pct"],
+        ),
+        ProtocolInput(
+            "aave_v3", apy=D("0.02"), risk_score=D("0"),
+            max_allocation_pct=config["max_allocation_pct"],
+        ),
+    ]
+    inp = OptimizerInput(
+        total_amount_usd=D("15000"),
+        protocols=protocols,
+        max_protocols=config["max_protocols"],
+        min_protocols=2,
+    )
+    result = solve(inp)
+    _print_result("Test 12 — Large deposit MILP", result)
+
+    assert result.status == "optimal"
+    # Both protocols should participate (min_protocols=2)
+    assert "benqi" in result.allocations
+    assert "aave_v3" in result.allocations
+    # benqi gets 60% cap = 9000
+    assert float(result.allocations["benqi"]) == pytest.approx(9000.0, abs=1.0)
+    assert float(result.allocations["aave_v3"]) == pytest.approx(6000.0, abs=1.0)
 
 
 def test_compute_weighted_apy():

@@ -1,9 +1,19 @@
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.models.base import CamelModel
+
+
+# ── Enums ────────────────────────────────────────────
+
+
+class DiversificationPref(str, Enum):
+    MAX_YIELD = "max_yield"
+    BALANCED = "balanced"
+    DIVERSIFIED = "diversified"
 
 
 # ── Request models ──────────────────────────────────────────
@@ -12,6 +22,7 @@ from app.models.base import CamelModel
 class AccountCreate(BaseModel):
     address: str = Field(..., description="Checksummed smart-account address")
     owner_address: str = Field(..., description="Checksummed EOA owner address")
+    diversification_preference: DiversificationPref = DiversificationPref.BALANCED
 
 
 class SessionKeyCreate(BaseModel):
@@ -32,6 +43,7 @@ class AccountResponse(CamelModel):
     owner_address: str
     is_active: bool
     created_at: datetime
+    diversification_preference: DiversificationPref = DiversificationPref.BALANCED
 
 
 class SessionKeyStatusResponse(CamelModel):

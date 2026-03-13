@@ -10,7 +10,8 @@ import type {
   ProtocolRateResponse,
   OptimizerPreviewResponse,
   AccountDetailResponse,
-  RiskProfileResponse,
+  DiversificationPreference,
+  DiversificationPreferenceResponse,
 } from "@snowmind/shared-types";
 
 // ── Error types ────────────────────────────────────────────
@@ -167,16 +168,16 @@ export const api = {
       `/api/v1/accounts/${encodeURIComponent(address)}`,
     ),
 
-  // Risk profile
-  saveRiskProfile: (
+  // Diversification preference
+  saveDiversificationPreference: (
     address: string,
-    riskTolerance: "conservative" | "moderate" | "aggressive",
+    preference: DiversificationPreference,
   ) =>
-    request<RiskProfileResponse>(
-      `/api/v1/accounts/${encodeURIComponent(address)}/risk-profile`,
+    request<DiversificationPreferenceResponse>(
+      `/api/v1/accounts/${encodeURIComponent(address)}/diversification-preference`,
       {
         method: "PUT",
-        body: JSON.stringify({ risk_tolerance: riskTolerance }),
+        body: JSON.stringify({ diversificationPreference: preference }),
       },
     ),
 };

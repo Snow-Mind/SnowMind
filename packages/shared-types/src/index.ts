@@ -1,5 +1,6 @@
 export type { ProtocolId, ProtocolAllocation, Portfolio } from "./portfolio";
 export type {
+  DiversificationPreference,
   RegisterAccountRequest,
   RegisterAccountResponse,
   GetPortfolioResponse,
@@ -12,5 +13,5 @@ export type {
   HealthResponse,
   SessionKeyStatusResponse,
   AccountDetailResponse,
-  RiskProfileResponse,
+  DiversificationPreferenceResponse,
 } from "./api";

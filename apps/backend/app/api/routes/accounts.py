@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -15,6 +14,7 @@ from app.core.validators import validate_eth_address
 from app.models.account import (
     AccountDetailResponse,
     AccountResponse,
+    DiversificationPref,
     SessionKeyStatusResponse,
 )
 from app.services.execution.session_key import (
@@ -88,6 +88,7 @@ async def _do_register(
         owner_address=account["owner_address"],
         is_active=account["is_active"],
         created_at=account["created_at"],
+        diversification_preference=account.get("diversification_preference", "balanced"),
     )
 
 
@@ -170,6 +171,7 @@ async def get_account(
         owner_address=row["owner_address"],
         is_active=row["is_active"],
         created_at=row["created_at"],
+        diversification_preference=row.get("diversification_preference", "balanced"),
         session_key=sk_resp,
     )
 
@@ -215,26 +217,27 @@ async def revoke_account_session_key_post(
     return await _do_revoke(address, db)
 
 
-# ── PUT /accounts/{address}/risk-profile ─────────────────
-
-LAMBDA_MAP = {"conservative": 0.8, "moderate": 0.5, "aggressive": 0.2}
+# ── PUT /accounts/{address}/diversification-preference ────
 
 
-class RiskProfileRequest(BaseModel):
-    risk_tolerance: Literal["conservative", "moderate", "aggressive"]
+class DiversificationPreferenceRequest(BaseModel):
+    diversification_preference: DiversificationPref = Field(
+        ..., alias="diversificationPreference",
+    )
+    model_config = {"populate_by_name": True}
 
 
-@router.put("/{address}/risk-profile")
+@router.put("/{address}/diversification-preference")
 @limiter.limit("20/minute")
-async def update_risk_profile(
+async def update_diversification_preference(
     request: Request,
     address: str,
-    req: RiskProfileRequest,
+    req: DiversificationPreferenceRequest,
     db: Client = Depends(get_db),
     # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
     # _auth: dict = Depends(require_privy_auth),
 ):
-    """Update the risk tolerance for an account."""
+    """Update the diversification preference for an account."""
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
@@ -248,12 +251,11 @@ async def update_risk_profile(
 
     db.table("accounts").update(
         {
-            "risk_tolerance": req.risk_tolerance,
+            "diversification_preference": req.diversification_preference.value,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     ).eq("id", acct.data[0]["id"]).execute()
 
     return {
-        "riskTolerance": req.risk_tolerance,
-        "lambdaValue": LAMBDA_MAP[req.risk_tolerance],
+        "diversificationPreference": req.diversification_preference.value,
     }

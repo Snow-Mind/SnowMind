@@ -18,15 +18,17 @@ from app.services.execution.session_key import (
     revoke_session_key,
 )
 from app.services.optimizer.milp_solver import (
+    DIVERSIFICATION_CONFIGS,
+    SPLIT_THRESHOLD,
     OptimizerInput,
     ProtocolInput,
     compute_delta,
     compute_weighted_apy,
+    pick_best_protocol,
     solve,
 )
 from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.optimizer.rate_validator import RateValidator, apply_max_move_cap
-from app.services.optimizer.risk_scorer import RiskScorer
 from app.services.protocols import get_adapter
 from app.services.protocols.base import get_shared_async_web3
 
@@ -67,7 +69,6 @@ class Rebalancer:
         self.settings = get_settings()
         self.rate_fetcher = RateFetcher()
         self.rate_validator = RateValidator()
-        self.risk_scorer = RiskScorer()
         self.w3 = get_shared_async_web3()
         self._protocol_addresses: dict[str, str] = {
             "aave_v3": self.settings.AAVE_V3_POOL,
@@ -151,23 +152,14 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No validated TWAP rates available")
 
-        # 3. Compute risk scores
+        # 3. Build protocol inputs (risk scoring bypassed — protocols are pre-vetted whitelist)
         protocol_inputs: list[ProtocolInput] = []
         for pid, rate in twap_rates.items():
-            risk = self.risk_scorer.compute_risk_score(
-                pid,
-                utilization_rate=(
-                    float(rate.utilization_rate)
-                    if rate.utilization_rate is not None
-                    else None
-                ),
-                protocol_apy=rate.apy,
-            )
             protocol_inputs.append(
                 ProtocolInput(
                     protocol_id=pid,
                     apy=rate.apy,
-                    risk_score=risk,
+                    risk_score=Decimal("0"),
                 )
             )
 
@@ -198,13 +190,48 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
-        # 5. Run MILP solver
-        inp = OptimizerInput(
+        # 5. Two-tier routing: simple mode for small deposits, MILP for large
+        base_inp = OptimizerInput(
             total_amount_usd=total_usd,
             protocols=protocol_inputs,
             current_allocations=current,
         )
-        result = solve(inp)
+
+        if total_usd < SPLIT_THRESHOLD:
+            # Simple mode — always single best protocol under $10 K
+            logger.info(
+                "Simple mode (%.2f < %.2f): picking best protocol",
+                total_usd, float(SPLIT_THRESHOLD),
+            )
+            result = pick_best_protocol(base_inp)
+        else:
+            # MILP mode — read user's diversification preference from DB
+            pref_row = (
+                db.table("accounts")
+                .select("diversification_preference")
+                .eq("id", account_id)
+                .execute()
+            )
+            pref = (
+                (pref_row.data[0].get("diversification_preference") or "balanced")
+                if pref_row.data
+                else "balanced"
+            )
+            config = DIVERSIFICATION_CONFIGS.get(pref, DIVERSIFICATION_CONFIGS["balanced"])
+            logger.info(
+                "MILP mode (%.2f >= %.2f): pref=%s, max_protocols=%d",
+                total_usd, float(SPLIT_THRESHOLD), pref, config["max_protocols"],
+            )
+            # Apply per-protocol allocation cap from diversification config
+            for p in base_inp.protocols:
+                p.max_allocation_pct = config["max_allocation_pct"]
+
+            if config["max_protocols"] == 1:
+                result = pick_best_protocol(base_inp)
+            else:
+                base_inp.max_protocols = config["max_protocols"]
+                base_inp.min_protocols = min(2, len(base_inp.protocols))
+                result = solve(base_inp)
 
         # 6. Check rebalance gate
         if not result.is_rebalance_needed:
