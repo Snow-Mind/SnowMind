@@ -1,4 +1,4 @@
-"""Euler V2 adapter — ERC-4626 vault interface (Coming Soon on Avalanche)."""
+"""Spark Savings adapter — ERC-4626 vault interface on Avalanche."""
 
 import time
 from decimal import Decimal
@@ -6,8 +6,8 @@ from decimal import Decimal
 from app.core.config import get_settings
 from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
 
-# ── ERC-4626 + MockEulerVault ABI ────────────────────────────────────────────
-EULER_V2_ABI = [
+# ERC-4626 ABI subset (same interface as Euler V2 mock vault)
+SPARK_VAULT_ABI = [
     {
         "name": "deposit",
         "type": "function",
@@ -63,26 +63,24 @@ SECONDS_PER_YEAR = Decimal("31557600")
 MANTISSA = Decimal("1e18")
 
 
-class EulerV2Adapter(BaseProtocolAdapter):
-    protocol_id = "euler_v2"
-    name = "Euler V2"
-    BASE_RISK_SCORE = 5.0  # "Euler v2: 5 (newer, add with caution)"
+class SparkAdapter(BaseProtocolAdapter):
+    protocol_id = "spark"
+    name = "Spark Savings"
+    BASE_RISK_SCORE = 3.0  # MakerDAO-backed, well-audited
     is_active = True
 
     def __init__(self) -> None:
         settings = get_settings()
         self.w3 = get_shared_async_web3()
         self.vault_address: str | None = (
-            settings.EULER_VAULT if settings.IS_TESTNET else None
+            settings.SPARK_VAULT if settings.SPARK_VAULT else None
         )
         self.vault = None
         if self.vault_address:
             self.vault = self.w3.eth.contract(
                 address=self.w3.to_checksum_address(self.vault_address),
-                abi=EULER_V2_ABI,
+                abi=SPARK_VAULT_ABI,
             )
-
-    # ── Rate reading ──────────────────────────────────────────────────────────
 
     async def get_rate(self) -> ProtocolRate:
         if not self.vault:
@@ -109,14 +107,12 @@ class EulerV2Adapter(BaseProtocolAdapter):
             fetched_at=time.time(),
         )
 
-    # ── Calldata builders ─────────────────────────────────────────────────────
-
     def build_supply_calldata(
         self, asset: str, amount: int, on_behalf_of: str
     ) -> TransactionCalldata:
         """ERC-4626: deposit(uint256 assets, address receiver)"""
         if not self.vault:
-            raise RuntimeError("Euler V2 vault not configured")
+            raise RuntimeError("Spark vault not configured")
         data = self.vault.encode_abi(
             "deposit",
             args=[amount, self.w3.to_checksum_address(on_behalf_of)],
@@ -128,15 +124,13 @@ class EulerV2Adapter(BaseProtocolAdapter):
     ) -> TransactionCalldata:
         """ERC-4626: redeem(uint256 shares, address receiver, address owner)"""
         if not self.vault:
-            raise RuntimeError("Euler V2 vault not configured")
+            raise RuntimeError("Spark vault not configured")
         to_addr = self.w3.to_checksum_address(to)
         data = self.vault.encode_abi("redeem", args=[amount, to_addr, to_addr])
         return TransactionCalldata(to=self.vault_address, data=data, value=0)
 
-    # ── Balance ───────────────────────────────────────────────────────────────
-
     async def get_user_balance(self, user_address: str, asset: str) -> int:
-        """Returns underlying USDC amount by converting shares → assets."""
+        """Returns underlying USDC amount by converting shares -> assets."""
         if not self.vault:
             return 0
         shares = await self.vault.functions.balanceOf(

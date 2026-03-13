@@ -86,6 +86,27 @@ export const BENQI_ABI = [
   },
 ] as const
 
+// ERC-4626 vault ABI — shared by Euler V2 and Spark mock vaults
+export const ERC4626_VAULT_ABI = [
+  {
+    name: "deposit", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "assets",   type: "uint256" },
+      { name: "receiver", type: "address" },
+    ],
+    outputs: [{ name: "shares", type: "uint256" }],
+  },
+  {
+    name: "redeem", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "shares",   type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner",    type: "address" },
+    ],
+    outputs: [{ name: "assets", type: "uint256" }],
+  },
+] as const
+
 // ── getPublicClient ───────────────────────────────────────────────────────────
 
 function getPublicClient(): PublicClient {
@@ -145,41 +166,28 @@ export async function createSmartAccount(walletClient: any) {
 export async function approveAllProtocols(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelClient: any,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; EULER_VAULT: `0x${string}` }
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; EULER_VAULT: `0x${string}`; SPARK_VAULT: `0x${string}` }
 ): Promise<{ txHash: string; explorerUrl: string }> {
 
+  const approvalCalls = [
+    contracts.AAVE_POOL,
+    contracts.BENQI_POOL,
+    contracts.EULER_VAULT,
+    contracts.SPARK_VAULT,
+  ]
+    .filter(addr => addr !== '0x0000000000000000000000000000000000000000')
+    .map(spender => ({
+      to: contracts.USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [spender, maxUint256],
+      }),
+    }))
+
   // Correct API: sendTransaction with calls array (NOT sendUserOperation)
-  const txHash = await kernelClient.sendTransaction({
-    calls: [
-      {
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [contracts.AAVE_POOL, maxUint256],
-        }),
-      },
-      {
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [contracts.BENQI_POOL, maxUint256],
-        }),
-      },
-      {
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [contracts.EULER_VAULT, maxUint256],
-        }),
-      },
-    ],
-  })
+  const txHash = await kernelClient.sendTransaction({ calls: approvalCalls })
 
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
 }
@@ -197,6 +205,7 @@ export async function grantAndSerializeSessionKey(
     AAVE_POOL:    `0x${string}`
     BENQI_POOL:   `0x${string}`
     EULER_VAULT:  `0x${string}`
+    SPARK_VAULT:  `0x${string}`
     USDC:         `0x${string}`
   },
   config: {
@@ -221,6 +230,10 @@ export async function grantAndSerializeSessionKey(
   const sessionKeySigner   = await toECDSASigner({ signer: sessionKeyAccount })
 
   // ── Call Policy: ABI-based, type-safe (not raw hex selectors) ─────────────
+  // Build permissions array — Spark entries added conditionally
+  const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as `0x${string}`
+  const hasSparkVault = contracts.SPARK_VAULT !== ZERO_ADDR
+
   const callPolicy = toCallPolicy({
     policyVersion: CallPolicyVersion.V0_0_4,
     permissions: [
@@ -243,6 +256,27 @@ export async function grantAndSerializeSessionKey(
         functionName: "approve",
         args: [
           { condition: ParamCondition.EQUAL, value: contracts.BENQI_POOL },
+          null,
+        ],
+      },
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.EULER_VAULT },
+          null,
+        ],
+      },
+      // Spark USDC approve (uses Euler vault as fallback target when unconfigured — never reached)
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: hasSparkVault ? contracts.SPARK_VAULT : contracts.EULER_VAULT },
           null,
         ],
       },
@@ -292,6 +326,48 @@ export async function grantAndSerializeSessionKey(
         abi: BENQI_ABI,
         functionName: "redeem",
         args: [null],   // qiToken amounts differ from USDC, no cap here
+      },
+
+      // EULER V2 — deposit (ERC-4626)
+      {
+        target: contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,   // receiver — any
+        ],
+      },
+
+      // EULER V2 — redeem (ERC-4626)
+      {
+        target: contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [null, null, null],   // shares, receiver, owner — any
+      },
+
+      // SPARK — deposit (ERC-4626, same interface as Euler)
+      {
+        target: hasSparkVault ? contracts.SPARK_VAULT : contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,
+        ],
+      },
+
+      // SPARK — redeem (ERC-4626)
+      {
+        target: hasSparkVault ? contracts.SPARK_VAULT : contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [null, null, null],
       },
     ],
   })
@@ -372,32 +448,54 @@ export async function emergencyWithdrawAll(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kernelClient: any,
   smartAccountAddress: `0x${string}`,
-  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; USDC: `0x${string}` },
+  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; EULER_VAULT: `0x${string}`; SPARK_VAULT: `0x${string}`; USDC: `0x${string}` },
   benqiQiTokenBalance: bigint,   // fetch this from on-chain before calling
+  eulerShareBalance: bigint,     // ERC-4626 shares
+  sparkShareBalance: bigint,     // ERC-4626 shares
 ): Promise<{ txHash: string; explorerUrl: string }> {
-  const txHash = await kernelClient.sendTransaction({
-    calls: [
-      // Withdraw all from Aave (MAX_UINT = full balance)
-      {
-        to: contracts.AAVE_POOL,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: AAVE_POOL_ABI,
-          functionName: "withdraw",
-          args: [contracts.USDC, maxUint256, smartAccountAddress],
-        }),
-      },
-      // Redeem all from Benqi (exact qiToken balance)
-      ...(benqiQiTokenBalance > 0n ? [{
-        to: contracts.BENQI_POOL,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: BENQI_ABI,
-          functionName: "redeem",
-          args: [benqiQiTokenBalance],
-        }),
-      }] : []),
-    ],
-  })
+  const calls = [
+    // Withdraw all from Aave (MAX_UINT = full balance)
+    {
+      to: contracts.AAVE_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: AAVE_POOL_ABI,
+        functionName: "withdraw",
+        args: [contracts.USDC, maxUint256, smartAccountAddress],
+      }),
+    },
+    // Redeem all from Benqi (exact qiToken balance)
+    ...(benqiQiTokenBalance > 0n ? [{
+      to: contracts.BENQI_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: BENQI_ABI,
+        functionName: "redeem",
+        args: [benqiQiTokenBalance],
+      }),
+    }] : []),
+    // Redeem all from Euler V2 (ERC-4626)
+    ...(eulerShareBalance > 0n ? [{
+      to: contracts.EULER_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [eulerShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    }] : []),
+    // Redeem all from Spark (ERC-4626)
+    ...(sparkShareBalance > 0n && contracts.SPARK_VAULT !== '0x0000000000000000000000000000000000000000' ? [{
+      to: contracts.SPARK_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [sparkShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    }] : []),
+  ]
+
+  const txHash = await kernelClient.sendTransaction({ calls })
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
 }

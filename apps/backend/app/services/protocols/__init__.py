@@ -24,20 +24,26 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
     except (ValueError, Exception) as exc:
         logger.warning("BenqiAdapter not loaded (BENQI_POOL missing?): %s", exc)
 
-    # Euler V2 — always loads, gracefully no-ops when vault is unconfigured
+    # Euler V2 — ERC-4626 mock vault
     adapters["euler_v2"] = EulerV2Adapter()
+
+    # Spark Savings — ERC-4626 mock vault (same interface as Euler)
+    try:
+        from .spark import SparkAdapter
+        adapters["spark"] = SparkAdapter()
+    except (ValueError, Exception) as exc:
+        logger.warning("SparkAdapter not loaded (SPARK_VAULT missing?): %s", exc)
 
     return adapters
 
 
 ALL_ADAPTERS: dict[str, BaseProtocolAdapter] = _build_adapters()
 
-# Only these participate in MILP optimisation for MVP
-# Document: "MVP: Benqi + Aave V3 (must have)"
+# Protocols that participate in MILP optimisation
 ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = {
     k: v
     for k, v in ALL_ADAPTERS.items()
-    if k in ("aave_v3", "benqi")
+    if k in ("aave_v3", "benqi", "euler_v2", "spark")
 }
 
 # Static risk scores — document Section 4.3
@@ -45,6 +51,7 @@ RISK_SCORES: dict[str, float] = {
     "aave_v3":  2.0,   # "Aave: 2 (battle-tested, billions in TVL)"
     "benqi":    3.0,   # "Benqi: 3 (well-established on Avalanche since 2021)"
     "euler_v2": 5.0,   # "Euler v2: 5 (newer, add with caution)"
+    "spark":    3.0,   # Spark: 3 (MakerDAO-backed, well-audited)
     "fluid":    5.5,   # "Fluid: 5.5 (newest, add cautiously)"
 }
 

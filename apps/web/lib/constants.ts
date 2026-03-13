@@ -27,8 +27,10 @@ export const CONTRACTS = {
 
   // MockBenqi on Fuji (real Benqi is mainnet-only)
   BENQI_POOL:  (process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS ?? '0x6ac240d13b85a698ee407617e51f9baab9e395a9') as `0x${string}`,
-  // MockEuler, shown as coming soon
+  // MockEuler vault on Fuji
   EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x372193056e6c57040548ce833ee406509a457632') as `0x${string}`,
+  // MockSpark vault on Fuji (ERC-4626, same interface as Euler mock)
+  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0x0000000000000000000000000000000000000000') as `0x${string}`,
 
   // Test tokens
   USDC:        '0x5425890298aed601595a70AB815c96711a31Bc65' as `0x${string}`,
@@ -99,8 +101,8 @@ export const PROTOCOL_CONFIG = {
     color: '#4A6CF6', // Euler brand blue
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-official.svg',
-    isActive: false,  // Not in optimizer yet
-    isComingSoon: true,
+    isActive: true,
+    isComingSoon: false,
     minAllocation: 500,
     maxAllocationPct: 0.20,  // Lower cap until proven (document: "start with 20% cap")
     description: 'Next-gen modular lending (ERC-4626). Live on Ethereum, coming to Avalanche.',
@@ -112,19 +114,19 @@ export const PROTOCOL_CONFIG = {
     id: 'spark' as const,
     name: 'Spark',
     shortName: 'Spark',
-    contractAddress: '0x0000000000000000000000000000000000000000' as `0x${string}`, // placeholder
+    contractAddress: CONTRACTS.SPARK_VAULT,
     usdcAddress: CONTRACTS.USDC,
     riskScore: 3.0,
     color: '#FFB347', // Spark brand orange
     bgColor: 'rgba(255, 179, 71, 0.12)',
     logoPath: '/protocols/spark-official.svg',
-    isActive: false,
-    isComingSoon: true,
+    isActive: true,
+    isComingSoon: false,
     minAllocation: 500,
     maxAllocationPct: 0.60,
-    description: 'MakerDAO-backed lending protocol with competitive rates.',
+    description: 'MakerDAO-backed savings protocol with competitive USDC rates.',
     auditBadge: 'Audited',
-    explorerUrl: '',
+    explorerUrl: EXPLORER.address(CONTRACTS.SPARK_VAULT),
     vaultUrl: 'https://app.spark.fi/markets/',
   },
 } as const
@@ -142,7 +144,7 @@ export const IDLE_CONFIG = {
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
 // Only protocols the MILP optimizer considers for MVP
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi']
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'euler_v2', 'spark']
 
 // Document: Session key allowedFunctions per protocol
 export const SESSION_KEY_SELECTORS = {
@@ -159,7 +161,7 @@ export const SESSION_KEY_SELECTORS = {
     redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
   },
   spark: {
-    supply:   '0x00000000',  // placeholder — coming soon
-    withdraw: '0x00000000',  // placeholder — coming soon
+    deposit: '0x6e553f65',  // deposit(uint256,address)  — ERC-4626
+    redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
   },
 } as const

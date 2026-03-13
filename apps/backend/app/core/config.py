@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     AAVE_V3_POOL: str = "0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29"
     BENQI_POOL: str = "0x6ac240d13b85a698ee407617e51f9baab9e395a9"
     EULER_VAULT: str = "0x372193056e6c57040548ce833ee406509a457632"
+    SPARK_VAULT: str = ""  # ERC-4626 mock vault on Fuji (deploy same contract as Euler mock)
     USDC_ADDRESS: str = "0x5425890298aed601595a70AB815c96711a31Bc65"
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 

@@ -38,6 +38,8 @@ class RateValidator:
     DEFILLAMA_POOL_IDS = {
         "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",   # Aave v3 Avalanche USDC
         "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",   # Benqi USDC
+        "euler_v2": "e1db168e-7c9d-4285-9d3f-ba83a9ecf105",  # Euler V2 Avalanche USDC
+        "spark":   "e96cbd55-a0a0-446a-89ba-ada6e2991d50",   # Spark Savings Avalanche USDC
     }
 
     def __init__(self):

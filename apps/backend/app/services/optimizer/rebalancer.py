@@ -75,6 +75,8 @@ class Rebalancer:
             "benqi": self.settings.BENQI_POOL,
             "euler_v2": self.settings.EULER_VAULT,
         }
+        if self.settings.SPARK_VAULT:
+            self._protocol_addresses["spark"] = self.settings.SPARK_VAULT
 
     async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
         """Read the on-chain USDC balance sitting idle in the smart account."""

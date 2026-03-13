@@ -34,7 +34,7 @@ import { api } from "@/lib/api-client";
 import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
-import { createSmartAccount, grantAndSerializeSessionKey, BENQI_ABI } from "@/lib/zerodev";
+import { createSmartAccount, grantAndSerializeSessionKey } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
 
@@ -97,7 +97,6 @@ type ActivationPhase =
   | "creating-client"
   | "granting-session-key"
   | "registering-backend"
-  | "deploying-funds"
   | "done"
   | "error";
 
@@ -107,8 +106,7 @@ const PHASE_LABELS: Record<ActivationPhase, string> = {
   "creating-client": "Connecting to your smart account…",
   "granting-session-key": "Granting agent permissions…",
   "registering-backend": "Registering with optimizer…",
-  "deploying-funds": "Deploying funds to protocols…",
-  done: "Agent activated!",
+  done: "Agent activated — optimizer will deploy funds shortly!",
   error: "Activation failed",
 };
 
@@ -300,6 +298,7 @@ export default function OnboardingPage() {
           AAVE_POOL: CONTRACTS.AAVE_POOL,
           BENQI_POOL: CONTRACTS.BENQI_POOL,
           EULER_VAULT: CONTRACTS.EULER_VAULT,
+          SPARK_VAULT: CONTRACTS.SPARK_VAULT,
           USDC: CONTRACTS.USDC,
         },
         {
@@ -322,34 +321,8 @@ export default function OnboardingPage() {
         },
       });
 
-      // Phase 4: Deploy USDC from smart account to Benqi (best-effort)
-      setActivationPhase("deploying-funds");
-      try {
-        await kernelClient.sendTransaction({
-          calls: [
-            {
-              to: CONTRACTS.USDC,
-              value: 0n,
-              data: encodeFunctionData({
-                abi: ERC20_ABI,
-                functionName: "approve",
-                args: [CONTRACTS.BENQI_POOL, amountWei],
-              }),
-            },
-            {
-              to: CONTRACTS.BENQI_POOL,
-              value: 0n,
-              data: encodeFunctionData({
-                abi: BENQI_ABI,
-                functionName: "mint",
-                args: [amountWei],
-              }),
-            },
-          ],
-        });
-      } catch (deployErr) {
-        console.warn("Initial fund deployment skipped — agent will handle it:", deployErr);
-      }
+      // Phase 4: Done — optimizer will detect idle USDC and deploy optimally
+      // (no hardcoded protocol deposit; rebalancer picks the best allocation)
 
       // Best-effort diversification preference save
       try {
@@ -810,8 +783,8 @@ export default function OnboardingPage() {
                   </div>
 
                   <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                    {(["transferring-usdc", "creating-client", "granting-session-key", "registering-backend", "deploying-funds"] as const).map((phase) => {
-                      const allPhases = ["transferring-usdc", "creating-client", "granting-session-key", "registering-backend", "deploying-funds"] as const;
+                    {(["transferring-usdc", "creating-client", "granting-session-key", "registering-backend"] as const).map((phase) => {
+                      const allPhases = ["transferring-usdc", "creating-client", "granting-session-key", "registering-backend"] as const;
                       const phaseIndex = allPhases.indexOf(phase);
                       const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                       const isDone = currentIndex > phaseIndex || activationPhase === "done";
@@ -938,7 +911,7 @@ export default function OnboardingPage() {
               </p>
               <p className="text-sm text-[#5C5550]">
                 Your agent is now optimizing yield across Avalanche protocols.
-                It will watch rates and rebalance automatically.
+                It will deploy your funds to the best protocol(s) and rebalance automatically.
               </p>
               <p className="text-xs text-[#8A837C]">
                 Redirecting to dashboard…
