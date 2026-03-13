@@ -34,7 +34,7 @@ import { api } from "@/lib/api-client";
 import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
-import { createSmartAccount, grantAndSerializeSessionKey } from "@/lib/zerodev";
+import { createSmartAccount, approveAllProtocols, grantAndSerializeSessionKey } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
 
@@ -95,6 +95,7 @@ type ActivationPhase =
   | "idle"
   | "transferring-usdc"
   | "creating-client"
+  | "approving-protocols"
   | "granting-session-key"
   | "registering-backend"
   | "done"
@@ -104,6 +105,7 @@ const PHASE_LABELS: Record<ActivationPhase, string> = {
   idle: "",
   "transferring-usdc": "Transferring USDC to smart account…",
   "creating-client": "Connecting to your smart account…",
+  "approving-protocols": "Deploying smart account & setting approvals…",
   "granting-session-key": "Granting agent permissions…",
   "registering-backend": "Registering with optimizer…",
   done: "Agent activated — optimizer will deploy funds shortly!",
@@ -288,6 +290,18 @@ export default function OnboardingPage() {
       setActivationPhase("creating-client");
       const viemAccount = await toViemAccount({ wallet });
       const { kernelAccount, kernelClient } = await createSmartAccount(viemAccount);
+
+      // Phase 1b: Deploy smart account on-chain & approve USDC for all protocols
+      // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
+      // and sets max USDC approvals so the optimizer can deposit into any protocol.
+      setActivationPhase("approving-protocols");
+      await approveAllProtocols(kernelClient, {
+        USDC: CONTRACTS.USDC,
+        AAVE_POOL: CONTRACTS.AAVE_POOL,
+        BENQI_POOL: CONTRACTS.BENQI_POOL,
+        EULER_VAULT: CONTRACTS.EULER_VAULT,
+        SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+      });
 
       // Phase 2: Grant session key
       setActivationPhase("granting-session-key");
@@ -783,8 +797,8 @@ export default function OnboardingPage() {
                   </div>
 
                   <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                    {(["transferring-usdc", "creating-client", "granting-session-key", "registering-backend"] as const).map((phase) => {
-                      const allPhases = ["transferring-usdc", "creating-client", "granting-session-key", "registering-backend"] as const;
+                    {(["transferring-usdc", "creating-client", "approving-protocols", "granting-session-key", "registering-backend"] as const).map((phase) => {
+                      const allPhases = ["transferring-usdc", "creating-client", "approving-protocols", "granting-session-key", "registering-backend"] as const;
                       const phaseIndex = allPhases.indexOf(phase);
                       const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                       const isDone = currentIndex > phaseIndex || activationPhase === "done";
@@ -793,6 +807,7 @@ export default function OnboardingPage() {
                       const icons: Record<string, typeof Shield> = {
                         "transferring-usdc": Wallet,
                         "creating-client": Zap,
+                        "approving-protocols": CheckCircle2,
                         "granting-session-key": Shield,
                         "registering-backend": ArrowRight,
                         "deploying-funds": Wallet,
