@@ -15,10 +15,18 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
     return null;
   }
 
-  // Build pie data from allocations
+  // Build pie data from allocations — include idle USDC so users see their funds
   const chartData = portfolio.allocations
-    .filter((a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0)
+    .filter((a) => Number(a.amountUsdc) > 0)
     .map((a) => {
+      if (a.protocolId === "idle") {
+        return {
+          name: "Idle USDC",
+          value: Number(a.amountUsdc),
+          color: "#C4BDB6",  // warm gray for undeployed funds
+          protocolId: a.protocolId,
+        };
+      }
       const protocolConfig = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
       return {
         name: protocolConfig?.name || a.protocolId,

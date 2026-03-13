@@ -183,7 +183,13 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <p className="text-[10px] text-[#8A837C]">Active markets</p>
-                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{stats.activeProtocols}</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
+                    {stats.activeProtocols > 0
+                      ? stats.activeProtocols
+                      : portfolio?.allocations.some((a) => a.protocolId === "idle")
+                        ? "Pending"
+                        : "0"}
+                  </p>
                 </div>
               </div>
             </div>

@@ -20,7 +20,7 @@ logger = logging.getLogger("snowmind")
 router = APIRouter()  # All portfolio reads are public
 
 # Protocol display names
-_NAMES = {"benqi": "Benqi", "aave_v3": "Aave V3", "euler_v2": "Euler V2"}
+_NAMES = {"benqi": "Benqi", "aave_v3": "Aave V3", "euler_v2": "Euler V2", "spark": "Spark Savings"}
 
 # ERC-20 balanceOf ABI
 _ERC20_ABI = [
