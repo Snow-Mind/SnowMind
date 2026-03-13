@@ -419,9 +419,13 @@ export async function grantAndSerializeSessionKey(
     },
   })
 
-  // CRITICAL: Serialize — this is what we send to backend, not the private key
-  // Kernel doc: "The serialization step is crucial."
-  const serializedPermission = await serializePermissionAccount(permissionClient.account)
+  // CRITICAL: Serialize WITH the ephemeral session private key embedded so the
+  // backend execution service can reconstruct the signer via deserializePermissionAccount.
+  // The key is ephemeral, policy-constrained, and time-limited.
+  const serializedPermission = await serializePermissionAccount(
+    permissionClient.account,
+    sessionPrivateKey,
+  )
 
   return {
     serializedPermission,
