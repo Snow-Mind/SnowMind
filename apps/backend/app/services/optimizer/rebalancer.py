@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.services.execution.session_key import (
     get_active_session_key,
+    get_active_session_key_record,
     revoke_session_key,
 )
 from app.services.optimizer.milp_solver import (
@@ -112,11 +113,13 @@ class Rebalancer:
         db = get_supabase()
 
         # 0. Early session-key check — skip expensive pipeline if no key
-        session_key = get_active_session_key(db, UUID(account_id))
-        if not session_key:
+        session_key_record = get_active_session_key_record(db, UUID(account_id))
+        if not session_key_record:
             logger.debug("No active session key for %s — skipping", account_id)
             return await self._log(db, account_id, "skipped",
                                    reason="No active session key")
+
+        allowed_protocols = set(session_key_record["allowed_protocols"])
 
         # 1. Fetch live spot rates
         spot_rates_raw = await self.rate_fetcher.fetch_active_rates()
@@ -152,13 +155,32 @@ class Rebalancer:
 
         # 3. Build protocol inputs (risk scoring bypassed — protocols are pre-vetted whitelist)
         protocol_inputs: list[ProtocolInput] = []
+        filtered_out: list[str] = []
         for pid, rate in twap_rates.items():
+            if pid not in allowed_protocols:
+                filtered_out.append(pid)
+                continue
             protocol_inputs.append(
                 ProtocolInput(
                     protocol_id=pid,
                     apy=rate.apy,
                     risk_score=Decimal("0"),
                 )
+            )
+
+        if filtered_out:
+            logger.info(
+                "Session key for %s excludes protocols: %s",
+                smart_account_address,
+                ", ".join(sorted(filtered_out)),
+            )
+
+        if not protocol_inputs:
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason="No protocols permitted by active session key",
             )
 
         # 4. Get current allocations from DB + on-chain idle USDC
@@ -201,6 +223,11 @@ class Rebalancer:
             total_usd, len(protocol_inputs),
         )
         result = pick_best_protocol(base_inp)
+        apy_by_protocol = {p.protocol_id: p.apy for p in protocol_inputs}
+        ranked_protocols = [
+            p.protocol_id
+            for p in sorted(protocol_inputs, key=lambda p: p.apy, reverse=True)
+        ]
 
         # 6. Check rebalance gate
         if not result.is_rebalance_needed:
@@ -251,6 +278,60 @@ class Rebalancer:
             raise  # Let scheduler see ValueError as non-retryable
         except Exception as exc:
             logger.exception("Rebalance execution failed for %s", smart_account_address)
+
+            # Initial deployment fallback: if top protocol fails, try next-best protocol
+            # so idle USDC is still put to work.
+            has_existing_positions = any(v > Decimal("1") for v in current.values())
+            is_initial_deployment = (not has_existing_positions) and idle_usdc > Decimal("1")
+
+            if is_initial_deployment and ranked_protocols:
+                primary_protocol = max(result.allocations, key=result.allocations.get)
+                attempted = [primary_protocol]
+                for fallback_protocol in ranked_protocols:
+                    if fallback_protocol == primary_protocol:
+                        continue
+                    attempted.append(fallback_protocol)
+                    fallback_target = {fallback_protocol: total_usd}
+                    logger.warning(
+                        "Initial deployment fallback for %s: trying %s after %s failed",
+                        smart_account_address,
+                        fallback_protocol,
+                        primary_protocol,
+                    )
+                    try:
+                        tx_hash = await self.execute_rebalance(
+                            account_id=account_id,
+                            smart_account_address=smart_account_address,
+                            target_allocations=fallback_target,
+                        )
+                        if tx_hash:
+                            return await self._log(
+                                db,
+                                account_id,
+                                "executed",
+                                proposed=fallback_target,
+                                tx_hash=tx_hash,
+                                apr_improvement=apy_by_protocol.get(fallback_protocol, Decimal("0")),
+                            )
+                    except ValueError:
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Fallback deployment failed for %s on %s",
+                            smart_account_address,
+                            fallback_protocol,
+                        )
+
+                return await self._log(
+                    db,
+                    account_id,
+                    "failed",
+                    reason=(
+                        f"Execution failed on all candidate protocols: {', '.join(attempted)}"
+                    ),
+                    proposed=result.allocations,
+                )
+
             return await self._log(db, account_id, "failed",
                                    reason=str(exc),
                                    proposed=result.allocations)
@@ -267,7 +348,7 @@ class Rebalancer:
             tx_hash=tx_hash,
             apr_improvement=result.expected_apy - compute_weighted_apy(
                 current,
-                {p.protocol_id: p.apy for p in protocol_inputs},
+                apy_by_protocol,
             ),
         )
 

@@ -10,6 +10,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import TypedDict
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -21,6 +22,11 @@ logger = logging.getLogger("snowmind")
 
 # 12 bytes recommended for AES-GCM nonce
 _NONCE_BYTES = 12
+
+
+class ActiveSessionKey(TypedDict):
+    serialized_permission: str
+    allowed_protocols: list[str]
 
 
 def _get_aes_key() -> bytes:
@@ -124,10 +130,21 @@ def get_active_session_key(db: Client, account_id: UUID) -> str | None:
 
     Returns ``None`` when no active (and non-expired) key exists.
     """
+    record = get_active_session_key_record(db, account_id)
+    if not record:
+        return None
+    return record["serialized_permission"]
+
+
+def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSessionKey | None:
+    """Fetch active session key plus protocol scope metadata.
+
+    Returns ``None`` when no active (and non-expired) key exists.
+    """
     now_iso = datetime.now(timezone.utc).isoformat()
     result = (
         db.table("session_keys")
-        .select("serialized_permission, expires_at")
+        .select("serialized_permission, expires_at, allowed_protocols")
         .eq("account_id", str(account_id))
         .eq("is_active", True)
         .gte("expires_at", now_iso)
@@ -138,7 +155,18 @@ def get_active_session_key(db: Client, account_id: UUID) -> str | None:
     if not result.data:
         return None
 
-    return decrypt_session_key(result.data[0]["serialized_permission"])
+    row = result.data[0]
+    raw_allowed = row.get("allowed_protocols")
+    allowed_protocols = (
+        [str(p) for p in raw_allowed]
+        if isinstance(raw_allowed, list) and raw_allowed
+        else ["aave_v3", "benqi", "euler_v2", "spark"]
+    )
+
+    return {
+        "serialized_permission": decrypt_session_key(row["serialized_permission"]),
+        "allowed_protocols": allowed_protocols,
+    }
 
 
 def revoke_session_key(db: Client, account_id: UUID) -> int:

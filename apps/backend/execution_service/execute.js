@@ -11,9 +11,10 @@ import {
   maxUint256,
   parseUnits,
 } from "viem"
-import { avalancheFuji } from "viem/chains"
+import { avalancheFuji, avalanche } from "viem/chains"
 
-const CHAIN         = avalancheFuji
+const CHAIN_ID      = Number(process.env.AVALANCHE_CHAIN_ID || 43113)
+const CHAIN         = CHAIN_ID === 43114 ? avalanche : avalancheFuji
 const ENTRYPOINT    = getEntryPoint("0.7")
 const ZERODEV_ID    = process.env.ZERODEV_PROJECT_ID
 const BUNDLER_URL   = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
@@ -79,15 +80,44 @@ const REGISTRY_ABI = [
     ], outputs: [] },
 ]
 
-async function getKernelClient(serializedPermission) {
+function formatExecutionError(err) {
+  const message = err?.shortMessage || err?.message || "Unknown execution error"
+  const details = err?.details ? ` | details=${err.details}` : ""
+  const meta = err?.metaMessages?.length ? ` | meta=${err.metaMessages.join(" ; ")}` : ""
+  const cause = err?.cause?.message ? ` | cause=${err.cause.message}` : ""
+  return `${message}${details}${meta}${cause}`
+}
+
+function isLikelyPaymasterError(err) {
+  const text = [
+    err?.shortMessage,
+    err?.message,
+    err?.details,
+    err?.cause?.message,
+    ...(Array.isArray(err?.metaMessages) ? err.metaMessages : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+
+  return (
+    text.includes("paymaster") ||
+    text.includes("sponsoruseroperation") ||
+    text.includes("pm_")
+  )
+}
+
+async function getKernelClient(serializedPermission, options = { withPaymaster: true }) {
   const publicClient = createPublicClient({
     chain: CHAIN,
     transport: http(process.env.AVALANCHE_RPC_URL),
   })
-  const paymasterClient = createZeroDevPaymasterClient({
-    chain: CHAIN,
-    transport: http(PAYMASTER_URL),
-  })
+  const paymasterClient = options.withPaymaster
+    ? createZeroDevPaymasterClient({
+        chain: CHAIN,
+        transport: http(PAYMASTER_URL),
+      })
+    : null
 
   // Kernel doc: "deserializePermissionAccount reconstructs full kernel client"
   const permissionAccount = await deserializePermissionAccount(
@@ -97,16 +127,21 @@ async function getKernelClient(serializedPermission) {
     serializedPermission,
   )
 
-  return createKernelAccountClient({
+  const clientConfig = {
     account: permissionAccount,
     chain: CHAIN,
     bundlerTransport: http(BUNDLER_URL),
-    paymaster: {
+  }
+
+  if (paymasterClient) {
+    clientConfig.paymaster = {
       getPaymasterData(userOperation) {
         return paymasterClient.sponsorUserOperation({ userOperation })
       },
-    },
-  })
+    }
+  }
+
+  return createKernelAccountClient(clientConfig)
 }
 
 function resolveContractKey(protocol, contracts) {
@@ -126,7 +161,11 @@ export async function executeRebalance({
   deposits,      // [{ protocol: "aave_v3", amountUSDC: 3000 }]
   contracts,     // { AAVE_POOL, BENQI_POOL, EULER_VAULT, SPARK_VAULT, USDC, REGISTRY }
 }) {
-  const kernelClient = await getKernelClient(serializedPermission)
+  if (!ZERODEV_ID) {
+    throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
+  }
+
+  const kernelClient = await getKernelClient(serializedPermission, { withPaymaster: true })
   const calls = []
 
   // ── WITHDRAWALS FIRST — ensure funds available before deposits ─────────────
@@ -256,6 +295,20 @@ export async function executeRebalance({
   }
 
   // Single atomic UserOp — kernel doc: "Batched as a single atomic UserOp"
-  const txHash = await kernelClient.sendTransaction({ calls })
-  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+  if (!calls.length) {
+    throw new Error("No executable calls generated for rebalance")
+  }
+
+  try {
+    const txHash = await kernelClient.sendTransaction({ calls })
+    return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+  } catch (err) {
+    // Fallback: if sponsorship fails, retry without paymaster.
+    if (isLikelyPaymasterError(err)) {
+      const noPaymasterClient = await getKernelClient(serializedPermission, { withPaymaster: false })
+      const txHash = await noPaymasterClient.sendTransaction({ calls })
+      return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+    }
+    throw new Error(formatExecutionError(err))
+  }
 }
