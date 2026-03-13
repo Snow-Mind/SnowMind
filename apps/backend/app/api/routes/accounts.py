@@ -1,9 +1,10 @@
 """Account registration, lookup, and session-key management."""
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from supabase import Client
 
@@ -82,6 +83,10 @@ async def _do_register(
     if req.session_key_data:
         store_session_key(db, account["id"], req.session_key_data)
 
+    # Fire-and-forget: trigger immediate rebalance so idle USDC gets deployed
+    if req.session_key_data:
+        asyncio.create_task(_trigger_initial_rebalance(account["id"], address))
+
     return AccountResponse(
         id=account["id"],
         address=account["address"],
@@ -90,6 +95,22 @@ async def _do_register(
         created_at=account["created_at"],
         diversification_preference=account.get("diversification_preference", "balanced"),
     )
+
+
+async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
+    """Best-effort immediate rebalance after registration.
+
+    Runs as a fire-and-forget task so the registration response is not delayed.
+    If it fails (e.g. no idle USDC yet), the cron scheduler will pick it up.
+    """
+    await asyncio.sleep(3)  # Brief delay for session key to fully propagate
+    try:
+        from app.services.optimizer.rebalancer import Rebalancer
+        rebalancer = Rebalancer()
+        result = await rebalancer.check_and_rebalance(account_id, address)
+        logger.info("Initial rebalance for %s: %s", address, result.get("status", "unknown"))
+    except Exception as exc:
+        logger.warning("Initial rebalance failed for %s (cron will retry): %s", address, exc)
 
 
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)

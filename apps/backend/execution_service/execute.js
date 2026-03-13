@@ -44,6 +44,23 @@ const BENQI_ABI = [
     outputs: [{ name: "", type: "uint256" }] },
 ]
 
+// ERC-4626 vault ABI — used by Euler V2 and Spark mock vaults
+const ERC4626_ABI = [
+  { name: "deposit", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "assets",   type: "uint256" },
+      { name: "receiver", type: "address" },
+    ],
+    outputs: [{ name: "shares", type: "uint256" }] },
+  { name: "redeem",  type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "shares",   type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner",    type: "address" },
+    ],
+    outputs: [{ name: "assets", type: "uint256" }] },
+]
+
 const ERC20_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable",
     inputs: [
@@ -94,8 +111,10 @@ async function getKernelClient(serializedPermission) {
 
 function resolveContractKey(protocol, contracts) {
   const map = {
-    aave_v3: "AAVE_POOL",
-    benqi:   "BENQI_POOL",
+    aave_v3:  "AAVE_POOL",
+    benqi:    "BENQI_POOL",
+    euler_v2: "EULER_VAULT",
+    spark:    "SPARK_VAULT",
   }
   return contracts[map[protocol]] || null
 }
@@ -105,7 +124,7 @@ export async function executeRebalance({
   smartAccountAddress,
   withdrawals,   // [{ protocol: "benqi", amountUSDC: 3000, qiTokenAmount: "12345678" }]
   deposits,      // [{ protocol: "aave_v3", amountUSDC: 3000 }]
-  contracts,     // { AAVE_POOL, BENQI_POOL, USDC, REGISTRY }
+  contracts,     // { AAVE_POOL, BENQI_POOL, EULER_VAULT, SPARK_VAULT, USDC, REGISTRY }
 }) {
   const kernelClient = await getKernelClient(serializedPermission)
   const calls = []
@@ -135,24 +154,45 @@ export async function executeRebalance({
           args: [BigInt(qiTokenAmount)],
         }),
       })
+    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      // ERC-4626: redeem(shares, receiver, owner) — use MAX for full exit
+      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
+      calls.push({
+        to: contracts.EULER_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI, functionName: "redeem",
+          args: [shares, smartAccountAddress, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "spark" && contracts.SPARK_VAULT) {
+      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
+      calls.push({
+        to: contracts.SPARK_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI, functionName: "redeem",
+          args: [shares, smartAccountAddress, smartAccountAddress],
+        }),
+      })
     }
   }
 
   // ── REGISTRY LOG — between withdrawals and deposits ────────────────────────
   for (const w of withdrawals) {
     for (const d of deposits) {
-      calls.push({
-        to: contracts.REGISTRY,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: REGISTRY_ABI, functionName: "logRebalance",
-          args: [
-            resolveContractKey(w.protocol, contracts),
-            resolveContractKey(d.protocol, contracts),
-            parseUnits(String(w.amountUSDC), 6),
-          ],
-        }),
-      })
+      const from = resolveContractKey(w.protocol, contracts)
+      const to = resolveContractKey(d.protocol, contracts)
+      if (from && to) {
+        calls.push({
+          to: contracts.REGISTRY,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: REGISTRY_ABI, functionName: "logRebalance",
+            args: [from, to, parseUnits(String(w.amountUSDC), 6)],
+          }),
+        })
+      }
     }
   }
 
@@ -191,6 +231,25 @@ export async function executeRebalance({
         data: encodeFunctionData({
           abi: BENQI_ABI, functionName: "mint",
           args: [amount],
+        }),
+      })
+    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      // ERC-4626: deposit(assets, receiver)
+      calls.push({
+        to: contracts.EULER_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI, functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "spark" && contracts.SPARK_VAULT) {
+      calls.push({
+        to: contracts.SPARK_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI, functionName: "deposit",
+          args: [amount, smartAccountAddress],
         }),
       })
     }

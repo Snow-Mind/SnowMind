@@ -363,6 +363,8 @@ class Rebalancer:
             "contracts": {
                 "AAVE_POOL": self.settings.AAVE_V3_POOL,
                 "BENQI_POOL": self.settings.BENQI_POOL,
+                "EULER_VAULT": self.settings.EULER_VAULT,
+                "SPARK_VAULT": self.settings.SPARK_VAULT,
                 "USDC": self.settings.USDC_ADDRESS,
                 "REGISTRY": self.settings.REGISTRY_CONTRACT_ADDRESS,
             },

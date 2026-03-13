@@ -108,7 +108,7 @@ def store_session_key(
                 "key_address": key_address,
                 "expires_at": expires_at,
                 "is_active": True,
-                "allowed_protocols": session_key_data.get("allowed_protocols", ["benqi", "aave_v3"]),
+                "allowed_protocols": session_key_data.get("allowed_protocols", ["aave_v3", "benqi", "euler_v2", "spark"]),
                 "max_amount_per_tx": session_key_data.get("max_amount_per_tx", "0"),
             }
         )
