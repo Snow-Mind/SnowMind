@@ -342,6 +342,7 @@ export default function OnboardingPage() {
           serializedPermission: sessionKeyResult.serializedPermission,
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
           expiresAt: sessionKeyResult.expiresAt,
+          allowedProtocols: Array.from(selectedProtocols),
         },
       });
 

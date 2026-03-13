@@ -14,6 +14,7 @@ export interface RegisterAccountRequest {
     serializedPermission: string;
     sessionKeyAddress: string;
     expiresAt: number;
+    allowedProtocols?: string[];
   };
 }
 
