@@ -317,6 +317,22 @@ export default function LandingPage() {
         </div>
       </div>
 
+      {/* ═══ LANDING VIDEO ═══ */}
+      <section className="bg-[#F5F0EB] px-6 pb-6 md:pb-10">
+        <div className="mx-auto max-w-[1100px] overflow-hidden rounded-2xl border border-[#E8E2DA] bg-black">
+          <video
+            src="/landing-demo.mp4"
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            controls={false}
+            className="block h-auto w-full"
+          />
+        </div>
+      </section>
+
       {/* ═══ HOW IT WORKS ═══ */}
       <section
         id="how-it-works"
