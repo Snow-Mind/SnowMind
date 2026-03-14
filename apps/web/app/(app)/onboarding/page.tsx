@@ -305,13 +305,15 @@ export default function OnboardingPage() {
       // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
       // and sets max USDC approvals so the optimizer can deposit into any protocol.
       setActivationPhase("approving-protocols");
-      await approveAllProtocols(kernelClient, {
+      const approvalResult = await approveAllProtocols(kernelClient, {
         USDC: CONTRACTS.USDC,
         AAVE_POOL: CONTRACTS.AAVE_POOL,
         BENQI_POOL: CONTRACTS.BENQI_POOL,
         EULER_VAULT: CONTRACTS.EULER_VAULT,
         SPARK_VAULT: CONTRACTS.SPARK_VAULT,
       });
+      console.log("[SnowMind] Smart account deployed & approvals set:", approvalResult.txHash);
+      toast.success("Smart account deployed on-chain!");
 
       // Phase 3: Grant session key
       setActivationPhase("granting-session-key");
