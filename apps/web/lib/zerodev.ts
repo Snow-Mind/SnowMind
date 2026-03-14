@@ -419,12 +419,28 @@ export async function grantAndSerializeSessionKey(
     },
   })
 
+  const sudoValidator = kernelAccount.kernelPluginManager?.sudoValidator
+  if (!sudoValidator) {
+    throw new Error("Missing sudo validator on kernel account; cannot approve permission plugin")
+  }
+
+  // Explicitly produce the plugin enable signature from the sudo context.
+  // This avoids kernel-side EnableNotApproved reverts during validateUserOp.
+  const enableSignature = await permissionAccount.kernelPluginManager.getPluginEnableSignature(
+    permissionAccount.address,
+    permissionPlugin,
+  )
+
   // CRITICAL: Serialize WITH the ephemeral session private key embedded so the
   // backend execution service can reconstruct the signer via deserializePermissionAccount.
   // The key is ephemeral, policy-constrained, and time-limited.
   const serializedPermission = await serializePermissionAccount(
     permissionClient.account,
     sessionPrivateKey,
+    enableSignature,
+    undefined,
+    permissionPlugin,
+    true,
   )
 
   return {

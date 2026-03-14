@@ -2,10 +2,12 @@ import { deserializePermissionAccount } from "@zerodev/permissions"
 import {
   createKernelAccountClient,
   createZeroDevPaymasterClient,
+  KernelV3_1AccountAbi,
 } from "@zerodev/sdk"
 import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants"
 import {
   createPublicClient,
+  decodeErrorResult,
   http,
   encodeFunctionData,
   maxUint256,
@@ -83,9 +85,35 @@ const REGISTRY_ABI = [
 function formatExecutionError(err) {
   const message = err?.shortMessage || err?.message || "Unknown execution error"
   const details = err?.details ? ` | details=${err.details}` : ""
+  const kernelReason = decodeKernelValidationReason(err)
+  const kernelDecoded = kernelReason ? ` | kernel=${kernelReason}` : ""
   const meta = err?.metaMessages?.length ? ` | meta=${err.metaMessages.join(" ; ")}` : ""
   const cause = err?.cause?.message ? ` | cause=${err.cause.message}` : ""
-  return `${message}${details}${meta}${cause}`
+  return `${message}${details}${kernelDecoded}${meta}${cause}`
+}
+
+function decodeKernelValidationReason(err) {
+  const text = [
+    err?.details,
+    err?.cause?.details,
+    ...(Array.isArray(err?.metaMessages) ? err.metaMessages : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+
+  const match = text.match(/AA23 reverted\s+(0x[0-9a-fA-F]{8})/)
+  if (!match) return ""
+
+  const selector = match[1].toLowerCase()
+  try {
+    const decoded = decodeErrorResult({ abi: KernelV3_1AccountAbi, data: selector })
+    if (decoded?.errorName === "EnableNotApproved") {
+      return "EnableNotApproved (session key plugin enable signature missing/invalid)"
+    }
+    return decoded?.errorName || selector
+  } catch {
+    return selector
+  }
 }
 
 function isLikelyPaymasterError(err) {
