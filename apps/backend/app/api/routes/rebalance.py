@@ -5,6 +5,7 @@ frontend can use the address it already has from ZeroDev.
 """
 
 import logging
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supabase import Client
@@ -15,10 +16,63 @@ from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryResponse
+from app.services.execution.session_key import get_active_session_key
+from app.services.optimizer.rebalancer import Rebalancer
 
 logger = logging.getLogger("snowmind")
 
 router = APIRouter()  # Auth applied per-endpoint
+
+
+def _classify_reason(
+    *,
+    is_active: bool,
+    has_session_key: bool,
+    idle_usdc: Decimal,
+    last_status: str | None,
+    last_skip_reason: str | None,
+) -> tuple[str, str]:
+    """Return machine-readable reason code + human detail."""
+    if not is_active:
+        return ("ACCOUNT_INACTIVE", "Account is inactive")
+
+    if not has_session_key:
+        return ("NO_ACTIVE_SESSION_KEY", "No active session key")
+
+    if last_status == "executed":
+        return ("HEALTHY", "Latest rebalance executed")
+
+    if last_status == "failed":
+        detail = last_skip_reason or "Execution failed"
+        if "validateUserOp" in detail or "AA23" in detail:
+            return ("USEROP_VALIDATE_REVERT", detail)
+        if "EnableNotApproved" in detail:
+            return ("SESSION_KEY_NOT_APPROVED", detail)
+        return ("EXECUTION_FAILED", detail)
+
+    if last_status == "skipped":
+        detail = last_skip_reason or "Skipped"
+        if "No active session key" in detail:
+            return ("NO_ACTIVE_SESSION_KEY", detail)
+        if "No deposited balance" in detail:
+            return ("NO_DEPOSITED_BALANCE", detail)
+        if "No protocols permitted by active session key" in detail:
+            return ("NO_PERMITTED_PROTOCOLS", detail)
+        if "Session key invalid" in detail:
+            return ("SESSION_KEY_INVALID", detail)
+        if "Rebalance not worth it" in detail:
+            return ("REBALANCE_NOT_WORTH_IT", detail)
+        if "Last rebalance too recent" in detail:
+            return ("MIN_INTERVAL_NOT_MET", detail)
+        return ("SKIPPED", detail)
+
+    if idle_usdc > Decimal("0.01"):
+        return (
+            "IDLE_FUNDS_PENDING_DEPLOYMENT",
+            f"Idle USDC detected ({idle_usdc:.2f}) but no executed rebalance yet",
+        )
+
+    return ("UNKNOWN", "No explicit blocker detected")
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -90,6 +144,16 @@ async def get_rebalance_status(
     account = await _lookup_account(db, address)
     addr = account["address"]
     account_id = account["id"]
+    is_active = bool(account.get("is_active", True))
+
+    has_session_key = bool(get_active_session_key(db, account_id))
+
+    idle_usdc = Decimal("0")
+    try:
+        rebalancer = Rebalancer()
+        idle_usdc = await rebalancer._get_idle_usdc_balance(addr)
+    except Exception as exc:
+        logger.debug("Idle balance diagnostic failed for %s: %s", addr, exc)
 
     last = (
         db.table("rebalance_logs")
@@ -101,19 +165,37 @@ async def get_rebalance_status(
     )
 
     if not last.data:
+        reason_code, reason_detail = _classify_reason(
+            is_active=is_active,
+            has_session_key=has_session_key,
+            idle_usdc=idle_usdc,
+            last_status=None,
+            last_skip_reason=None,
+        )
         return {
             "smartAccountAddress": addr,
             "lastRebalance": None,
             "status": "idle",
             "lastLog": None,
+            "reasonCode": reason_code,
+            "reasonDetail": reason_detail,
         }
 
     row = last.data[0]
+    reason_code, reason_detail = _classify_reason(
+        is_active=is_active,
+        has_session_key=has_session_key,
+        idle_usdc=idle_usdc,
+        last_status=row.get("status"),
+        last_skip_reason=row.get("skip_reason"),
+    )
     return {
         "smartAccountAddress": addr,
         "lastRebalance": row.get("created_at"),
         "status": row.get("status"),
         "lastLog": row,
+        "reasonCode": reason_code,
+        "reasonDetail": reason_detail,
     }
 
 
