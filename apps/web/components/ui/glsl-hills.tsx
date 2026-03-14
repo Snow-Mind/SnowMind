@@ -172,9 +172,9 @@ const GLSLHills = ({
       1,
       10000,
     );
-    const clock = new THREE.Clock();
     const lookAtTarget = new THREE.Vector3(0, 28, 0);
     let animationId: number;
+    let lastFrameMs = performance.now();
 
     const resize = () => {
       if (!canvasRef.current) return;
@@ -186,7 +186,9 @@ const GLSLHills = ({
     };
 
     const renderLoop = () => {
-      const delta = clock.getDelta();
+      const nowMs = performance.now();
+      const delta = Math.max(0, (nowMs - lastFrameMs) / 1000);
+      lastFrameMs = nowMs;
 
       if (scrollProgressRef) {
         const progress = scrollProgressRef.current;

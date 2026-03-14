@@ -18,6 +18,7 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
 }
 
 const REALTIME_DISABLE_KEY = "snowmind_realtime_disabled_until"
+const REALTIME_WARNED_KEY = "snowmind_realtime_warned"
 
 function isRealtimeTemporarilyDisabled(): boolean {
   if (typeof window === "undefined") return false
@@ -30,6 +31,16 @@ function isRealtimeTemporarilyDisabled(): boolean {
 function disableRealtimeFor(ms: number): void {
   if (typeof window === "undefined") return
   window.localStorage.setItem(REALTIME_DISABLE_KEY, String(Date.now() + ms))
+}
+
+function logRealtimeFallbackOnce(status: string, message: string): void {
+  if (typeof window === "undefined") return
+  if (window.localStorage.getItem(REALTIME_WARNED_KEY)) return
+  window.localStorage.setItem(REALTIME_WARNED_KEY, "1")
+
+  if (process.env.NODE_ENV !== "production") {
+    console.warn("[SnowMind] Supabase Realtime subscription failed:", status, message)
+  }
 }
 
 /**
@@ -84,7 +95,7 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
       })
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.warn("[SnowMind] Supabase Realtime subscription failed:", status, err?.message ?? "")
+          logRealtimeFallbackOnce(status, err?.message ?? "")
           // Circuit-breaker: avoid repeated websocket failures and rely on polling for 15 min.
           disableRealtimeFor(15 * 60 * 1000)
           if (channelRef.current) {
