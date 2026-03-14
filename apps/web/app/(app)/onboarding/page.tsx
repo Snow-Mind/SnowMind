@@ -34,7 +34,12 @@ import { api } from "@/lib/api-client";
 import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
-import { createSmartAccount, approveAllProtocols, grantAndSerializeSessionKey } from "@/lib/zerodev";
+import {
+  createSmartAccount,
+  approveAllProtocols,
+  grantAndSerializeSessionKey,
+  deployInitialToProtocol,
+} from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
 
@@ -314,6 +319,51 @@ export default function OnboardingPage() {
       });
       console.log("[SnowMind] Smart account deployed & approvals set:", approvalResult.txHash);
       toast.success("Smart account deployed on-chain!");
+
+      // Phase 2b: Immediate initial deployment via sudo path (guarantees non-idle start)
+      // even if backend session-key automation takes time or fails validation.
+      const liveRates = protocolRates ?? await api.getCurrentRates();
+      const candidateProtocols = liveRates
+        .filter((r) => selectedProtocols.has(r.protocolId))
+        .filter((r) => r.isActive && !r.isComingSoon)
+        .filter((r) => ["aave_v3", "benqi", "euler_v2", "spark"].includes(r.protocolId))
+        .sort((a, b) => b.currentApy - a.currentApy)
+        .map((r) => r.protocolId as "aave_v3" | "benqi" | "euler_v2" | "spark");
+
+      if (!candidateProtocols.length) {
+        throw new Error("No active protocol available for initial deployment")
+      }
+
+      let deployedProtocol: string | null = null;
+      let lastDeployError: string | null = null;
+      for (const protocolId of candidateProtocols) {
+        try {
+          const deployResult = await deployInitialToProtocol(
+            kernelClient,
+            derivedSmartAccountAddress,
+            {
+              AAVE_POOL: CONTRACTS.AAVE_POOL,
+              BENQI_POOL: CONTRACTS.BENQI_POOL,
+              EULER_VAULT: CONTRACTS.EULER_VAULT,
+              SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+              USDC: CONTRACTS.USDC,
+            },
+            protocolId,
+            parsedAmount,
+          );
+          console.log("[SnowMind] Initial deployment tx:", deployResult.txHash, "protocol:", protocolId);
+          deployedProtocol = protocolId;
+          break;
+        } catch (deployErr) {
+          lastDeployError = deployErr instanceof Error ? deployErr.message : String(deployErr);
+          console.warn("[SnowMind] Initial deployment failed for", protocolId, lastDeployError);
+        }
+      }
+
+      if (!deployedProtocol) {
+        throw new Error(lastDeployError || "Initial deployment failed on all candidate protocols")
+      }
+      toast.success(`Initial funds deployed to ${deployedProtocol}`);
 
       // Phase 3: Grant session key
       setActivationPhase("granting-session-key");

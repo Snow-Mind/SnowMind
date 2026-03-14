@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import {
   Lock,
   FileCode2,
@@ -27,6 +28,8 @@ export default function SessionKeyScope({
   sessionKey,
   smartAccountAddress,
 }: SessionKeyScopeProps) {
+  const [nowMs] = useState(() => Date.now());
+
   const allowedProtocols = ACTIVE_PROTOCOLS.map((id) => ({
     id,
     name: PROTOCOL_CONFIG[id].name,
@@ -40,20 +43,19 @@ export default function SessionKeyScope({
     ),
   }));
 
-  const expiresLabel = sessionKey
-    ? (() => {
-        const d = new Date(sessionKey.expiresAt);
-        const years = Math.floor(
-          (d.getTime() - Date.now()) / (365.25 * 24 * 60 * 60 * 1000),
-        );
-        if (years > 50) return "No expiration";
-        return d.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        });
-      })()
-    : "—";
+  const expiresLabel = useMemo(() => {
+    if (!sessionKey) return "—";
+    const d = new Date(sessionKey.expiresAt);
+    const years = Math.floor(
+      (d.getTime() - nowMs) / (365.25 * 24 * 60 * 60 * 1000),
+    );
+    if (years > 50) return "No expiration";
+    return d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }, [sessionKey, nowMs]);
 
   return (
     <div className="crystal-card overflow-hidden">

@@ -450,7 +450,90 @@ export async function grantAndSerializeSessionKey(
   }
 }
 
-// ── 4. Revoke session key (user-initiated) ───────────────────────────────────
+// ── 4. Immediate initial deployment (sudo path) ─────────────────────────────
+
+export async function deployInitialToProtocol(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  kernelClient: any,
+  smartAccountAddress: `0x${string}`,
+  contracts: {
+    AAVE_POOL: `0x${string}`
+    BENQI_POOL: `0x${string}`
+    EULER_VAULT: `0x${string}`
+    SPARK_VAULT: `0x${string}`
+    USDC: `0x${string}`
+  },
+  protocolId: "aave_v3" | "benqi" | "euler_v2" | "spark",
+  amountUsdc: number,
+): Promise<{ txHash: string; explorerUrl: string }> {
+  const amount = parseUnits(amountUsdc.toFixed(6), 6)
+
+  const calls = [] as Array<{ to: `0x${string}`; value: bigint; data: `0x${string}` }>
+
+  // Defensive idempotent approve before deposit, in case allowance changed.
+  const spender =
+    protocolId === "aave_v3" ? contracts.AAVE_POOL
+      : protocolId === "benqi" ? contracts.BENQI_POOL
+      : protocolId === "euler_v2" ? contracts.EULER_VAULT
+      : contracts.SPARK_VAULT
+
+  calls.push({
+    to: contracts.USDC,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [spender, maxUint256],
+    }),
+  })
+
+  if (protocolId === "aave_v3") {
+    calls.push({
+      to: contracts.AAVE_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: AAVE_POOL_ABI,
+        functionName: "supply",
+        args: [contracts.USDC, amount, smartAccountAddress, 0],
+      }),
+    })
+  } else if (protocolId === "benqi") {
+    calls.push({
+      to: contracts.BENQI_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: BENQI_ABI,
+        functionName: "mint",
+        args: [amount],
+      }),
+    })
+  } else if (protocolId === "euler_v2") {
+    calls.push({
+      to: contracts.EULER_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else {
+    calls.push({
+      to: contracts.SPARK_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  }
+
+  const txHash = await kernelClient.sendTransaction({ calls })
+  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+}
+
+// ── 5. Revoke session key (user-initiated) ───────────────────────────────────
 
 export async function revokeSessionKey(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -462,7 +545,7 @@ export async function revokeSessionKey(
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
 }
 
-// ── 5. Emergency: withdraw all from specific protocol (user-signed, no session key)
+// ── 6. Emergency: withdraw all from specific protocol (user-signed, no session key)
 
 export async function emergencyWithdrawAll(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

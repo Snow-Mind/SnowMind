@@ -17,6 +17,21 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   })
 }
 
+const REALTIME_DISABLE_KEY = "snowmind_realtime_disabled_until"
+
+function isRealtimeTemporarilyDisabled(): boolean {
+  if (typeof window === "undefined") return false
+  const raw = window.localStorage.getItem(REALTIME_DISABLE_KEY)
+  if (!raw) return false
+  const until = Number(raw)
+  return Number.isFinite(until) && Date.now() < until
+}
+
+function disableRealtimeFor(ms: number): void {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(REALTIME_DISABLE_KEY, String(Date.now() + ms))
+}
+
 /**
  * Subscribe to real-time rebalance_logs inserts for the given smart account.
  * Uses Supabase Realtime Postgres Changes with an account-scoped filter
@@ -30,7 +45,7 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
   const channelRef = useRef<ReturnType<SupabaseClient['channel']> | null>(null)
 
   useEffect(() => {
-    if (!smartAccountAddress || !supabase) return
+    if (!smartAccountAddress || !supabase || isRealtimeTemporarilyDisabled()) return
 
     // Subscribe to changes on both rebalance_logs and allocations tables
     const channel = supabase
@@ -70,7 +85,12 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
           console.warn("[SnowMind] Supabase Realtime subscription failed:", status, err?.message ?? "")
-          // Silently degrade — the dashboard still works via polling / React Query refetch
+          // Circuit-breaker: avoid repeated websocket failures and rely on polling for 15 min.
+          disableRealtimeFor(15 * 60 * 1000)
+          if (channelRef.current) {
+            supabase!.removeChannel(channelRef.current)
+            channelRef.current = null
+          }
         }
       })
 
