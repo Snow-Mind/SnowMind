@@ -37,6 +37,7 @@ import Image from "next/image";
 import {
   createSmartAccount,
   approveAndDeployToProtocol,
+  approveRemainingProtocols,
   grantAndSerializeSessionKey,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
@@ -333,6 +334,8 @@ export default function OnboardingPage() {
       if (!candidateProtocols.length) {
         throw new Error("No active protocol available for initial deployment");
       }
+      console.log("[SnowMind] Candidate protocols sorted by APY (highest first):", candidateProtocols,
+        "Rates:", liveRates.map((r) => `${r.protocolId}=${(r.currentApy * 100).toFixed(2)}%`));
 
       let deployedProtocol: string | null = null;
       let lastDeployError: string | null = null;
@@ -356,7 +359,7 @@ export default function OnboardingPage() {
           break;
         } catch (deployErr) {
           lastDeployError = deployErr instanceof Error ? deployErr.message : String(deployErr);
-          console.warn("[SnowMind] Approve + deploy failed for", protocolId, lastDeployError);
+          console.error("[SnowMind] Approve + deploy FAILED for", protocolId, "→ trying next. Error:", lastDeployError);
         }
       }
 
@@ -364,6 +367,19 @@ export default function OnboardingPage() {
         throw new Error(lastDeployError || "Initial deployment failed on all candidate protocols");
       }
       toast.success(`Smart account deployed & funds deposited to ${deployedProtocol}`);
+
+      // Fire-and-forget: approve remaining protocols for future rebalancing
+      approveRemainingProtocols(
+        kernelClient,
+        {
+          AAVE_POOL: CONTRACTS.AAVE_POOL,
+          BENQI_POOL: CONTRACTS.BENQI_POOL,
+          EULER_VAULT: CONTRACTS.EULER_VAULT,
+          SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+          USDC: CONTRACTS.USDC,
+        },
+        deployedProtocol,
+      ).catch(() => {}); // non-critical, rebalancer can approve later
 
       // Phase 3: Grant session key
       setActivationPhase("granting-session-key");

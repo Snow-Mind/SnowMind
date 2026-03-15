@@ -192,8 +192,10 @@ export async function approveAllProtocols(
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
 }
 
-// ── 2b. Approve all protocols + deploy initial deposit in a SINGLE UserOp ────
-// Prevents AA25 nonce errors that occur when sending separate approve & deploy ops.
+// ── 2b. Approve target protocol + deposit in a SINGLE UserOp ─────────────────
+// Keeps the batch minimal (approve + deposit = 2 calls) so bundler gas estimation
+// succeeds even on first-ever account deployment. Remaining protocol approvals
+// are handled by a follow-up non-critical batch (approveRemainingProtocols).
 
 export async function approveAndDeployToProtocol(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -211,23 +213,28 @@ export async function approveAndDeployToProtocol(
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const amount = parseUnits(amountUsdc.toFixed(6), 6)
 
-  // Step 1: Approve USDC for ALL protocols (idempotent, same as approveAllProtocols)
-  const spenders = [
-    contracts.AAVE_POOL,
-    contracts.BENQI_POOL,
-    contracts.EULER_VAULT,
-    contracts.SPARK_VAULT,
-  ].filter(addr => addr !== '0x0000000000000000000000000000000000000000')
+  // Map protocol → spender address
+  const spenderMap: Record<string, `0x${string}`> = {
+    aave_v3: contracts.AAVE_POOL,
+    benqi: contracts.BENQI_POOL,
+    euler_v2: contracts.EULER_VAULT,
+    spark: contracts.SPARK_VAULT,
+  }
 
-  const calls = spenders.map(spender => ({
-    to: contracts.USDC,
-    value: 0n,
-    data: encodeFunctionData({
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [spender, maxUint256],
-    }),
-  })) as Array<{ to: `0x${string}`; value: bigint; data: `0x${string}` }>
+  const targetSpender = spenderMap[protocolId]
+
+  // Step 1: Approve USDC ONLY for the target protocol (minimal batch)
+  const calls: Array<{ to: `0x${string}`; value: bigint; data: `0x${string}` }> = [
+    {
+      to: contracts.USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [targetSpender, maxUint256],
+      }),
+    },
+  ]
 
   // Step 2: Append the deposit call for the chosen protocol
   if (protocolId === "aave_v3") {
@@ -272,8 +279,52 @@ export async function approveAndDeployToProtocol(
     })
   }
 
+  console.log(`[SnowMind] approveAndDeploy: protocol=${protocolId}, amount=${amountUsdc}, calls=${calls.length}`)
   const txHash = await kernelClient.sendTransaction({ calls })
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+}
+
+// ── 2c. Approve remaining protocols (fire-and-forget after initial deposit) ───
+export async function approveRemainingProtocols(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  kernelClient: any,
+  contracts: {
+    AAVE_POOL: `0x${string}`
+    BENQI_POOL: `0x${string}`
+    EULER_VAULT: `0x${string}`
+    SPARK_VAULT: `0x${string}`
+    USDC: `0x${string}`
+  },
+  excludeProtocolId: string,
+): Promise<void> {
+  const spenderMap: Record<string, `0x${string}`> = {
+    aave_v3: contracts.AAVE_POOL,
+    benqi: contracts.BENQI_POOL,
+    euler_v2: contracts.EULER_VAULT,
+    spark: contracts.SPARK_VAULT,
+  }
+
+  const remaining = Object.entries(spenderMap)
+    .filter(([pid]) => pid !== excludeProtocolId)
+    .filter(([, addr]) => addr !== '0x0000000000000000000000000000000000000000')
+    .map(([, spender]) => ({
+      to: contracts.USDC as `0x${string}`,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [spender, maxUint256],
+      }),
+    }))
+
+  if (remaining.length > 0) {
+    try {
+      await kernelClient.sendTransaction({ calls: remaining })
+      console.log("[SnowMind] Approved remaining protocols for future rebalancing")
+    } catch (err) {
+      console.warn("[SnowMind] Non-critical: remaining approvals failed", err)
+    }
+  }
 }
 
 // ── 3. Grant session key and serialize ───────────────────────────────────────
