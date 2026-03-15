@@ -83,6 +83,7 @@ export interface RebalanceStatusResponse {
   reasonCode?:
     | "HEALTHY"
     | "ACCOUNT_INACTIVE"
+    | "ACCOUNT_NOT_REGISTERED"
     | "NO_ACTIVE_SESSION_KEY"
     | "NO_DEPOSITED_BALANCE"
     | "NO_PERMITTED_PROTOCOLS"

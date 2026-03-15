@@ -22,6 +22,33 @@ interface SmartAccountState {
 }
 
 /**
+ * Register the smart account with the backend.
+ * Retries up to `maxRetries` times with exponential backoff.
+ * Returns true if registration succeeded on any attempt.
+ */
+async function registerWithRetry(
+  ownerAddress: string,
+  smartAccountAddress: string,
+  maxRetries = 3,
+): Promise<boolean> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await api.registerAccount({ ownerAddress, smartAccountAddress });
+      return true;
+    } catch (err) {
+      console.warn(
+        `[SnowMind] Registration attempt ${attempt + 1}/${maxRetries + 1} failed:`,
+        err,
+      );
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Giza pattern: createAgent(eoa) only creates the deterministic smart account.
  * Session key granting + protocol approvals happen ONLY during activation
  * (in the onboarding page's handleActivate).
@@ -30,6 +57,7 @@ interface SmartAccountState {
 export function useSmartAccount(wallet: ConnectedWallet | null) {
   const storedAddress = usePortfolioStore((s) => s.smartAccountAddress) as Address | null;
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
+  const setBackendRegistered = usePortfolioStore((s) => s.setBackendRegistered);
   const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount);
 
   const [state, setState] = useState<SmartAccountState>({
@@ -53,14 +81,14 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
       const walletClient = await toViemAccount({ wallet });
       const { kernelClient, smartAccountAddress } = await createSmartAccount(walletClient);
 
-      // Register address with backend (no session key yet — that happens at activation)
-      try {
-        await api.registerAccount({
-          ownerAddress: wallet.address as string,
-          smartAccountAddress,
-        });
-      } catch {
-        // Non-critical — will register during activation
+      // Register address with backend (with retry) — creates Supabase row
+      const registered = await registerWithRetry(
+        wallet.address as string,
+        smartAccountAddress,
+      );
+      setBackendRegistered(registered);
+      if (!registered) {
+        console.warn("[SnowMind] Early registration failed after retries — will retry during activation");
       }
 
       setState({
@@ -82,7 +110,19 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     } finally {
       initializingRef.current = false;
     }
-  }, [wallet, setSmartAccountAddress]);
+  }, [wallet, setSmartAccountAddress, setBackendRegistered]);
+
+  // If we have a stored address but backend registration was missed, retry it
+  useEffect(() => {
+    const { isBackendRegistered, smartAccountAddress } = usePortfolioStore.getState();
+    if (wallet && smartAccountAddress && !isBackendRegistered) {
+      registerWithRetry(wallet.address as string, smartAccountAddress).then(
+        (ok) => {
+          if (ok) setBackendRegistered(true);
+        },
+      );
+    }
+  }, [wallet, setBackendRegistered]);
 
   // Auto-initialize when wallet is available and no stored address
   useEffect(() => {

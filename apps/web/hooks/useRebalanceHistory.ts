@@ -1,7 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
+import { api, APIError } from "@/lib/api-client";
+
+const noRetryOn404 = (failureCount: number, error: Error) => {
+  if (error instanceof APIError && error.status === 404) return false;
+  return failureCount < 2;
+};
 
 /** Latest status (single last log). */
 export function useRebalanceStatus(address: string | undefined) {
@@ -10,6 +15,7 @@ export function useRebalanceStatus(address: string | undefined) {
     queryFn: () => api.getRebalanceStatus(address!),
     enabled: !!address,
     refetchInterval: 30_000,
+    retry: noRetryOn404,
   });
 }
 
@@ -23,5 +29,6 @@ export function useRebalanceHistory(
     queryFn: () => api.getRebalanceHistory(address!, page),
     enabled: !!address,
     refetchInterval: 30_000,
+    retry: noRetryOn404,
   });
 }

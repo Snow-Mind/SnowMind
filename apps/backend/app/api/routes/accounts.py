@@ -52,6 +52,12 @@ class RegisterAccountRequest(BaseModel):
         description="Optional session-key blob to encrypt & store",
     )
 
+    diversification_preference: str | None = Field(
+        None,
+        alias="diversificationPreference",
+        description="User diversification preference (max_yield | balanced | diversified)",
+    )
+
 
 # ── POST /accounts  AND  /accounts/register ───────────────
 
@@ -63,17 +69,17 @@ async def _do_register(
     address = validate_eth_address(req.resolved_address())
     owner_address = validate_eth_address(req.resolved_owner())
     # Upsert: if account already exists, just return it
+    upsert_data: dict = {
+        "address": address,
+        "owner_address": owner_address,
+        "is_active": True,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if req.diversification_preference:
+        upsert_data["diversification_preference"] = req.diversification_preference
     result = (
         db.table("accounts")
-        .upsert(
-            {
-                "address": address,
-                "owner_address": owner_address,
-                "is_active": True,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="address",
-        )
+        .upsert(upsert_data, on_conflict="address")
         .execute()
     )
     account = result.data[0]
@@ -158,7 +164,17 @@ async def get_account(
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        # Return a default response for unregistered accounts so the frontend
+        # doesn't choke on 404s while the user is going through onboarding.
+        return AccountDetailResponse(
+            id="",
+            address=address,
+            owner_address="",
+            is_active=False,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            diversification_preference="balanced",
+            session_key=None,
+        )
 
     row = acct.data[0]
 

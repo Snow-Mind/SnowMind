@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
+import { api, APIError } from "@/lib/api-client";
 
 export function useSessionKey(smartAccountAddress: string | undefined) {
   return useQuery({
@@ -10,5 +10,9 @@ export function useSessionKey(smartAccountAddress: string | undefined) {
     enabled: !!smartAccountAddress,
     staleTime: 60_000,
     select: (data) => data.sessionKey,
+    retry: (failureCount, error) => {
+      if (error instanceof APIError && error.status === 404) return false;
+      return failureCount < 2;
+    },
   });
 }

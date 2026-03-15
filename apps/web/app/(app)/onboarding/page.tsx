@@ -258,6 +258,19 @@ export default function OnboardingPage() {
         setFormStep("activate");
       }
 
+      // Ensure account is registered in Supabase before any on-chain work.
+      // This is idempotent (upsert) so safe to call even if already registered.
+      try {
+        await api.registerAccount({
+          ownerAddress: wallet.address as string,
+          smartAccountAddress: derivedSmartAccountAddress,
+          diversificationPreference: diversificationPref,
+        });
+      } catch (regErr) {
+        console.warn("[SnowMind] Pre-activation registration failed:", regErr);
+        // Non-fatal: Phase 4 registration will also upsert
+      }
+
       // Phase 1: Transfer USDC from EOA wallet → canonical smart account
       setActivationPhase("transferring-usdc");
       const provider = await wallet.getEthereumProvider();

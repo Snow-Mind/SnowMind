@@ -94,7 +94,14 @@ async def get_portfolio(
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        # Account not yet registered — return empty portfolio instead of 404
+        # so the frontend doesn't error during onboarding.
+        return PortfolioResponse(
+            total_deposited_usd=Decimal("0"),
+            total_yield_usd=Decimal("0"),
+            allocations=[],
+            last_rebalance_at=None,
+        )
 
     account_id = acct.data[0]["id"]
 
@@ -223,7 +230,8 @@ async def get_rebalance_history(
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        # Account not yet registered — return empty history
+        return RebalanceHistoryResponse(logs=[], total=0)
 
     account_id = acct.data[0]["id"]
 

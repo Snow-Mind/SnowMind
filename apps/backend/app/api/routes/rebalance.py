@@ -77,8 +77,8 @@ def _classify_reason(
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-async def _lookup_account(db: Client, address: str) -> dict:
-    """Resolve a checksummed address → account row, or raise 404."""
+async def _lookup_account(db: Client, address: str) -> dict | None:
+    """Resolve a checksummed address → account row, or return None."""
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
@@ -88,7 +88,7 @@ async def _lookup_account(db: Client, address: str) -> dict:
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        return None
     return acct.data[0]
 
 
@@ -112,6 +112,9 @@ async def trigger_rebalance(
 ):
     """Manually trigger a rebalance check for one account."""
     account = await _lookup_account(db, address)
+
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
 
     if not account.get("is_active", True):
         raise HTTPException(status_code=400, detail="Account is inactive")
@@ -142,6 +145,19 @@ async def get_rebalance_status(
 ):
     """Return the most recent rebalance result and overall status."""
     account = await _lookup_account(db, address)
+
+    if not account:
+        # Account not yet registered — return default idle status
+        addr = validate_eth_address(address)
+        return {
+            "smartAccountAddress": addr,
+            "lastRebalance": None,
+            "status": "idle",
+            "lastLog": None,
+            "reasonCode": "ACCOUNT_NOT_REGISTERED",
+            "reasonDetail": "Account not yet registered with optimizer",
+        }
+
     addr = account["address"]
     account_id = account["id"]
     is_active = bool(account.get("is_active", True))
@@ -212,6 +228,11 @@ async def get_rebalance_history(
 ):
     """Return paginated rebalance history for one account."""
     account = await _lookup_account(db, address)
+
+    if not account:
+        # Account not yet registered — return empty history
+        return RebalanceHistoryResponse(logs=[], total=0)
+
     addr = account["address"]
     account_id = account["id"]
 
@@ -252,6 +273,10 @@ async def withdraw_all(
 ):
     """Withdraw all funds from every active protocol back to the smart account."""
     account = await _lookup_account(db, address)
+
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
     addr = account["address"]
     account_id = account["id"]
 

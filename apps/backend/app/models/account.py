@@ -38,11 +38,11 @@ class SessionKeyCreate(BaseModel):
 
 
 class AccountResponse(CamelModel):
-    id: UUID
+    id: UUID | str
     address: str
     owner_address: str
     is_active: bool
-    created_at: datetime
+    created_at: datetime | str
     diversification_preference: DiversificationPref = DiversificationPref.BALANCED
 
 
