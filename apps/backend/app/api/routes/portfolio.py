@@ -13,6 +13,7 @@ from app.core.validators import validate_eth_address
 from app.models.allocation import AllocationResponse, PortfolioResponse
 from app.services.protocols import get_adapter, ACTIVE_ADAPTERS
 from app.services.protocols.base import get_shared_async_web3
+from app.services.optimizer.rate_fetcher import RateFetcher
 from app.models.rebalance_log import RebalanceHistoryResponse, RebalanceLogResponse
 
 logger = logging.getLogger("snowmind")
@@ -64,14 +65,15 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal:
         return Decimal("0")
 
 
-async def _get_protocol_apy(protocol_id: str) -> Decimal:
-    """Get current live APY for a protocol."""
+async def _fetch_live_apys() -> dict[str, Decimal]:
+    """Fetch live APYs for all active protocols (with testnet mainnet overlay)."""
     try:
-        adapter = get_adapter(protocol_id)
-        rate = await adapter.get_rate()
-        return rate.apy
+        fetcher = RateFetcher()
+        rates = await fetcher.fetch_active_rates()
+        return {pid: rate.apy for pid, rate in rates.items()}
     except Exception:
-        return Decimal("0")
+        logger.warning("Failed to fetch live APYs via RateFetcher")
+        return {}
 
 
 # ── GET /portfolio/{address} ──────────────────────────────
@@ -132,6 +134,9 @@ async def get_portfolio(
             )
         )
 
+    # Fetch live APYs once (with testnet → mainnet DefiLlama overlay)
+    live_apys = await _fetch_live_apys()
+
     # Check on-chain protocol balances for active protocols not in DB
     for pid in ACTIVE_ADAPTERS:
         onchain_balance = await _get_protocol_balance(address, pid)
@@ -145,24 +150,21 @@ async def get_portfolio(
                     total_deposited += onchain_balance
             else:
                 # Protocol balance found on-chain but not in DB (direct deposit)
-                live_apy = await _get_protocol_apy(pid)
                 allocations.append(
                     AllocationResponse(
                         protocol_id=pid,
                         name=_NAMES.get(pid, pid),
                         amount_usdc=onchain_balance,
                         allocation_pct=Decimal("0"),
-                        current_apy=live_apy,
+                        current_apy=live_apys.get(pid, Decimal("0")),
                     )
                 )
                 total_deposited += onchain_balance
 
-    # Fetch live APY for all protocol allocations (overwrite stale DB values)
+    # Overwrite stale DB APYs with live rates
     for alloc in allocations:
-        if alloc.protocol_id in ACTIVE_ADAPTERS:
-            live_apy = await _get_protocol_apy(alloc.protocol_id)
-            if live_apy > Decimal("0"):
-                alloc.current_apy = live_apy
+        if alloc.protocol_id in live_apys and live_apys[alloc.protocol_id] > Decimal("0"):
+            alloc.current_apy = live_apys[alloc.protocol_id]
 
     # Read on-chain idle USDC balance (not yet deployed to any protocol)
     idle_usdc = await _get_idle_usdc(address)
@@ -195,11 +197,16 @@ async def get_portfolio(
     )
     last_ts = last_rb.data[0]["created_at"] if last_rb.data else None
 
-    # Yield = current protocol value (on-chain) minus original DB deposits
+    # Yield = current protocol value (on-chain) minus original DB deposits.
+    # When DB has no allocation rows (e.g. initial deposit before first rebalance),
+    # we can't compute yield — default to 0 to avoid phantom yield.
     current_protocol_value = sum(
         a.amount_usdc for a in allocations if a.protocol_id != "idle"
     )
-    total_yield = max(current_protocol_value - original_db_deposits, Decimal(0))
+    if original_db_deposits > Decimal(0):
+        total_yield = max(current_protocol_value - original_db_deposits, Decimal(0))
+    else:
+        total_yield = Decimal(0)
 
     return PortfolioResponse(
         total_deposited_usd=total_deposited,

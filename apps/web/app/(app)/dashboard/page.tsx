@@ -165,7 +165,7 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1">
               <p className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Current value</p>
-              <p className="mt-1 font-display text-3xl font-bold text-[#E84142]">{formatUsd(stats.totalDeposited + stats.totalYield)}</p>
+              <p className="mt-1 font-display text-3xl font-bold text-[#E84142]">{formatUsd(stats.totalDeposited)}</p>
               <div className="mt-4 grid grid-cols-2 gap-4 border-t border-[#E8E2DA] pt-4 sm:grid-cols-4">
                 <div>
                   <p className="text-[10px] text-[#8A837C]">Net deposited</p>
