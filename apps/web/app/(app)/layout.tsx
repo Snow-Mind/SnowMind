@@ -39,7 +39,7 @@ import {
 import { avalancheFuji } from "viem/chains";
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { createSmartAccount, BENQI_ABI, AAVE_POOL_ABI, ERC4626_VAULT_ABI, emergencyWithdrawAll } from "@/lib/zerodev";
 
 function TopBar({
   smartAccountAddress,
@@ -471,6 +471,72 @@ const ERC20_TRANSFER_ONLY_ABI = [
     outputs: [{ name: "", type: "bool" }] },
 ] as const;
 
+const ERC4626_CONVERT_ABI = [
+  { name: "convertToAssets", type: "function", stateMutability: "view",
+    inputs: [{ name: "shares", type: "uint256" }], outputs: [{ name: "assets", type: "uint256" }] },
+] as const;
+
+/**
+ * Read total USDC value across ALL protocol positions + idle balance.
+ * Also returns raw share balances needed for on-chain redeem calls.
+ */
+async function readAllProtocolBalances(
+  publicClient: ReturnType<typeof createPublicClient>,
+  smartAddr: `0x${string}`,
+) {
+  // Read all balances in parallel
+  const [idleBalance, qiBalance, eulerShares, sparkShares] = await Promise.all([
+    publicClient.readContract({ address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.SPARK_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+  ]);
+
+  // Convert share tokens → USDC value
+  let benqiUsdc = 0;
+  if ((qiBalance as bigint) > 0n) {
+    try {
+      const exchangeRate = await publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: EXCHANGE_RATE_ABI, functionName: "exchangeRateStored" });
+      benqiUsdc = Number((qiBalance as bigint) * (exchangeRate as bigint)) / 1e18 / 1e12;
+    } catch { /* fallback: 0 */ }
+  }
+
+  let eulerUsdc = 0;
+  if ((eulerShares as bigint) > 0n) {
+    try {
+      const assets = await publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: ERC4626_CONVERT_ABI, functionName: "convertToAssets", args: [eulerShares as bigint] });
+      eulerUsdc = Number(formatUnits(assets as bigint, 6));
+    } catch { /* fallback: 0 */ }
+  }
+
+  let sparkUsdc = 0;
+  if ((sparkShares as bigint) > 0n) {
+    try {
+      const assets = await publicClient.readContract({ address: CONTRACTS.SPARK_VAULT, abi: ERC4626_CONVERT_ABI, functionName: "convertToAssets", args: [sparkShares as bigint] });
+      sparkUsdc = Number(formatUnits(assets as bigint, 6));
+    } catch { /* fallback: 0 */ }
+  }
+
+  // Aave: aToken balance IS the USDC value (1:1). Use MAX_UINT to withdraw all via withdraw().
+  // We don't need a separate aToken address — Aave withdraw(MAX_UINT) handles it.
+  // But we need to know if there's an Aave position. The simplest check: try the Aave withdraw
+  // and it will return 0 if no position. For balance display we'll rely on the portfolio API.
+
+  const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
+
+  return {
+    totalUsdc: idleUsdc + benqiUsdc + eulerUsdc + sparkUsdc,
+    idleUsdc,
+    benqiUsdc,
+    eulerUsdc,
+    sparkUsdc,
+    // Raw values for on-chain redeem calls
+    qiBalance: qiBalance as bigint,
+    eulerShares: eulerShares as bigint,
+    sparkShares: sparkShares as bigint,
+  };
+}
+
 type WithdrawStep = "idle" | "redeeming" | "transferring" | "deactivating" | "done";
 
 function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeactivate: () => Promise<void> }) {
@@ -493,24 +559,8 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
     const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
     const fetchBalance = async () => {
       try {
-        // Idle USDC in smart account
-        const idleBalance = await publicClient.readContract({
-          address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf",
-          args: [smartAccountAddress as `0x${string}`],
-        });
-        // qiToken balance
-        const qiBalance = await publicClient.readContract({
-          address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf",
-          args: [smartAccountAddress as `0x${string}`],
-        });
-        // Exchange rate
-        const exchangeRate = await publicClient.readContract({
-          address: CONTRACTS.BENQI_POOL, abi: EXCHANGE_RATE_ABI, functionName: "exchangeRateStored",
-        });
-        // qiToken (8 decimals) * exchangeRate (18 decimals) / 1e18 / 1e12 → USDC (6 decimals)
-        const protocolUsdc = Number((qiBalance as bigint) * (exchangeRate as bigint)) / 1e18 / 1e12;
-        const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
-        setAvailableUsdc(protocolUsdc + idleUsdc);
+        const balances = await readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`);
+        setAvailableUsdc(balances.totalUsdc);
       } catch { /* ignore */ }
       setLoadingBalance(false);
     };
@@ -525,20 +575,24 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
     try {
       const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
 
-      // Step 1: Redeem all from protocol
+      // Step 1: Redeem from ALL protocols
       setStep("redeeming");
-      const qiBalance = await publicClient.readContract({
-        address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf",
-        args: [smartAccountAddress as `0x${string}`],
-      });
+      const balances = await readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`);
 
       const viemAccount = await toViemAccount({ wallet });
       const { kernelClient } = await createSmartAccount(viemAccount);
 
-      if ((qiBalance as bigint) > 0n) {
-        await kernelClient.sendTransaction({
-          calls: [{ to: CONTRACTS.BENQI_POOL, value: 0n, data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [qiBalance as bigint] }) }],
-        });
+      // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
+      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n;
+      if (hasPositions) {
+        await emergencyWithdrawAll(
+          kernelClient,
+          smartAccountAddress as `0x${string}`,
+          CONTRACTS,
+          balances.qiBalance,
+          balances.eulerShares,
+          balances.sparkShares,
+        );
       }
 
       // Step 2: Transfer requested USDC to EOA
@@ -559,25 +613,9 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
         });
       }
 
-      // Step 3: Re-deposit remainder if partial withdrawal
-      if (!isFullWithdrawal) {
-        const remainingUsdc = await publicClient.readContract({
-          address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf",
-          args: [smartAccountAddress as `0x${string}`],
-        });
-        if ((remainingUsdc as bigint) > 0n) {
-          await kernelClient.sendTransaction({
-            calls: [
-              { to: CONTRACTS.USDC, value: 0n, data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "approve", args: [CONTRACTS.BENQI_POOL, remainingUsdc as bigint] }) },
-              { to: CONTRACTS.BENQI_POOL, value: 0n, data: encodeFunctionData({ abi: BENQI_ABI, functionName: "mint", args: [remainingUsdc as bigint] }) },
-            ],
-          });
-        }
-      }
-
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
 
-      // Step 4: If full withdrawal, deactivate agent
+      // Step 3: If full withdrawal, deactivate agent
       if (isFullWithdrawal) {
         setStep("deactivating");
         toast.success("Successfully withdrawn funds!");
@@ -725,19 +763,23 @@ function AgentDetailsModal({
     try {
       const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
 
-      // Step 1: Redeem all from protocol
-      const qiBalance = await publicClient.readContract({
-        address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf",
-        args: [smartAccountAddress as `0x${string}`],
-      });
+      // Read share balances from ALL protocols
+      const balances = await readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`);
 
       const viemAccount = await toViemAccount({ wallet });
       const { kernelClient } = await createSmartAccount(viemAccount);
 
-      if ((qiBalance as bigint) > 0n) {
-        await kernelClient.sendTransaction({
-          calls: [{ to: CONTRACTS.BENQI_POOL, value: 0n, data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [qiBalance as bigint] }) }],
-        });
+      // Step 1: Redeem from ALL protocols in one batched UserOp
+      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n;
+      if (hasPositions) {
+        await emergencyWithdrawAll(
+          kernelClient,
+          smartAccountAddress as `0x${string}`,
+          CONTRACTS,
+          balances.qiBalance,
+          balances.eulerShares,
+          balances.sparkShares,
+        );
       }
 
       // Step 2: Transfer ALL USDC to EOA
