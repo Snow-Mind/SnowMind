@@ -192,6 +192,90 @@ export async function approveAllProtocols(
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
 }
 
+// ── 2b. Approve all protocols + deploy initial deposit in a SINGLE UserOp ────
+// Prevents AA25 nonce errors that occur when sending separate approve & deploy ops.
+
+export async function approveAndDeployToProtocol(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  kernelClient: any,
+  smartAccountAddress: `0x${string}`,
+  contracts: {
+    AAVE_POOL: `0x${string}`
+    BENQI_POOL: `0x${string}`
+    EULER_VAULT: `0x${string}`
+    SPARK_VAULT: `0x${string}`
+    USDC: `0x${string}`
+  },
+  protocolId: "aave_v3" | "benqi" | "euler_v2" | "spark",
+  amountUsdc: number,
+): Promise<{ txHash: string; explorerUrl: string }> {
+  const amount = parseUnits(amountUsdc.toFixed(6), 6)
+
+  // Step 1: Approve USDC for ALL protocols (idempotent, same as approveAllProtocols)
+  const spenders = [
+    contracts.AAVE_POOL,
+    contracts.BENQI_POOL,
+    contracts.EULER_VAULT,
+    contracts.SPARK_VAULT,
+  ].filter(addr => addr !== '0x0000000000000000000000000000000000000000')
+
+  const calls = spenders.map(spender => ({
+    to: contracts.USDC,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [spender, maxUint256],
+    }),
+  })) as Array<{ to: `0x${string}`; value: bigint; data: `0x${string}` }>
+
+  // Step 2: Append the deposit call for the chosen protocol
+  if (protocolId === "aave_v3") {
+    calls.push({
+      to: contracts.AAVE_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: AAVE_POOL_ABI,
+        functionName: "supply",
+        args: [contracts.USDC, amount, smartAccountAddress, 0],
+      }),
+    })
+  } else if (protocolId === "benqi") {
+    calls.push({
+      to: contracts.BENQI_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: BENQI_ABI,
+        functionName: "mint",
+        args: [amount],
+      }),
+    })
+  } else if (protocolId === "euler_v2") {
+    calls.push({
+      to: contracts.EULER_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else {
+    calls.push({
+      to: contracts.SPARK_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  }
+
+  const txHash = await kernelClient.sendTransaction({ calls })
+  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+}
+
 // ── 3. Grant session key and serialize ───────────────────────────────────────
 // Kernel doc: "serializePermissionAccount is the correct pattern"
 // Returns serialized string — NOT a private key. Backend stores and uses this.

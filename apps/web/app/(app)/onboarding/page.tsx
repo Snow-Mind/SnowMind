@@ -36,9 +36,8 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
 import {
   createSmartAccount,
-  approveAllProtocols,
+  approveAndDeployToProtocol,
   grantAndSerializeSessionKey,
-  deployInitialToProtocol,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
@@ -319,22 +318,10 @@ export default function OnboardingPage() {
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
       toast.success("USDC transferred to smart account!");
 
-      // Phase 2: Deploy smart account on-chain & approve USDC for all protocols
-      // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
-      // and sets max USDC approvals so the optimizer can deposit into any protocol.
+      // Phase 2: Deploy smart account on-chain, approve USDC for all protocols,
+      // AND deposit into the best-rate protocol — all in a SINGLE UserOp.
+      // Batching prevents AA25 nonce errors from separate sequential ops.
       setActivationPhase("approving-protocols");
-      const approvalResult = await approveAllProtocols(kernelClient, {
-        USDC: CONTRACTS.USDC,
-        AAVE_POOL: CONTRACTS.AAVE_POOL,
-        BENQI_POOL: CONTRACTS.BENQI_POOL,
-        EULER_VAULT: CONTRACTS.EULER_VAULT,
-        SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-      });
-      console.log("[SnowMind] Smart account deployed & approvals set:", approvalResult.txHash);
-      toast.success("Smart account deployed on-chain!");
-
-      // Phase 2b: Immediate initial deployment via sudo path (guarantees non-idle start)
-      // even if backend session-key automation takes time or fails validation.
       const liveRates = protocolRates ?? await api.getCurrentRates();
       const candidateProtocols = liveRates
         .filter((r) => selectedProtocols.has(r.protocolId))
@@ -344,14 +331,14 @@ export default function OnboardingPage() {
         .map((r) => r.protocolId as "aave_v3" | "benqi" | "euler_v2" | "spark");
 
       if (!candidateProtocols.length) {
-        throw new Error("No active protocol available for initial deployment")
+        throw new Error("No active protocol available for initial deployment");
       }
 
       let deployedProtocol: string | null = null;
       let lastDeployError: string | null = null;
       for (const protocolId of candidateProtocols) {
         try {
-          const deployResult = await deployInitialToProtocol(
+          const deployResult = await approveAndDeployToProtocol(
             kernelClient,
             derivedSmartAccountAddress,
             {
@@ -364,19 +351,19 @@ export default function OnboardingPage() {
             protocolId,
             parsedAmount,
           );
-          console.log("[SnowMind] Initial deployment tx:", deployResult.txHash, "protocol:", protocolId);
+          console.log("[SnowMind] Approve + deploy tx:", deployResult.txHash, "protocol:", protocolId);
           deployedProtocol = protocolId;
           break;
         } catch (deployErr) {
           lastDeployError = deployErr instanceof Error ? deployErr.message : String(deployErr);
-          console.warn("[SnowMind] Initial deployment failed for", protocolId, lastDeployError);
+          console.warn("[SnowMind] Approve + deploy failed for", protocolId, lastDeployError);
         }
       }
 
       if (!deployedProtocol) {
-        throw new Error(lastDeployError || "Initial deployment failed on all candidate protocols")
+        throw new Error(lastDeployError || "Initial deployment failed on all candidate protocols");
       }
-      toast.success(`Initial funds deployed to ${deployedProtocol}`);
+      toast.success(`Smart account deployed & funds deposited to ${deployedProtocol}`);
 
       // Phase 3: Grant session key
       setActivationPhase("granting-session-key");
