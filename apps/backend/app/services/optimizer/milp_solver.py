@@ -96,7 +96,7 @@ class OptimizerOutput:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-MIN_REBALANCE_THRESHOLD = Decimal("0.05")  # 5 %
+MIN_REBALANCE_THRESHOLD = Decimal("0.02")  # 2 % — responsive on Avalanche's low gas
 
 
 def compute_delta(
@@ -134,8 +134,10 @@ def is_rebalance_worth_it(
 ) -> tuple[bool, str]:
     """
     Two-condition gate:
-      1. Max |delta_i| / total > MIN_REBALANCE_THRESHOLD (5 %)
-      2. Annualised yield improvement in USD > gas_cost × 365
+      1. Max |delta_i| / total > MIN_REBALANCE_THRESHOLD (2 %)
+      2. Annualised yield improvement in USD > gas_cost × 30
+         (30-day amortisation — appropriate for Avalanche's low gas costs.
+          Competitors like Yearn/Beefy use similar short payback periods on L2s.)
          (Bypassed for initial deployments where current_apy is 0)
     Returns (should_rebalance, reason).
     """
@@ -153,11 +155,11 @@ def is_rebalance_worth_it(
         return True, "Initial deployment — no existing yield, deploying to protocols"
 
     annual_improvement_usd = (proposed_apy - current_apy) * total
-    amortised_gas = gas_cost_usd * _365
+    amortised_gas = gas_cost_usd * Decimal("30")
     if annual_improvement_usd <= amortised_gas:
         return False, (
             f"Yield improvement ${float(annual_improvement_usd):.2f}/yr "
-            f"<= amortised gas ${float(amortised_gas):.2f}/yr"
+            f"<= amortised gas ${float(amortised_gas):.2f}/30d"
         )
 
     return True, (

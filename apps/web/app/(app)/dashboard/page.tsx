@@ -169,7 +169,7 @@ export default function DashboardPage() {
               <div className="mt-4 grid grid-cols-2 gap-4 border-t border-[#E8E2DA] pt-4 sm:grid-cols-4">
                 <div>
                   <p className="text-[10px] text-[#8A837C]">Net deposited</p>
-                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalDeposited)}</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalDeposited - stats.totalYield)}</p>
                 </div>
                 <div>
                   <p className="text-[10px] text-[#8A837C]">Net earned</p>

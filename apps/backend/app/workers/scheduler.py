@@ -57,6 +57,10 @@ class SnowMindScheduler:
                 self._accrue_benqi_interest, "interval",
                 minutes=5, id="benqi_accrue",
             )
+            self._scheduler.add_job(
+                self._accrue_erc4626_interest, "interval",
+                minutes=5, id="erc4626_accrue",
+            )
         self._scheduler.start()
         logger.info(
             "Scheduler started [instance=%s, interval=%ds]",
@@ -275,6 +279,48 @@ class SnowMindScheduler:
             logger.debug("Benqi interest accrued")
         except Exception as e:
             logger.warning("Benqi accrue failed (non-critical): %s", e)
+
+    async def _accrue_erc4626_interest(self) -> None:
+        """Accrue interest on mock Euler and Spark ERC-4626 vaults (testnet only)."""
+        if not self.settings.IS_TESTNET or not self.settings.DEPLOYER_PRIVATE_KEY:
+            return
+        from app.services.protocols.base import get_shared_async_web3
+        from eth_account import Account
+
+        w3 = get_shared_async_web3()
+        deployer = Account.from_key(self.settings.DEPLOYER_PRIVATE_KEY)
+        abi = [
+            {
+                "name": "accrueInterest", "type": "function",
+                "inputs": [], "outputs": [], "stateMutability": "nonpayable",
+            }
+        ]
+
+        vaults = [
+            ("Euler", self.settings.EULER_VAULT),
+            ("Spark", self.settings.SPARK_VAULT),
+        ]
+        nonce = await w3.eth.get_transaction_count(deployer.address)
+        for name, addr in vaults:
+            if not addr:
+                continue
+            try:
+                contract = w3.eth.contract(
+                    address=w3.to_checksum_address(addr), abi=abi,
+                )
+                tx = await contract.functions.accrueInterest().build_transaction({
+                    "from": deployer.address,
+                    "nonce": nonce,
+                    "gasPrice": await w3.eth.gas_price,
+                    "gas": 100_000,
+                })
+                signed = deployer.sign_transaction(tx)
+                await w3.eth.send_raw_transaction(signed.raw_transaction)
+                nonce += 1
+                logger.debug("%s vault interest accrued", name)
+            except Exception as e:
+                logger.warning("%s vault accrue failed (non-critical): %s", name, e)
+                nonce += 1  # Still increment to avoid stale nonce on next iteration
 
     # ── Balance reconciliation ───────────────────────────────────────────────
 

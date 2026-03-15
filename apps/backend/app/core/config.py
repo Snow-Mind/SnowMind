@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # ── Optimizer ────────────────────────────────────────────
     REBALANCE_CHECK_INTERVAL: int = 1800  # 30 min
     MAX_PROTOCOL_ALLOCATION: float = 0.60
-    MIN_REBALANCE_THRESHOLD: float = 0.05
+    MIN_REBALANCE_THRESHOLD: float = 0.02
     MIN_BALANCE_USD: float = 5000.0
     MAX_APY_SANITY_BOUND: float = 0.25  # 25% — reject anything above
     TWAP_WINDOW_MINUTES: int = 15

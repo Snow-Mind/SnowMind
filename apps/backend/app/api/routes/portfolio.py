@@ -138,6 +138,7 @@ async def get_portfolio(
     live_apys = await _fetch_live_apys()
 
     # Check on-chain protocol balances for active protocols not in DB
+    new_db_rows: list[dict] = []  # Rows to persist for newly discovered allocations
     for pid in ACTIVE_ADAPTERS:
         onchain_balance = await _get_protocol_balance(address, pid)
         if onchain_balance > Decimal("0.01"):
@@ -149,17 +150,35 @@ async def get_portfolio(
                     existing.amount_usdc = onchain_balance
                     total_deposited += onchain_balance
             else:
-                # Protocol balance found on-chain but not in DB (direct deposit)
+                # Protocol balance found on-chain but not in DB (initial deposit).
+                # Persist to DB so yield can be tracked from this baseline.
+                apy = live_apys.get(pid, Decimal("0"))
                 allocations.append(
                     AllocationResponse(
                         protocol_id=pid,
                         name=_NAMES.get(pid, pid),
                         amount_usdc=onchain_balance,
                         allocation_pct=Decimal("0"),
-                        current_apy=live_apys.get(pid, Decimal("0")),
+                        current_apy=apy,
                     )
                 )
                 total_deposited += onchain_balance
+                original_db_deposits += onchain_balance
+                new_db_rows.append({
+                    "account_id": account_id,
+                    "protocol_id": pid,
+                    "amount_usdc": str(onchain_balance.quantize(Decimal("0.000001"))),
+                    "allocation_pct": "1.0000",
+                    "apy_at_allocation": str(apy.quantize(Decimal("0.000001"))) if apy else None,
+                })
+
+    # Persist newly discovered on-chain allocations to DB for yield baseline
+    if new_db_rows:
+        try:
+            db.table("allocations").insert(new_db_rows).execute()
+            logger.info("Persisted %d initial allocation(s) for %s", len(new_db_rows), address)
+        except Exception as exc:
+            logger.warning("Failed to persist initial allocations for %s: %s", address, exc)
 
     # Overwrite stale DB APYs with live rates
     for alloc in allocations:
