@@ -12,6 +12,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.services.optimizer.rebalancer import Rebalancer
+from app.services.optimizer.rate_fetcher import RateFetcher
 
 logger = logging.getLogger("snowmind")
 
@@ -51,6 +52,10 @@ class SnowMindScheduler:
         self._scheduler.add_job(
             self._reconcile_balances, "cron",
             hour=3, minute=0, id="reconcile",
+        )
+        self._scheduler.add_job(
+            self._snapshot_daily_apy, "cron",
+            hour=2, minute=0, id="apy_snapshot",
         )
         if self.settings.IS_TESTNET and self.settings.DEPLOYER_PRIVATE_KEY:
             self._scheduler.add_job(
@@ -275,6 +280,36 @@ class SnowMindScheduler:
             logger.debug("Benqi interest accrued")
         except Exception as e:
             logger.warning("Benqi accrue failed (non-critical): %s", e)
+
+    # ── Daily APY snapshots ─────────────────────────────────────────────────
+
+    async def _snapshot_daily_apy(self) -> None:
+        """Record one APY reading per protocol per day for 30-day averages."""
+        try:
+            fetcher = RateFetcher()
+            rates = await fetcher.fetch_active_rates()
+            if not rates:
+                logger.warning("APY snapshot: no rates available")
+                return
+
+            today = datetime.now(timezone.utc).date().isoformat()
+            for pid, rate in rates.items():
+                try:
+                    self.db.table("daily_apy_snapshots").upsert(
+                        {
+                            "protocol_id": pid,
+                            "date": today,
+                            "apy": str(rate.apy),
+                            "tvl_usd": str(rate.tvl_usd),
+                        },
+                        on_conflict="protocol_id,date",
+                    ).execute()
+                except Exception as e:
+                    logger.warning("APY snapshot failed for %s: %s", pid, e)
+
+            logger.info("Daily APY snapshot recorded for %d protocols", len(rates))
+        except Exception as e:
+            logger.error("APY snapshot job failed: %s", e)
 
     # ── Balance reconciliation ───────────────────────────────────────────────
 

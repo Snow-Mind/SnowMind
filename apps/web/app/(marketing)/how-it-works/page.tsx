@@ -27,11 +27,11 @@ const DETAILED_STEPS = [
     icon: Cpu,
     title: "Optimization",
     description:
-      "Our backend continuously solves a Mixed-Integer Linear Programming (MILP) problem to find the mathematically optimal allocation of your funds across lending protocols.",
+      "Our waterfall allocator sorts lending protocols by APY and fills from the top, capped at 15% of each pool's TVL. Spark Savings acts as the stable yield floor — funds park there when no protocol beats it.",
     details: [
-      "MILP maximizes risk-adjusted yield (return − λ × risk)",
-      "Hard constraint: max 60% in any single protocol",
-      "Minimum $500 per protocol or zero allocation",
+      "Waterfall fills highest-APY protocol first, overflows to next",
+      "15% TVL cap prevents owning too much of any pool",
+      "Spark as yield floor — safe parking when no protocol beats it",
       "TWAP-confirmed rates prevent manipulation",
     ],
   },
@@ -39,12 +39,12 @@ const DETAILED_STEPS = [
     icon: RefreshCw,
     title: "Smart Rebalancing",
     description:
-      "When the optimizer identifies a better allocation, a 5-condition safety gate validates the move before executing through ERC-4337 UserOperations.",
+      "When the optimizer identifies a better allocation, a safety gate validates the move: daily yield improvement must exceed gas costs before executing through ERC-4337 UserOperations.",
     details: [
       "Allocation drift > 5% triggers evaluation",
-      "Net positive APR after gas costs confirmed",
+      "Daily yield improvement must exceed rebalance gas cost",
       "Minimum 6-hour cooldown between rebalances",
-      "Rate cross-validation against DefiLlama",
+      "30-day average APY prevents chasing short spikes",
     ],
   },
   {

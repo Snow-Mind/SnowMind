@@ -65,7 +65,7 @@ function deriveReasoning(entry: RebalanceLogEntry): string | null {
   const action = inferAction(entry);
   if (action === "deposit") return "Initial fund deployment to start earning yield.";
   if (action === "withdraw") return "Funds withdrawn from protocol.";
-  return "Rates confirmed via TWAP. Allocation optimized by MILP solver.";
+  return "Rates confirmed via TWAP. Allocation optimized by waterfall allocator.";
 }
 
 interface LiveTxFeedProps {

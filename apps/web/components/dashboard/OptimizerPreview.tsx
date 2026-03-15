@@ -35,7 +35,7 @@ export default function OptimizerPreview() {
             Optimizer Preview
           </h2>
           <p className="text-xs text-muted-foreground">
-            See how the MILP solver would allocate your deposit.
+            See how the waterfall optimizer would allocate your deposit.
           </p>
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function OptimizerPreview() {
 
             {preview.data?.solveTimeMs != null && (
               <p className="text-[10px] text-muted-foreground">
-                Solved in {preview.data.solveTimeMs}ms · max 60% per protocol ·{" "}
+                Solved in {preview.data.solveTimeMs}ms · 15% TVL cap per protocol ·{" "}
                 {ACTIVE_PROTOCOLS.length} active protocols
               </p>
             )}

@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     TWAP_WINDOW_MINUTES: int = 15
     MIN_REBALANCE_INTERVAL_HOURS: int = 6
 
+    # ── Waterfall Allocator ────────────────────────────────
+    TVL_CAP_PCT: float = 0.15              # Max 15% of any protocol's TVL
+    MAX_SINGLE_EXPOSURE_PCT: float = 0.40  # Default max per-protocol exposure
+    SPARK_BEAT_MARGIN: float = 0.005       # 50 bps above Spark to justify move
+    GAS_COST_ESTIMATE_USD: float = 0.008   # Realistic Avalanche rebalance gas
+    SPARK_PROTOCOL_ID: str = "spark"       # Base layer protocol identifier
+
+    # ── Fees ──────────────────────────────────────────────
+    PROFIT_FEE_PCT: float = 0.10           # 10% of profit on withdrawal
+    TREASURY_ADDRESS: str = ""             # SnowMind fee collection address
+
     # ── Cross-validation / Oracle ────────────────────────────
     DEFILLAMA_BASE_URL: str = "https://yields.llama.fi"
     RATE_DIVERGENCE_THRESHOLD: float = 0.02  # 2% — halt if diverges

@@ -19,9 +19,9 @@ const DIVERSIFICATION_OPTIONS: {
   label: string;
   desc: string;
 }[] = [
-  { value: "max_yield", label: "Max Yield", desc: "100% in highest APY protocol" },
-  { value: "balanced", label: "Balanced", desc: "Up to 2 protocols, 60% cap" },
-  { value: "diversified", label: "Diversified", desc: "Up to 4 protocols, 40% cap" },
+  { value: "max_yield", label: "Max Yield", desc: "No per-protocol cap, highest APY wins" },
+  { value: "balanced", label: "Balanced", desc: "Max 60% per protocol, waterfall fill" },
+  { value: "diversified", label: "Diversified", desc: "Max 40% per protocol, broadest spread" },
 ];
 
 function truncateAddress(addr: string | null | undefined): string {

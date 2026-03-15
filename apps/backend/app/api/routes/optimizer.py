@@ -19,8 +19,8 @@ from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.optimizer.milp_solver import (
     OptimizerInput,
     ProtocolInput,
-    solve,
 )
+from app.services.optimizer.waterfall_allocator import waterfall_allocate
 from app.services.optimizer.risk_scorer import RiskScorer
 
 logger = logging.getLogger("snowmind")
@@ -96,7 +96,7 @@ async def get_all_rates(request: Request):
     return out
 
 
-# ── POST /run — MILP dry-run with risk tolerance (frontend preview) ─────────
+# ── POST /run — waterfall dry-run with risk tolerance (frontend preview) ──────
 
 @router.post("/run", response_model=OptimizerPreviewOutput)
 @limiter.limit("10/minute")
@@ -106,7 +106,7 @@ async def run_optimizer_preview(
     db: Client = Depends(get_db),
     _auth: dict = Depends(require_privy_auth),
 ):
-    """Run the MILP solver and return proposed allocations (no execution).
+    """Run the waterfall allocator and return proposed allocations (no execution).
 
     Use this for the frontend "preview before authorising" flow.
     """
@@ -126,13 +126,13 @@ async def run_optimizer_preview(
 
     account_id = acct.data[0]["id"]
 
-    # Map risk tolerance to lambda
-    risk_aversion_map = {
-        "conservative": Decimal("0.8"),
-        "moderate": Decimal("0.5"),
-        "aggressive": Decimal("0.2"),
+    # Map risk tolerance to max exposure for waterfall allocator
+    exposure_map = {
+        "conservative": Decimal("0.40"),  # diversified
+        "moderate": Decimal("0.60"),      # balanced
+        "aggressive": Decimal("1.00"),    # max yield
     }
-    risk_aversion = risk_aversion_map.get(req.risk_tolerance, Decimal("0.5"))
+    max_exposure = exposure_map.get(req.risk_tolerance, Decimal("0.60"))
 
     # Fetch + validate rates
     rates = await _rate_fetcher.fetch_active_rates()
@@ -177,14 +177,22 @@ async def run_optimizer_preview(
             ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
         )
 
-    # Run MILP solver
+    # Run waterfall allocator
     inp = OptimizerInput(
         total_amount_usd=total_usd,
         protocols=protocol_inputs,
         current_allocations=current,
-        risk_aversion=risk_aversion,
+        gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
     )
-    result = solve(inp)
+    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
+    result = waterfall_allocate(
+        inp=inp,
+        tvl_by_protocol=tvl_by_protocol,
+        tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
+        max_exposure_pct=max_exposure,
+        spark_beat_margin=Decimal(str(settings.SPARK_BEAT_MARGIN)),
+        spark_protocol_id=settings.SPARK_PROTOCOL_ID,
+    )
 
     # Build response items
     proposed: list[AllocationItem] = []
@@ -248,7 +256,7 @@ async def run_and_execute(
     db: Client = Depends(get_db),
     _auth: dict = Depends(require_privy_auth),
 ):
-    """Run MILP solver then execute the rebalance via UserOp (internal only)."""
+    """Run waterfall allocator then execute the rebalance via UserOp (internal only)."""
     address = validate_eth_address(address)
     preview = await run_optimizer_preview(
         request,

@@ -24,6 +24,7 @@ from app.services.optimizer.milp_solver import (
     compute_weighted_apy,
     pick_best_protocol,
 )
+from app.services.optimizer.waterfall_allocator import waterfall_allocate
 from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.optimizer.rate_validator import RateValidator, apply_max_move_cap
 from app.services.protocols import get_adapter
@@ -210,19 +211,38 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
-        # 5. Single-protocol routing: always pick the highest APY protocol
-        # Future: add max-exposure slider for large depositors / risk-averse users
+        # 5. Waterfall allocation: fill highest-APY protocols first, Spark as base layer
         base_inp = OptimizerInput(
             total_amount_usd=total_usd,
             protocols=protocol_inputs,
             current_allocations=current,
+            gas_cost_estimate_usd=Decimal(str(self.settings.GAS_COST_ESTIMATE_USD)),
         )
 
+        tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in twap_rates.items()}
+
         logger.info(
-            "Picking best protocol for %.2f USD across %d protocols",
+            "Running waterfall allocator for %.2f USD across %d protocols",
             total_usd, len(protocol_inputs),
         )
-        result = pick_best_protocol(base_inp)
+
+        # If Spark is unavailable (circuit-breaker'd), fall back to pick_best_protocol
+        spark_available = any(
+            p.protocol_id == self.settings.SPARK_PROTOCOL_ID
+            for p in protocol_inputs
+        )
+        if spark_available:
+            result = waterfall_allocate(
+                inp=base_inp,
+                tvl_by_protocol=tvl_by_protocol,
+                tvl_cap_pct=Decimal(str(self.settings.TVL_CAP_PCT)),
+                max_exposure_pct=Decimal(str(self.settings.MAX_SINGLE_EXPOSURE_PCT)),
+                spark_beat_margin=Decimal(str(self.settings.SPARK_BEAT_MARGIN)),
+                spark_protocol_id=self.settings.SPARK_PROTOCOL_ID,
+            )
+        else:
+            logger.warning("Spark unavailable — falling back to pick_best_protocol")
+            result = pick_best_protocol(base_inp)
         apy_by_protocol = {p.protocol_id: p.apy for p in protocol_inputs}
         ranked_protocols = [
             p.protocol_id

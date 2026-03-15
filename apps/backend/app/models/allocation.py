@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.models.base import CamelModel
 
-ProtocolId = Literal["benqi", "aave_v3", "euler_v2"]
+ProtocolId = Literal["benqi", "aave_v3", "euler_v2", "spark"]
 
 
 class AllocationRecord(BaseModel):

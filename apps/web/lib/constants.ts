@@ -143,7 +143,7 @@ export const IDLE_CONFIG = {
 
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
-// Only protocols the MILP optimizer considers for MVP
+// Only protocols the waterfall allocator considers for MVP
 export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'euler_v2', 'spark']
 
 // Document: Session key allowedFunctions per protocol

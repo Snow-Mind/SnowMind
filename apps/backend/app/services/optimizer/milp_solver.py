@@ -74,7 +74,7 @@ class OptimizerInput:
     total_amount_usd: Decimal
     protocols: list[ProtocolInput]
     current_allocations: dict[str, Decimal] = field(default_factory=dict)
-    gas_cost_estimate_usd: Decimal = Decimal("0.10")
+    gas_cost_estimate_usd: Decimal = Decimal("0.008")
     risk_aversion: Decimal = Decimal("0.5")  # λ  (0 = pure yield, 1 = pure safety)
     min_protocols: int = 1  # Allow single protocol for small amounts
     max_protocols: int = 4
@@ -152,17 +152,17 @@ def is_rebalance_worth_it(
     if current_apy <= _ZERO:
         return True, "Initial deployment — no existing yield, deploying to protocols"
 
-    annual_improvement_usd = (proposed_apy - current_apy) * total
-    amortised_gas = gas_cost_usd * _365
-    if annual_improvement_usd <= amortised_gas:
+    # Per-day gas comparison: daily yield improvement must exceed single rebalance gas
+    daily_yield_improvement = (proposed_apy - current_apy) * total / _365
+    if daily_yield_improvement <= gas_cost_usd:
         return False, (
-            f"Yield improvement ${float(annual_improvement_usd):.2f}/yr "
-            f"<= amortised gas ${float(amortised_gas):.2f}/yr"
+            f"Daily yield +${float(daily_yield_improvement):.4f} "
+            f"<= rebalance gas ${float(gas_cost_usd):.4f}"
         )
 
     return True, (
         f"Rebalance approved: delta {float(max_pct):.2%}, "
-        f"yield +${float(annual_improvement_usd):.2f}/yr"
+        f"daily yield +${float(daily_yield_improvement):.4f}"
     )
 
 
