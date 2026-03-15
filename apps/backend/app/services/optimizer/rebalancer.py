@@ -442,8 +442,13 @@ class Rebalancer:
         withdrawals: list[dict],
         deposits: list[dict],
         account_id: str | None = None,
+        fee_transfer: dict | None = None,
     ) -> str:
-        """Call the Node.js execution service to execute via ZeroDev."""
+        """Call the Node.js execution service to execute via ZeroDev.
+
+        fee_transfer: optional {"to": treasury_address, "amountUSDC": float}
+        appended to the batch after withdrawals, before deposits.
+        """
         payload = {
             "serializedPermission": serialized_permission,
             "smartAccountAddress": smart_account_address,
@@ -458,6 +463,8 @@ class Rebalancer:
                 "REGISTRY": self.settings.REGISTRY_CONTRACT_ADDRESS,
             },
         }
+        if fee_transfer:
+            payload["feeTransfer"] = fee_transfer
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self.settings.EXECUTION_SERVICE_URL}/execute-rebalance",
@@ -574,13 +581,13 @@ class Rebalancer:
         self,
         account_id: str,
         smart_account_address: str,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """
         Emergency: withdraw ALL positions across every protocol in a single tx.
+        Includes 10% profit fee transfer to treasury in the same atomic batch.
         Revokes session keys after execution.
 
-        - Backend path: revoke + withdraw all in one tx if possible.
-        - Frontend path: user can do this directly via their EOA (MetaMask).
+        Returns (tx_hash, fee_breakdown).
         """
         db = get_supabase()
         current = await self._get_current_allocations(account_id, smart_account_address)
@@ -605,12 +612,54 @@ class Rebalancer:
         if not session_key:
             raise ValueError(f"No active session key for account {account_id}")
 
+        # Calculate 10% profit fee
+        current_value = sum(current.values())
+        idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
+        total_value = current_value + idle_usdc
+
+        from app.services.fee_calculator import (
+            calculate_withdrawal_fee,
+            get_yield_tracking,
+            record_withdrawal_fee,
+        )
+
+        yield_info = get_yield_tracking(db, account_id)
+        fee_breakdown = calculate_withdrawal_fee(
+            current_value_usd=total_value,
+            total_deposited_usdc=Decimal(str(yield_info["total_deposited_usdc"])) if yield_info else total_value,
+            total_withdrawn_usdc=Decimal(str(yield_info["total_withdrawn_usdc"])) if yield_info else Decimal("0"),
+        )
+
+        # Include fee transfer in the atomic batch (Mark's approach:
+        # withdraw from protocols + transfer fee to treasury in one UserOp)
+        fee_transfer = None
+        treasury = self.settings.TREASURY_ADDRESS
+        if fee_breakdown["fee_usd"] > Decimal("0.01") and treasury:
+            fee_transfer = {
+                "to": treasury,
+                "amountUSDC": float(fee_breakdown["fee_usd"]),
+            }
+            logger.info(
+                "Including fee transfer of $%.2f to treasury %s for %s",
+                float(fee_breakdown["fee_usd"]), treasury, smart_account_address,
+            )
+
         tx_hash = await self._call_execution_service(
             serialized_permission=session_key,
             smart_account_address=smart_account_address,
             withdrawals=exec_withdrawals,
             deposits=[],
+            account_id=account_id,
+            fee_transfer=fee_transfer,
         )
+
+        # Record fee in DB
+        if fee_breakdown["fee_usd"] > Decimal("0"):
+            record_withdrawal_fee(
+                db, account_id,
+                withdrawn_usdc=total_value,
+                fee_usdc=fee_breakdown["fee_usd"],
+            )
 
         # Revoke session keys + mark account inactive
         revoke_session_key(db, UUID(account_id))
@@ -624,10 +673,10 @@ class Rebalancer:
         ).execute()
 
         logger.info(
-            "Emergency withdrawal executed for %s: tx=%s",
-            smart_account_address, tx_hash,
+            "Emergency withdrawal executed for %s: tx=%s fee=$%.2f",
+            smart_account_address, tx_hash, float(fee_breakdown["fee_usd"]),
         )
-        return tx_hash
+        return tx_hash, fee_breakdown
 
     # â”€â”€ Registry log encoding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

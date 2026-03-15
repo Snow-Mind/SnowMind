@@ -201,7 +201,11 @@ class RateFetcher:
         return results
 
     async def fetch_active_rates(self) -> dict[str, ProtocolRate]:
-        """Fetch from ACTIVE adapters only (for MILP input)."""
+        """Fetch from ACTIVE adapters only (for waterfall input).
+
+        Filters out protocols with TVL below MIN_PROTOCOL_TVL_USD to avoid
+        illiquid or highly-utilized pools.
+        """
         tasks = {}
         for pid, adapter in ACTIVE_ADAPTERS.items():
             if circuit_breaker.is_open(pid):
@@ -212,15 +216,23 @@ class RateFetcher:
             *tasks.values(), return_exceptions=True
         )
 
+        min_tvl = Decimal(str(self.settings.MIN_PROTOCOL_TVL_USD))
         results: dict[str, ProtocolRate] = {}
         for pid, result in zip(tasks.keys(), completed):
             if isinstance(result, Exception):
                 logger.warning("Rate fetch failed for %s: %s", pid, result)
                 circuit_breaker.record_failure(pid)
             else:
-                results[pid] = result
                 circuit_breaker.record_success(pid)
                 twap_buffer.add(result)
+                # Skip protocols with TVL below minimum (illiquid / high utilization)
+                if result.tvl_usd > Decimal("0") and result.tvl_usd < min_tvl:
+                    logger.warning(
+                        "Skipping %s — TVL $%.0f below minimum $%.0f",
+                        pid, float(result.tvl_usd), float(min_tvl),
+                    )
+                    continue
+                results[pid] = result
 
         # On testnet, overlay real mainnet APYs for realistic optimizer decisions
         results = await self._overlay_mainnet_apys(results)

@@ -16,6 +16,7 @@ BASE_RISK_SCORES: dict[str, Decimal] = {
     "benqi": Decimal("3.0"),  # Well-established, on Avalanche since 2021
     "aave_v3": Decimal("2.0"),  # Battle-tested, billions in TVL globally
     "euler_v2": Decimal("5.0"),  # Newer, add with caution
+    "spark": Decimal("3.0"),  # MakerDAO-backed, well-audited
     "fluid": Decimal("5.5"),  # Newest, add cautiously
 }
 

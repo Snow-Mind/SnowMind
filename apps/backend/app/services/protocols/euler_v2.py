@@ -73,7 +73,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
         settings = get_settings()
         self.w3 = get_shared_async_web3()
         self.vault_address: str | None = (
-            settings.EULER_VAULT if settings.IS_TESTNET else None
+            settings.EULER_VAULT if settings.EULER_VAULT else None
         )
         self.vault = None
         if self.vault_address:

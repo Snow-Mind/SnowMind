@@ -39,11 +39,11 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
 
 ALL_ADAPTERS: dict[str, BaseProtocolAdapter] = _build_adapters()
 
-# Protocols that participate in waterfall allocation (beta: Aave V3 + Benqi)
+# Protocols that participate in waterfall allocation (all 4 active on mainnet)
 ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = {
     k: v
     for k, v in ALL_ADAPTERS.items()
-    if k in ("aave_v3", "benqi")
+    if k in ("aave_v3", "benqi", "euler_v2", "spark")
 }
 
 # Static risk scores — document Section 4.3

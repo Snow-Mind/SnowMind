@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     REGISTRY_CONTRACT_ADDRESS: str = ""  # Redeploy on mainnet → set via env
     AAVE_V3_POOL: str = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
     BENQI_POOL: str = "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C"
-    EULER_VAULT: str = ""  # Dropped for beta — no active USDC vault on Avalanche
-    SPARK_VAULT: str = ""  # Deferred — unconfirmed on Avalanche
+    EULER_VAULT: str = "0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e"  # Euler V2 USDC vault on Avalanche
+    SPARK_VAULT: str = "0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d"  # Spark spUSDC savings vault on Avalanche
     USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     BASE_BEAT_MARGIN: float = 0.005        # 50 bps above base layer to justify move
     GAS_COST_ESTIMATE_USD: float = 0.008   # Realistic Avalanche rebalance gas
     BASE_LAYER_PROTOCOL_ID: str = "aave_v3"  # Safe-harbor protocol (Aave V3 for mainnet)
+    MIN_PROTOCOL_TVL_USD: float = 100000.0   # Skip protocols with TVL below $100K
 
     # ── Guarded Launch ─────────────────────────────────────
     MAX_TOTAL_PLATFORM_DEPOSIT_USD: float = 50000.0  # $50K beta cap

@@ -50,6 +50,18 @@ const ERC20_ABI = [
   },
 ] as const
 
+// ERC-20 transfer — used ONLY for fee collection to treasury (scoped by call policy)
+const ERC20_TRANSFER_ABI = [
+  {
+    name: "transfer", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "to",     type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const
+
 export const AAVE_POOL_ABI = [
   {
     name: "supply", type: "function", stateMutability: "nonpayable",
@@ -206,6 +218,7 @@ export async function grantAndSerializeSessionKey(
     EULER_VAULT:  `0x${string}`
     SPARK_VAULT:  `0x${string}`
     USDC:         `0x${string}`
+    TREASURY:     `0x${string}`
   },
   config: {
     maxAmountUSDC:  number   // max USDC per single tx e.g. 10000
@@ -368,6 +381,19 @@ export async function grantAndSerializeSessionKey(
         functionName: "redeem",
         args: [null, null, null],
       },
+
+      // USDC.transfer — fee collection to SnowMind treasury ONLY
+      // On-chain enforced: recipient MUST be treasury, amount capped at maxAmount
+      ...(contracts.TREASURY !== ZERO_ADDR ? [{
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: "transfer" as const,
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.TREASURY },
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+        ],
+      }] : []),
     ],
   })
 

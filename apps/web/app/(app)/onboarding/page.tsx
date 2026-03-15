@@ -376,6 +376,7 @@ export default function OnboardingPage() {
           EULER_VAULT: CONTRACTS.EULER_VAULT,
           SPARK_VAULT: CONTRACTS.SPARK_VAULT,
           USDC: CONTRACTS.USDC,
+          TREASURY: CONTRACTS.TREASURY,
         },
         {
           maxAmountUSDC: 10_000,

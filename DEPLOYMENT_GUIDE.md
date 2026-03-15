@@ -59,8 +59,10 @@ Instead of a complex mathematical optimizer, SnowMind uses a simple **waterfall*
 ### Fee Model
 
 - **No deposit fee** — users deposit and withdraw freely.
-- **10% performance fee on profits only** — if you deposit $10,000 and withdraw $10,500, the fee is 10% of $500 = $50. You receive $10,450.
+- **10% performance fee on profits only** — if you deposit $10,000 and withdraw $10,500, the fee is 10% of $500 = $50. You receive $10,450. The fee is transferred atomically to the SnowMind treasury (Gnosis Safe) in the same transaction as the withdrawal.
 - **No fee if no profit** — if you withdraw at a loss (unlikely with stablecoin lending), there's zero fee.
+- **Fee formula**: `fee = (current_balance - total_deposited) * 0.10` — simple and transparent.
+- **On-chain enforced**: Session key has a scoped `USDC.transfer()` permission that can ONLY send to the treasury address. Even a stolen session key cannot send funds anywhere else.
 
 ---
 
@@ -140,8 +142,8 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **Benqi qiUSDCn** | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` | Avalanche C-Chain |
 | **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Avalanche C-Chain |
 | **SnowMindRegistry** | *Deploy with Foundry (see below)* | Avalanche C-Chain |
-| Euler V2 Vault | *Dropped for beta — no active USDC vault* | — |
-| Spark Vault | *Deferred — unconfirmed on Avalanche* | — |
+| **Euler V2 Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
+| **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
 
 ### Explorer
 
@@ -180,10 +182,10 @@ ZERODEV_PROJECT_ID=your_zerodev_project_id
 REGISTRY_CONTRACT_ADDRESS=0x_YOUR_DEPLOYED_REGISTRY_ADDRESS
 AAVE_V3_POOL=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 BENQI_POOL=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
+EULER_VAULT=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
+SPARK_VAULT=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
 USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 ENTRYPOINT_V07=0x0000000071727De22E5E9d8BAf0edAc6f37da032
-EULER_VAULT=
-SPARK_VAULT=
 
 # ── Security ─────────────────────────────────────────────────
 # Generate: python -c "import os; print(os.urandom(32).hex())"
@@ -215,6 +217,7 @@ MAX_SINGLE_EXPOSURE_PCT=0.40
 BASE_BEAT_MARGIN=0.005
 GAS_COST_ESTIMATE_USD=0.008
 BASE_LAYER_PROTOCOL_ID=aave_v3
+MIN_PROTOCOL_TVL_USD=100000.0
 
 # ── Guarded Launch ───────────────────────────────────────────
 MAX_TOTAL_PLATFORM_DEPOSIT_USD=50000.0
@@ -257,8 +260,9 @@ NEXT_PUBLIC_USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 NEXT_PUBLIC_REGISTRY_ADDRESS=0x_YOUR_DEPLOYED_REGISTRY_ADDRESS
 NEXT_PUBLIC_AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 NEXT_PUBLIC_BENQI_POOL_ADDRESS=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
-NEXT_PUBLIC_SPARK_VAULT_ADDRESS=
-NEXT_PUBLIC_EULER_VAULT_ADDRESS=
+NEXT_PUBLIC_EULER_VAULT_ADDRESS=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
+NEXT_PUBLIC_SPARK_VAULT_ADDRESS=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
+NEXT_PUBLIC_TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
 ```
 
 **Important**: `NEXT_PUBLIC_CHAIN_ID=43114` is the master switch. When set to `43114`, the entire frontend uses Avalanche mainnet (chain, explorer, Pimlico URLs, etc.). Set it to `43113` to switch back to Fuji testnet.
@@ -697,7 +701,7 @@ Before going live, verify each item:
 | Explorer | testnet.snowtrace.io | snowtrace.io |
 | Session key | 100 years (dev) | 30 days (production) |
 | Pimlico URL | avalanche-fuji | avalanche |
-| Active protocols | aave_v3, benqi, euler_v2, spark | aave_v3, benqi only |
+| Active protocols | aave_v3, benqi, euler_v2, spark | aave_v3, benqi, euler_v2, spark |
 | Deposit cap | None | $50,000 total (guarded beta) |
 | Fee | None active | 10% on profits at withdrawal |
 | Faucet | FujiTestFaucet component | Deleted |

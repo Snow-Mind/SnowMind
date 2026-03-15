@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # ── Mainnet fallbacks (used when IS_TESTNET is False) ───────────────
 _AAVE_V3_POOL_MAINNET = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-_USDC_MAINNET = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6C"
+_USDC_MAINNET = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
 
 # DefiLlama pool UUID for Aave V3 USDC on Avalanche
 _DEFILLAMA_AAVE_POOL = "c4b05318-88af-4536-a834-f5fc8940d2d3"
@@ -99,12 +99,8 @@ class AaveV3Adapter(BaseProtocolAdapter):
     def __init__(self) -> None:
         settings = get_settings()
         self.w3 = get_shared_async_web3()
-        self.pool_address = (
-            settings.AAVE_V3_POOL if settings.IS_TESTNET else _AAVE_V3_POOL_MAINNET
-        )
-        self.usdc_address = (
-            settings.USDC_ADDRESS if settings.IS_TESTNET else _USDC_MAINNET
-        )
+        self.pool_address = settings.AAVE_V3_POOL
+        self.usdc_address = settings.USDC_ADDRESS
         self.pool: AsyncContract = self.w3.eth.contract(
             address=self.w3.to_checksum_address(self.pool_address),
             abi=AAVE_POOL_ABI,

@@ -19,11 +19,6 @@ from app.models.base import CamelModel
 from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryResponse
 from app.services.execution.session_key import get_active_session_key
 from app.services.optimizer.rebalancer import Rebalancer
-from app.services.fee_calculator import (
-    calculate_withdrawal_fee,
-    get_yield_tracking,
-    record_withdrawal_fee,
-)
 
 logger = logging.getLogger("snowmind")
 
@@ -259,6 +254,7 @@ async def withdraw_all(
     """Withdraw all funds from every active protocol back to the smart account.
 
     Calculates and deducts a 10% profit fee (on yield earned, not principal).
+    Fee transfer to treasury is included atomically in the same UserOp batch.
     Returns the fee breakdown so the user can see exactly what was charged.
     """
     account = await _lookup_account(db, address)
@@ -269,31 +265,11 @@ async def withdraw_all(
 
     rebalancer = Rebalancer()
 
-    # Calculate fee before withdrawal
-    current = await rebalancer._get_current_allocations(account_id, addr)
-    current_value = sum(current.values())
-    idle_usdc = await rebalancer._get_idle_usdc_balance(addr)
-    total_value = current_value + idle_usdc
-
-    yield_info = get_yield_tracking(db, account_id)
-    fee_breakdown = calculate_withdrawal_fee(
-        current_value_usd=total_value,
-        total_deposited_usdc=Decimal(str(yield_info["total_deposited_usdc"])) if yield_info else total_value,
-        total_withdrawn_usdc=Decimal(str(yield_info["total_withdrawn_usdc"])) if yield_info else Decimal("0"),
-    )
-
     try:
-        tx_hash = await rebalancer.execute_emergency_withdrawal(
+        tx_hash, fee_breakdown = await rebalancer.execute_emergency_withdrawal(
             account_id=account_id,
             smart_account_address=addr,
         )
-        # Record the fee
-        if fee_breakdown["fee_usd"] > Decimal("0"):
-            record_withdrawal_fee(
-                db, account_id,
-                withdrawn_usdc=total_value,
-                fee_usdc=fee_breakdown["fee_usd"],
-            )
 
         return {
             "status": "executed",
