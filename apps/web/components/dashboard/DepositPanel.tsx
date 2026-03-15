@@ -16,7 +16,9 @@ import { avalancheFuji } from "viem/chains";
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { useProtocolRates } from "@/hooks/useProtocolRates";
+import { createSmartAccount, approveAndDeployToProtocol } from "@/lib/zerodev";
+import { api } from "@/lib/api-client";
 
 const ERC20_ABI = [
   {
@@ -25,16 +27,6 @@ const ERC20_ABI = [
     stateMutability: "nonpayable",
     inputs: [
       { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  {
-    name: "approve",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "spender", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     outputs: [{ name: "", type: "bool" }],
@@ -54,7 +46,6 @@ function friendlyError(err: unknown): string {
     return "Please switch MetaMask to Avalanche Fuji network.";
   if (msg.includes("insufficient"))
     return "Insufficient USDC balance.";
-  // Truncate long messages (raw calldata)
   if (msg.length > 120) return msg.slice(0, 100) + "…";
   return msg;
 }
@@ -64,13 +55,31 @@ export default function DepositPanel() {
   const [step, setStep] = useState<DepositStep>("idle");
   const [transferTxHash, setTransferTxHash] = useState<string | null>(null);
   const [mintTxHash, setMintTxHash] = useState<string | null>(null);
+  const [deployedProtocol, setDeployedProtocol] = useState<string | null>(null);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
+  const { data: protocolRates } = useProtocolRates();
 
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const parsedAmount = parseFloat(amount);
   const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1;
+
+  // Determine best protocol from live rates
+  const bestProtocol = (() => {
+    const rates = protocolRates ?? [];
+    const active = rates
+      .filter((r) => r.isActive && !r.isComingSoon)
+      .filter((r) => ["aave_v3", "benqi", "euler_v2", "spark"].includes(r.protocolId))
+      .sort((a, b) => b.currentApy - a.currentApy);
+    return active[0] ?? null;
+  })();
+
+  const nameMap: Record<string, string> = { aave_v3: "Aave V3", benqi: "Benqi", euler_v2: "Euler V2", spark: "Spark" };
+
+  const bestProtocolName = bestProtocol
+    ? nameMap[bestProtocol.protocolId] ?? bestProtocol.protocolId
+    : "Best Protocol";
 
   async function handleDeposit() {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
@@ -78,6 +87,7 @@ export default function DepositPanel() {
     setStep("transferring");
     setTransferTxHash(null);
     setMintTxHash(null);
+    setDeployedProtocol(null);
 
     try {
       const provider = await wallet.getEthereumProvider();
@@ -133,38 +143,53 @@ export default function DepositPanel() {
       });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
 
-      // Step 2: Deposit to Benqi via smart account (UserOp — signs via wallet)
+      // Step 2: Deposit to highest-APY protocol via smart account
       setStep("deploying");
       const viemAccount = await toViemAccount({ wallet });
       const { kernelClient } = await createSmartAccount(viemAccount);
 
-      const mintHash = await kernelClient.sendTransaction({
-        calls: [
-          // Approve USDC to Benqi Pool
-          {
-            to: CONTRACTS.USDC,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: ERC20_ABI,
-              functionName: "approve",
-              args: [CONTRACTS.BENQI_POOL, amountWei],
-            }),
-          },
-          // Mint (deposit) to Benqi
-          {
-            to: CONTRACTS.BENQI_POOL,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: BENQI_ABI,
-              functionName: "mint",
-              args: [amountWei],
-            }),
-          },
-        ],
-      });
+      // Get live rates and sort by APY descending
+      const liveRates = protocolRates ?? await api.getCurrentRates();
+      const candidateProtocols = liveRates
+        .filter((r) => r.isActive && !r.isComingSoon)
+        .filter((r) => ["aave_v3", "benqi", "euler_v2", "spark"].includes(r.protocolId))
+        .sort((a, b) => b.currentApy - a.currentApy)
+        .map((r) => r.protocolId as "aave_v3" | "benqi" | "euler_v2" | "spark");
 
-      setMintTxHash(mintHash);
-      toast.success("Deposited to Benqi! Now earning yield.");
+      console.log("[SnowMind] Dashboard deposit candidates (highest APY first):", candidateProtocols);
+
+      let depositedTo: string | null = null;
+      for (const protocolId of candidateProtocols) {
+        try {
+          const result = await approveAndDeployToProtocol(
+            kernelClient,
+            smartAccountAddress as `0x${string}`,
+            {
+              AAVE_POOL: CONTRACTS.AAVE_POOL,
+              BENQI_POOL: CONTRACTS.BENQI_POOL,
+              EULER_VAULT: CONTRACTS.EULER_VAULT,
+              SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+              USDC: CONTRACTS.USDC,
+            },
+            protocolId,
+            parsedAmount,
+          );
+          console.log("[SnowMind] Dashboard deposit tx:", result.txHash, "protocol:", protocolId);
+          setMintTxHash(result.txHash);
+          depositedTo = protocolId;
+          break;
+        } catch (err) {
+          console.error("[SnowMind] Dashboard deposit FAILED for", protocolId, err);
+        }
+      }
+
+      if (!depositedTo) {
+        throw new Error("Deposit failed on all protocols — please try again.");
+      }
+
+      const protocolName = nameMap[depositedTo] ?? depositedTo;
+      setDeployedProtocol(protocolName);
+      toast.success(`Deposited to ${protocolName}! Now earning yield.`);
 
       setStep("done");
       setAmount("");
@@ -175,15 +200,14 @@ export default function DepositPanel() {
       queryClient.invalidateQueries({ queryKey: ["rebalance-history"] });
     } catch (err) {
       toast.error(friendlyError(err));
-      // If transfer succeeded but Benqi deposit failed, stay on "deploying" state isn't helpful
-      setStep(transferTxHash ? "idle" : "idle");
+      setStep("idle");
     }
   }
 
   const buttonLabel = {
     idle: "Deposit",
     transferring: "Transferring USDC…",
-    deploying: "Depositing to Benqi…",
+    deploying: `Depositing to ${bestProtocolName}…`,
     done: "Deposited!",
   }[step];
 
@@ -196,7 +220,7 @@ export default function DepositPanel() {
         <div>
           <h2 className="text-sm font-medium text-arctic">Deposit USDC</h2>
           <p className="text-[11px] text-slate-500">
-            Funds deposit directly to Benqi for yield
+            Funds deposit to {bestProtocolName} ({bestProtocol ? `${(bestProtocol.currentApy * 100).toFixed(2)}% APY` : "best rate"})
           </p>
         </div>
       </div>
@@ -226,7 +250,7 @@ export default function DepositPanel() {
         <div className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">
           <ArrowDown className="h-3 w-3" />
           <span>
-            {parsedAmount.toFixed(2)} USDC → Smart Account → Benqi (earning yield)
+            {parsedAmount.toFixed(2)} USDC → Smart Account → {bestProtocolName} (earning yield)
           </span>
         </div>
       )}
@@ -265,7 +289,7 @@ export default function DepositPanel() {
           {mintTxHash && (
             <div className="flex items-center gap-2 rounded-lg border border-glacier/20 bg-glacier/5 px-3 py-2">
               <CheckCircle2 className="h-3 w-3 shrink-0 text-glacier" />
-              <span className="text-[11px] text-glacier">Benqi Deposit</span>
+              <span className="text-[11px] text-glacier">{deployedProtocol ?? "Protocol"} Deposit</span>
               <a
                 href={EXPLORER.tx(mintTxHash)}
                 target="_blank"
