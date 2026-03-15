@@ -28,9 +28,9 @@ export const CONTRACTS = {
   // MockBenqi on Fuji (real Benqi is mainnet-only)
   BENQI_POOL:  (process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS ?? '0x6ac240d13b85a698ee407617e51f9baab9e395a9') as `0x${string}`,
   // MockEuler vault on Fuji
-  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x372193056e6c57040548ce833ee406509a457632') as `0x${string}`,
+  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x36f8315D6C34D3D8cc304f3665d743c0bcd899ac') as `0x${string}`,
   // MockSpark vault on Fuji (ERC-4626, same interface as Euler mock)
-  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0xEb0841215dE4ea652c26C0b146E1DE2610844Ff0') as `0x${string}`,
+  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0xa48d6d6EDA1A63353154Da23AC4dc97D2a44beFc') as `0x${string}`,
 
   // Test tokens
   USDC:        '0x5425890298aed601595a70AB815c96711a31Bc65' as `0x${string}`,
