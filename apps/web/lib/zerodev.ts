@@ -555,10 +555,11 @@ export async function emergencyWithdrawAll(
   benqiQiTokenBalance: bigint,   // fetch this from on-chain before calling
   eulerShareBalance: bigint,     // ERC-4626 shares
   sparkShareBalance: bigint,     // ERC-4626 shares
+  aaveHasPosition = false,       // whether user has an Aave aToken balance
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const calls = [
-    // Withdraw all from Aave (MAX_UINT = full balance)
-    {
+    // Withdraw all from Aave (MAX_UINT = full balance) — only if user has a position
+    ...(aaveHasPosition ? [{
       to: contracts.AAVE_POOL,
       value: 0n,
       data: encodeFunctionData({
@@ -566,7 +567,7 @@ export async function emergencyWithdrawAll(
         functionName: "withdraw",
         args: [contracts.USDC, maxUint256, smartAccountAddress],
       }),
-    },
+    }] : []),
     // Redeem all from Benqi (exact qiToken balance)
     ...(benqiQiTokenBalance > 0n ? [{
       to: contracts.BENQI_POOL,
@@ -598,6 +599,10 @@ export async function emergencyWithdrawAll(
       }),
     }] : []),
   ]
+
+  if (calls.length === 0) {
+    throw new Error("No protocol positions to withdraw from")
+  }
 
   const txHash = await kernelClient.sendTransaction({ calls })
   return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }

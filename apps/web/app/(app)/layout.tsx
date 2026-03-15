@@ -476,6 +476,30 @@ const ERC4626_CONVERT_ABI = [
     inputs: [{ name: "shares", type: "uint256" }], outputs: [{ name: "assets", type: "uint256" }] },
 ] as const;
 
+// Aave V3: getReserveData returns a tuple; aTokenAddress is at index 8
+const AAVE_GET_RESERVE_DATA_ABI = [
+  { name: "getReserveData", type: "function", stateMutability: "view",
+    inputs: [{ name: "asset", type: "address" }],
+    outputs: [{ name: "", type: "tuple", components: [
+      { name: "configuration", type: "uint256" },
+      { name: "liquidityIndex", type: "uint128" },
+      { name: "currentLiquidityRate", type: "uint128" },
+      { name: "variableBorrowIndex", type: "uint128" },
+      { name: "currentVariableBorrowRate", type: "uint128" },
+      { name: "currentStableBorrowRate", type: "uint128" },
+      { name: "lastUpdateTimestamp", type: "uint40" },
+      { name: "id", type: "uint16" },
+      { name: "aTokenAddress", type: "address" },
+      { name: "stableDebtTokenAddress", type: "address" },
+      { name: "variableDebtTokenAddress", type: "address" },
+      { name: "interestRateStrategyAddress", type: "address" },
+      { name: "accruedToTreasury", type: "uint128" },
+      { name: "unbacked", type: "uint128" },
+      { name: "isolationModeTotalDebt", type: "uint128" },
+    ] }],
+  },
+] as const;
+
 /**
  * Read total USDC value across ALL protocol positions + idle balance.
  * Also returns raw share balances needed for on-chain redeem calls.
@@ -517,19 +541,38 @@ async function readAllProtocolBalances(
     } catch { /* fallback: 0 */ }
   }
 
-  // Aave: aToken balance IS the USDC value (1:1). Use MAX_UINT to withdraw all via withdraw().
-  // We don't need a separate aToken address — Aave withdraw(MAX_UINT) handles it.
-  // But we need to know if there's an Aave position. The simplest check: try the Aave withdraw
-  // and it will return 0 if no position. For balance display we'll rely on the portfolio API.
+  // Aave V3: aToken balance == USDC value (1:1). Discover aToken address via getReserveData.
+  let aaveUsdc = 0;
+  let hasAavePosition = false;
+  try {
+    const reserveData = await publicClient.readContract({
+      address: CONTRACTS.AAVE_POOL, abi: AAVE_GET_RESERVE_DATA_ABI, functionName: "getReserveData",
+      args: [CONTRACTS.USDC],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const aTokenAddress = (reserveData as any).aTokenAddress ?? (reserveData as any)[8];
+    if (aTokenAddress) {
+      const aBalance = await publicClient.readContract({
+        address: aTokenAddress as `0x${string}`, abi: BALANCE_OF_ABI, functionName: "balanceOf",
+        args: [smartAddr],
+      });
+      if ((aBalance as bigint) > 0n) {
+        aaveUsdc = Number(formatUnits(aBalance as bigint, 6));
+        hasAavePosition = true;
+      }
+    }
+  } catch { /* fallback: 0 */ }
 
   const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
 
   return {
-    totalUsdc: idleUsdc + benqiUsdc + eulerUsdc + sparkUsdc,
+    totalUsdc: idleUsdc + benqiUsdc + eulerUsdc + sparkUsdc + aaveUsdc,
     idleUsdc,
     benqiUsdc,
     eulerUsdc,
     sparkUsdc,
+    aaveUsdc,
+    hasAavePosition,
     // Raw values for on-chain redeem calls
     qiBalance: qiBalance as bigint,
     eulerShares: eulerShares as bigint,
@@ -583,7 +626,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n || balances.hasAavePosition;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -592,6 +635,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
           balances.qiBalance,
           balances.eulerShares,
           balances.sparkShares,
+          balances.hasAavePosition,
         );
       }
 
@@ -748,12 +792,23 @@ function AgentDetailsModal({
   const queryClient = useQueryClient();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const [withdrawStep, setWithdrawStep] = useState<"idle" | "processing" | "deactivating">("idle");
+  const [onChainUsdc, setOnChainUsdc] = useState<number | null>(null);
 
-  // Compute USDC balance across all allocations
-  const totalUsdc = portfolio?.allocations?.reduce(
+  // Read on-chain balance across all protocols for accurate display
+  useEffect(() => {
+    if (!smartAccountAddress) return;
+    const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+    readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`)
+      .then((b) => setOnChainUsdc(b.totalUsdc))
+      .catch(() => {});
+  }, [smartAccountAddress]);
+
+  // Prefer on-chain balance; fall back to portfolio API
+  const portfolioTotal = portfolio?.allocations?.reduce(
     (sum, a) => sum + Number(a.amountUsdc),
     0,
   ) ?? 0;
+  const totalUsdc = onChainUsdc ?? portfolioTotal;
 
   const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
 
@@ -770,7 +825,7 @@ function AgentDetailsModal({
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Step 1: Redeem from ALL protocols in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n || balances.hasAavePosition;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -779,6 +834,7 @@ function AgentDetailsModal({
           balances.qiBalance,
           balances.eulerShares,
           balances.sparkShares,
+          balances.hasAavePosition,
         );
       }
 
