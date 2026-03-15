@@ -24,7 +24,7 @@ import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useSessionKey } from "@/hooks/useSessionKey";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL } from "@/lib/constants";
+import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, CHAIN } from "@/lib/constants";
 import { api } from "@/lib/api-client";
 import { toast } from "sonner";
 import {
@@ -36,7 +36,7 @@ import {
   custom,
   http,
 } from "viem";
-import { avalancheFuji } from "viem/chains";
+
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
@@ -344,7 +344,7 @@ function DepositModal({ onClose }: { onClose: () => void }) {
   // Poll EOA balance
   useEffect(() => {
     if (!wallet) return;
-    const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+    const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
     const check = async () => {
       try {
         const balance = await publicClient.readContract({
@@ -364,9 +364,9 @@ function DepositModal({ onClose }: { onClose: () => void }) {
     setStep("transferring");
     try {
       const provider = await wallet.getEthereumProvider();
-      try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0xA869" }] }); } catch {}
+      try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: `0x${CHAIN.id.toString(16)}` }] }); } catch {}
 
-      const walletClient = createWalletClient({ chain: avalancheFuji, transport: custom(provider) });
+      const walletClient = createWalletClient({ chain: CHAIN, transport: custom(provider) });
       const [account] = await walletClient.getAddresses();
       const amountWei = parseUnits(parsedAmount.toString(), 6);
 
@@ -376,7 +376,7 @@ function DepositModal({ onClose }: { onClose: () => void }) {
         data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "transfer", args: [smartAccountAddress as `0x${string}`, amountWei] }),
       });
 
-      const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+      const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
 
       setStep("deploying");
@@ -490,7 +490,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
   // Read total available USDC (protocol positions + idle)
   useEffect(() => {
     if (!smartAccountAddress) return;
-    const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+    const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
     const fetchBalance = async () => {
       try {
         // Idle USDC in smart account
@@ -523,7 +523,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
 
     try {
-      const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+      const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
 
       // Step 1: Redeem all from protocol
       setStep("redeeming");
@@ -723,7 +723,7 @@ function AgentDetailsModal({
     if (!wallet || !smartAccountAddress) return;
     setWithdrawStep("processing");
     try {
-      const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(AVALANCHE_RPC_URL) });
+      const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
 
       // Step 1: Redeem all from protocol
       const qiBalance = await publicClient.readContract({

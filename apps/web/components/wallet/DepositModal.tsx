@@ -361,7 +361,7 @@ export default function DepositModal({ open, onClose }: DepositModalProps) {
               </div>
 
               <p className="text-center text-[10px] text-muted-foreground">
-                This transaction is publicly verifiable on Avalanche Fuji testnet
+                This transaction is publicly verifiable on Avalanche
               </p>
 
               <button

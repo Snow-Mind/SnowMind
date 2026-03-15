@@ -15,7 +15,7 @@ import {
   FileCode2,
 } from "lucide-react";
 import CrystalCard from "@/components/snow/CrystalCard";
-import { CONTRACTS, EXPLORER } from "@/lib/constants";
+import { CONTRACTS, EXPLORER, IS_TESTNET } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -34,27 +34,23 @@ const STEPS = [
     icon: Wallet,
     title: "Connect Wallet",
     description:
-      'Click "Launch App" below. Connect with MetaMask or use email login via Privy. A ZeroDev Kernel v3.1 smart account is created automatically on Fuji testnet.',
+      'Click "Launch App" below. Connect with MetaMask or use email login via Privy. A ZeroDev Kernel v3.1 smart account is created automatically on Avalanche.',
     time: "~30 seconds",
   },
   {
     num: "02",
     icon: Coins,
-    title: "Get Test USDC",
+    title: "Deposit USDC",
     description:
-      "Use the Aave faucet to get free test USDC on Avalanche Fuji. Switch your wallet to Fuji testnet (Chain ID: 43113).",
+      "Transfer USDC to your smart account. SnowMind supports native USDC on Avalanche C-Chain.",
     time: "~1 minute",
-    link: {
-      href: "https://app.aave.com/faucet/",
-      label: "Open Aave Faucet",
-    },
   },
   {
     num: "03",
     icon: Shield,
     title: "Authorize Optimizer",
     description:
-      "Complete the setup wizard. Step 3 creates a scoped session key — the optimizer can only supply/withdraw to Aave V3. This is a real transaction on Fuji.",
+      "Complete the setup wizard. Step 3 creates a scoped session key — the optimizer can only supply/withdraw to whitelisted protocols. This is a real on-chain transaction.",
     time: "~30 seconds",
   },
   {
@@ -62,7 +58,7 @@ const STEPS = [
     icon: Zap,
     title: "Deposit & Watch",
     description:
-      'Click "Deposit" on the dashboard. Enter your test USDC amount. The UserOperation is sent to Aave V3 via Pimlico bundler. Watch your aUSDC balance appear live.',
+      'Click "Deposit" on the dashboard. Enter your USDC amount. The UserOperation is sent via Pimlico bundler. Watch your yield-bearing balance appear live.',
     time: "~1 minute",
   },
   {
@@ -70,7 +66,7 @@ const STEPS = [
     icon: BarChart3,
     title: "Verify On-Chain",
     description:
-      "Click any transaction hash in the dashboard to open it on Snowtrace. Every action is publicly verifiable on the Avalanche Fuji blockchain.",
+      "Click any transaction hash in the dashboard to open it on Snowtrace. Every action is publicly verifiable on Avalanche.",
     time: "~30 seconds",
   },
 ];
@@ -89,13 +85,13 @@ const QUICK_LINKS = [
     description: "View the SnowMindRegistry Solidity source code on Snowtrace.",
     href: CONTRACTS.REGISTRY
       ? EXPLORER.contract(CONTRACTS.REGISTRY)
-      : "https://testnet.snowtrace.io",
+      : EXPLORER.base,
     internal: false,
   },
   {
     icon: ExternalLink,
-    title: "Aave V3 Pool (Fuji)",
-    description: "The lending protocol where your test USDC earns yield.",
+    title: "Aave V3 Pool",
+    description: "The lending protocol where your USDC earns yield.",
     href: EXPLORER.address(CONTRACTS.AAVE_POOL),
     internal: false,
   },
@@ -115,7 +111,7 @@ export default function DemoPage() {
           <motion.div variants={fadeUp} transition={{ duration: 0.5 }}>
             <span className="inline-flex items-center gap-2 rounded-full border border-glacier/20 bg-glacier/5 px-4 py-1.5 text-xs font-medium text-glacier">
               <span className="h-1.5 w-1.5 rounded-full bg-mint animate-pulse" />
-              Live on Fuji Testnet
+              Live on Avalanche
             </span>
           </motion.div>
 
@@ -132,8 +128,8 @@ export default function DemoPage() {
             variants={fadeUp}
             transition={{ duration: 0.5 }}
           >
-            Follow these steps to test the autonomous yield optimizer on
-            Avalanche Fuji. Every transaction is real and verifiable on-chain.
+            Follow these steps to use the autonomous yield optimizer on
+            Avalanche. Every transaction is real and verifiable on-chain.
           </motion.p>
         </motion.div>
 
@@ -204,7 +200,7 @@ export default function DemoPage() {
             <ArrowRight className="h-4 w-4" />
           </Link>
           <p className="mt-3 text-xs text-slate-500">
-            Make sure your wallet is on Avalanche Fuji (Chain ID: 43113)
+            Make sure your wallet is on Avalanche C-Chain
           </p>
         </motion.div>
 
@@ -254,7 +250,7 @@ export default function DemoPage() {
             Verified Contracts
           </h2>
           <p className="mt-2 text-center text-xs text-slate-500">
-            All contracts deployed and verified on Avalanche Fuji Testnet
+            All contracts deployed and verified on Avalanche
           </p>
 
           <div className="mt-8 overflow-hidden rounded-xl border border-white/[0.06]">

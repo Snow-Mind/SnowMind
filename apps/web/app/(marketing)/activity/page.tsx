@@ -178,7 +178,7 @@ export default function ActivityPage() {
             Live SnowMind Activity
           </h1>
           <p className="mt-2 text-sm text-slate-400">
-            Real-time on-chain events from the SnowMind Registry on Avalanche Fuji Testnet
+            Real-time on-chain events from the SnowMind Registry on Avalanche
           </p>
         </div>
 
@@ -231,7 +231,7 @@ export default function ActivityPage() {
             <div className="px-6 py-12 text-center">
               <p className="text-sm text-crimson">{error}</p>
               <p className="mt-2 text-xs text-slate-500">
-                Make sure the registry contract is deployed on Fuji testnet.
+                Make sure the registry contract is deployed on Avalanche.
               </p>
             </div>
           ) : events.length === 0 ? (

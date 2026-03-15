@@ -24,14 +24,13 @@ import {
   encodeFunctionData,
   formatUnits,
 } from "viem";
-import { avalancheFuji } from "viem/chains";
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
 import { api } from "@/lib/api-client";
-import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG } from "@/lib/constants";
+import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG, CHAIN } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
 import {
@@ -201,7 +200,7 @@ export default function OnboardingPage() {
     if (!wallet) return;
 
     const publicClient = createPublicClient({
-      chain: avalancheFuji,
+      chain: CHAIN,
       transport: http(AVALANCHE_RPC_URL),
     });
 
@@ -262,10 +261,11 @@ export default function OnboardingPage() {
       setActivationPhase("transferring-usdc");
       const provider = await wallet.getEthereumProvider();
 
+      const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
       try {
         await provider.request({
           method: "wallet_switchEthereumChain",
-          params: [{ chainId: "0xA869" }],
+          params: [{ chainId: hexChainId }],
         });
       } catch (switchErr: unknown) {
         const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
@@ -273,18 +273,18 @@ export default function OnboardingPage() {
           await provider.request({
             method: "wallet_addEthereumChain",
             params: [{
-              chainId: "0xA869",
-              chainName: "Avalanche Fuji Testnet",
+              chainId: hexChainId,
+              chainName: CHAIN.name,
               nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-              rpcUrls: ["https://api.avax-test.network/ext/bc/C/rpc"],
-              blockExplorerUrls: ["https://testnet.snowtrace.io"],
+              rpcUrls: [AVALANCHE_RPC_URL],
+              blockExplorerUrls: [EXPLORER.base],
             }],
           });
         }
       }
 
       const walletClient = createWalletClient({
-        chain: avalancheFuji,
+        chain: CHAIN,
         transport: custom(provider),
       });
       const [eoaAddress] = await walletClient.getAddresses();
@@ -300,7 +300,7 @@ export default function OnboardingPage() {
       });
 
       const publicClient = createPublicClient({
-        chain: avalancheFuji,
+        chain: CHAIN,
         transport: http(AVALANCHE_RPC_URL),
       });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
@@ -379,7 +379,7 @@ export default function OnboardingPage() {
         },
         {
           maxAmountUSDC: 10_000,
-          durationDays: 36500,
+          durationDays: 30,
           maxOpsPerDay: 20,
         },
       );

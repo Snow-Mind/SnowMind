@@ -190,8 +190,8 @@ async def run_optimizer_preview(
         tvl_by_protocol=tvl_by_protocol,
         tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
-        spark_beat_margin=Decimal(str(settings.SPARK_BEAT_MARGIN)),
-        spark_protocol_id=settings.SPARK_PROTOCOL_ID,
+        base_beat_margin=Decimal(str(settings.BASE_BEAT_MARGIN)),
+        base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
     )
 
     # Build response items

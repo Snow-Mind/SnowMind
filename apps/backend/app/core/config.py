@@ -31,22 +31,22 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str = ""
 
     # ── Blockchain ───────────────────────────────────────────
-    AVALANCHE_RPC_URL: str = "https://api.avax-test.network/ext/bc/C/rpc"
-    AVALANCHE_CHAIN_ID: int = 43113  # Fuji; override to 43114 for mainnet
+    AVALANCHE_RPC_URL: str = "https://api.avax.network/ext/bc/C/rpc"
+    AVALANCHE_CHAIN_ID: int = 43114  # Mainnet; override to 43113 for Fuji dev
     PIMLICO_API_KEY: str = ""
     ZERODEV_PROJECT_ID: str = ""
 
-    # Deployed contracts (Fuji testnet)
-    REGISTRY_CONTRACT_ADDRESS: str = "0xf842428ad92689741cafb0029f4d76361b2d02d4"
-    AAVE_V3_POOL: str = "0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29"
-    BENQI_POOL: str = "0x6ac240d13b85a698ee407617e51f9baab9e395a9"
-    EULER_VAULT: str = "0x372193056e6c57040548ce833ee406509a457632"
-    SPARK_VAULT: str = "0xEb0841215dE4ea652c26C0b146E1DE2610844Ff0"
-    USDC_ADDRESS: str = "0x5425890298aed601595a70AB815c96711a31Bc65"
+    # Deployed contracts (Avalanche mainnet)
+    REGISTRY_CONTRACT_ADDRESS: str = ""  # Redeploy on mainnet → set via env
+    AAVE_V3_POOL: str = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+    BENQI_POOL: str = "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C"
+    EULER_VAULT: str = ""  # Dropped for beta — no active USDC vault on Avalanche
+    SPARK_VAULT: str = ""  # Deferred — unconfirmed on Avalanche
+    USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
-    # ── Deployer (testnet Benqi accrual only) ────────────────
-    DEPLOYER_PRIVATE_KEY: str = ""  # Testnet deployer for accrueInterest()
+    # ── Deployer (testnet Benqi accrual only — disabled on mainnet) ─────
+    DEPLOYER_PRIVATE_KEY: str = ""
 
     # ── Auth / Privy ──────────────────────────────────────────
     PRIVY_APP_ID: str = ""      # From privy.io dashboard
@@ -74,9 +74,12 @@ class Settings(BaseSettings):
     # ── Waterfall Allocator ────────────────────────────────
     TVL_CAP_PCT: float = 0.15              # Max 15% of any protocol's TVL
     MAX_SINGLE_EXPOSURE_PCT: float = 0.40  # Default max per-protocol exposure
-    SPARK_BEAT_MARGIN: float = 0.005       # 50 bps above Spark to justify move
+    BASE_BEAT_MARGIN: float = 0.005        # 50 bps above base layer to justify move
     GAS_COST_ESTIMATE_USD: float = 0.008   # Realistic Avalanche rebalance gas
-    SPARK_PROTOCOL_ID: str = "spark"       # Base layer protocol identifier
+    BASE_LAYER_PROTOCOL_ID: str = "aave_v3"  # Safe-harbor protocol (Aave V3 for mainnet)
+
+    # ── Guarded Launch ─────────────────────────────────────
+    MAX_TOTAL_PLATFORM_DEPOSIT_USD: float = 50000.0  # $50K beta cap
 
     # ── Fees ──────────────────────────────────────────────
     PROFIT_FEE_PCT: float = 0.10           # 10% of profit on withdrawal
@@ -87,7 +90,7 @@ class Settings(BaseSettings):
     RATE_DIVERGENCE_THRESHOLD: float = 0.02  # 2% — halt if diverges
 
     # ── Runtime flags ────────────────────────────────────────
-    IS_TESTNET: bool = True
+    IS_TESTNET: bool = False
 
     @property
     def pimlico_rpc_url(self) -> str:

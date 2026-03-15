@@ -29,10 +29,9 @@ import {
   parseUnits,
   type PublicClient,
 } from "viem"
-import { avalancheFuji } from "viem/chains"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
+import { CHAIN, EXPLORER } from "./constants"
 
-const CHAIN = avalancheFuji
 const ENTRYPOINT = getEntryPoint("0.7")
 const ZERODEV_PROJECT_ID = process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID ?? ""
 const BUNDLER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/${CHAIN.id}`
@@ -189,7 +188,7 @@ export async function approveAllProtocols(
   // Correct API: sendTransaction with calls array (NOT sendUserOperation)
   const txHash = await kernelClient.sendTransaction({ calls: approvalCalls })
 
-  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+  return { txHash, explorerUrl: EXPLORER.tx(txHash) }
 }
 
 // ── 3. Grant session key and serialize ───────────────────────────────────────
@@ -530,7 +529,7 @@ export async function deployInitialToProtocol(
   }
 
   const txHash = await kernelClient.sendTransaction({ calls })
-  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+  return { txHash, explorerUrl: EXPLORER.tx(txHash) }
 }
 
 // ── 5. Revoke session key (user-initiated) ───────────────────────────────────
@@ -542,7 +541,7 @@ export async function revokeSessionKey(
   permissionPlugin: any
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const txHash = await kernelClient.uninstallPlugin({ plugin: permissionPlugin })
-  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+  return { txHash, explorerUrl: EXPLORER.tx(txHash) }
 }
 
 // ── 6. Emergency: withdraw all from specific protocol (user-signed, no session key)
@@ -600,5 +599,5 @@ export async function emergencyWithdrawAll(
   ]
 
   const txHash = await kernelClient.sendTransaction({ calls })
-  return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+  return { txHash, explorerUrl: EXPLORER.tx(txHash) }
 }

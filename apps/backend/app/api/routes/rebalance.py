@@ -10,6 +10,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supabase import Client
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import require_privy_auth
@@ -307,3 +308,33 @@ async def withdraw_all(
     except ValueError as exc:
         # "No positions to withdraw" or "No active session key"
         return {"status": "skipped", "txHash": None, "reason": str(exc)}
+
+
+# ── GET /platform/capacity — remaining deposit capacity for guarded launch ──
+
+@router.get("/platform/capacity")
+@limiter.limit("60/minute")
+async def get_platform_capacity(
+    request: Request,
+    db: Client = Depends(get_db),
+):
+    """Return the remaining platform deposit capacity for the guarded beta launch."""
+    settings = get_settings()
+    cap = Decimal(str(settings.MAX_TOTAL_PLATFORM_DEPOSIT_USD))
+
+    alloc_rows = (
+        db.table("allocations")
+        .select("amount_usdc")
+        .execute()
+    )
+    total_deployed = sum(
+        Decimal(str(row["amount_usdc"])) for row in alloc_rows.data
+    )
+
+    remaining = max(cap - total_deployed, Decimal("0"))
+    return {
+        "maxCapUsd": str(cap),
+        "totalDeployedUsd": str(total_deployed),
+        "remainingCapacityUsd": str(remaining),
+        "isCapReached": remaining <= Decimal("0"),
+    }

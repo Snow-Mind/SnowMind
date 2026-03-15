@@ -1,8 +1,8 @@
-"""Waterfall allocator — priority-ordered fill with TVL caps and Spark base layer.
+"""Waterfall allocator — priority-ordered fill with TVL caps and a base layer.
 
 Replaces the MILP solver for active allocation decisions. Sorts protocols by APY
 descending, fills each up to min(user_exposure_cap, 15% of protocol TVL), and
-parks any remainder in Spark as the stable yield floor.
+parks any remainder in the base layer (Aave V3 on mainnet) as the stable yield floor.
 
 The MILP solver (milp_solver.py) is kept for future yield-curve modeling.
 """
@@ -30,26 +30,26 @@ def waterfall_allocate(
     tvl_by_protocol: dict[str, Decimal],
     tvl_cap_pct: Decimal = Decimal("0.15"),
     max_exposure_pct: Decimal = Decimal("0.40"),
-    spark_beat_margin: Decimal = Decimal("0.005"),
-    spark_protocol_id: str = "spark",
+    base_beat_margin: Decimal = Decimal("0.005"),
+    base_layer_protocol_id: str = "aave_v3",
 ) -> OptimizerOutput:
-    """Waterfall allocation: fill highest-APY protocols first, park remainder in Spark.
+    """Waterfall allocation: fill highest-APY protocols first, park remainder in base layer.
 
     Algorithm:
-        1. Identify Spark's APY as the yield floor.
-        2. Filter protocols that beat Spark by spark_beat_margin, sort by APY desc.
+        1. Identify base layer's APY as the yield floor.
+        2. Filter protocols that beat base layer by base_beat_margin, sort by APY desc.
         3. For each protocol: cap = min(max_exposure * total, tvl * tvl_cap_pct).
            Allocate min(remaining, cap).
-        4. Park any leftover in Spark.
-        5. If nothing beats Spark, allocate 100% to Spark.
+        4. Park any leftover in the base layer.
+        5. If nothing beats the base layer, allocate 100% to it.
 
     Args:
         inp: Standard OptimizerInput (protocols, total_amount, current allocations, gas).
         tvl_by_protocol: Protocol ID → TVL in USD.
         tvl_cap_pct: Max fraction of a protocol's TVL we can own (default 15%).
         max_exposure_pct: Max fraction of total deposit in any single protocol.
-        spark_beat_margin: Minimum APY advantage over Spark to justify allocation.
-        spark_protocol_id: Protocol ID for the Spark base layer.
+        base_beat_margin: Minimum APY advantage over base layer to justify allocation.
+        base_layer_protocol_id: Protocol ID for the base layer (Aave V3 on mainnet).
     """
     t0 = time.time()
     total = inp.total_amount_usd
@@ -58,14 +58,14 @@ def waterfall_allocate(
     if not available:
         return _empty_output(inp)
 
-    # Identify Spark
-    spark = next((p for p in available if p.protocol_id == spark_protocol_id), None)
-    spark_apy = spark.apy if spark else _ZERO
+    # Identify base layer (Aave V3 on mainnet)
+    base = next((p for p in available if p.protocol_id == base_layer_protocol_id), None)
+    base_apy = base.apy if base else _ZERO
 
-    # Filter protocols that beat Spark by the margin (exclude Spark itself)
+    # Filter protocols that beat the base layer by the margin (exclude base itself)
     candidates = [
         p for p in available
-        if p.protocol_id != spark_protocol_id and p.apy - spark_apy >= spark_beat_margin
+        if p.protocol_id != base_layer_protocol_id and p.apy - base_apy >= base_beat_margin
     ]
     candidates.sort(key=lambda p: p.apy, reverse=True)
 
@@ -87,12 +87,12 @@ def waterfall_allocate(
             allocations[p.protocol_id] = alloc.quantize(Decimal("0.01"))
             remaining -= alloc
 
-    # Park remainder in Spark (or all if nothing beat Spark)
-    if remaining > _ONE and spark is not None:
-        allocations[spark_protocol_id] = remaining.quantize(Decimal("0.01"))
+    # Park remainder in base layer (or all if nothing beat the base)
+    if remaining > _ONE and base is not None:
+        allocations[base_layer_protocol_id] = remaining.quantize(Decimal("0.01"))
         remaining = _ZERO
     elif remaining > _ONE and candidates:
-        # No Spark available — give overflow to the best candidate
+        # No base layer available — give overflow to the best candidate
         best_pid = candidates[0].protocol_id
         allocations[best_pid] = allocations.get(best_pid, _ZERO) + remaining
         remaining = _ZERO

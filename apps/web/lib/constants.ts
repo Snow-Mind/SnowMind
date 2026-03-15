@@ -1,7 +1,9 @@
-import { avalancheFuji } from 'viem/chains'
+import { avalanche, avalancheFuji } from 'viem/chains'
 
-export const CHAIN = avalancheFuji  // testnet for MVP; switch to avalanche for mainnet
-export const CHAIN_ID = 43113
+// ── Chain configuration (env-driven) ────────────────────────────────────────
+const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? '43114')
+export const CHAIN = chainId === 43113 ? avalancheFuji : avalanche
+export const CHAIN_ID = chainId
 
 export const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
@@ -12,43 +14,43 @@ export const ZERODEV_PROJECT_ID =
   process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID ?? "";
 
 export const AVALANCHE_RPC_URL =
-  process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL ?? "https://api.avax-test.network/ext/bc/C/rpc";
+  process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL ?? "https://api.avax.network/ext/bc/C/rpc";
 
-export const IS_TESTNET = process.env.NEXT_PUBLIC_CHAIN_ID === '43113' || CHAIN_ID === 43113
+export const IS_TESTNET = chainId === 43113
 
-// Fuji Testnet Addresses (verify at docs.aave.com before use)
+// Mainnet contract addresses (override via env for dev/staging on Fuji)
 export const CONTRACTS = {
-  // Our deployed contracts (Fuji 43113)
-  REGISTRY:    (process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ?? '0xf842428ad92689741cafb0029f4d76361b2d02d4') as `0x${string}`,
+  REGISTRY:    (process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ?? '') as `0x${string}`,
 
-  // Aave V3 on Fuji
-  AAVE_POOL:   '0x1775ECC8362dB6CaB0c7A9C0957cF656A5276c29' as `0x${string}`,
-  AAVE_FAUCET: '0xA70D8aD6d26931d0188c642A66de3B6202cDc5FA' as `0x${string}`,
+  // Aave V3 on Avalanche mainnet
+  AAVE_POOL:   (process.env.NEXT_PUBLIC_AAVE_POOL_ADDRESS ?? '0x794a61358D6845594F94dc1DB02A252b5b4814aD') as `0x${string}`,
 
-  // MockBenqi on Fuji (real Benqi is mainnet-only)
-  BENQI_POOL:  (process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS ?? '0x6ac240d13b85a698ee407617e51f9baab9e395a9') as `0x${string}`,
-  // MockEuler vault on Fuji
-  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x372193056e6c57040548ce833ee406509a457632') as `0x${string}`,
-  // MockSpark vault on Fuji (ERC-4626, same interface as Euler mock)
-  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0xEb0841215dE4ea652c26C0b146E1DE2610844Ff0') as `0x${string}`,
+  // Benqi qiUSDCn on Avalanche mainnet
+  BENQI_POOL:  (process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS ?? '0xB715808a78F6041E46d61Cb123C9B4A27056AE9C') as `0x${string}`,
+  // Euler V2 — dropped for beta (no active USDC vault on Avalanche)
+  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '') as `0x${string}`,
+  // Spark — deferred (unconfirmed on Avalanche)
+  SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '') as `0x${string}`,
 
-  // Test tokens
-  USDC:        '0x5425890298aed601595a70AB815c96711a31Bc65' as `0x${string}`,
+  // Native USDC on Avalanche mainnet (Circle-issued)
+  USDC:        (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E') as `0x${string}`,
 
   // ZeroDev / ERC-4337
   ENTRYPOINT_V07: '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`,
 } as const
 
+const explorerBase = IS_TESTNET ? 'https://testnet.snowtrace.io' : 'https://snowtrace.io'
 export const EXPLORER = {
-  base: 'https://testnet.snowtrace.io',
-  tx: (hash: string) => `https://testnet.snowtrace.io/tx/${hash}`,
-  address: (addr: string) => `https://testnet.snowtrace.io/address/${addr}`,
-  contract: (addr: string) => `https://testnet.snowtrace.io/address/${addr}#code`,
+  base: explorerBase,
+  tx: (hash: string) => `${explorerBase}/tx/${hash}`,
+  address: (addr: string) => `${explorerBase}/address/${addr}`,
+  contract: (addr: string) => `${explorerBase}/address/${addr}#code`,
 }
 
+const pimlicoChain = IS_TESTNET ? 'avalanche-fuji' : 'avalanche'
 export const PIMLICO = {
-  rpc: `https://api.pimlico.io/v2/avalanche-fuji/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`,
-  bundlerRpc: `https://api.pimlico.io/v1/avalanche-fuji/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`,
+  rpc: `https://api.pimlico.io/v2/${pimlicoChain}/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`,
+  bundlerRpc: `https://api.pimlico.io/v1/${pimlicoChain}/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`,
 }
 
 // Protocol metadata — drives ALL UI rendering. Add new protocols here only.
@@ -101,14 +103,14 @@ export const PROTOCOL_CONFIG = {
     color: '#4A6CF6', // Euler brand blue
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-official.svg',
-    isActive: true,
-    isComingSoon: false,
+    isActive: false,
+    isComingSoon: true,
     minAllocation: 500,
     maxAllocationPct: 0.20,  // Lower cap until proven (document: "start with 20% cap")
-    description: 'Next-gen modular lending (ERC-4626). Live on Ethereum, coming to Avalanche.',
+    description: 'Next-gen modular lending (ERC-4626). Coming soon to Avalanche.',
     auditBadge: 'Audited (Ethereum)',
-    explorerUrl: EXPLORER.address(CONTRACTS.EULER_VAULT),
-    vaultUrl: 'https://app.euler.finance/vault/0x797DD80692c3b2dAdabCe8e30C07fDE5307D48a9',
+    explorerUrl: CONTRACTS.EULER_VAULT ? EXPLORER.address(CONTRACTS.EULER_VAULT) : '',
+    vaultUrl: 'https://app.euler.finance/',
   },
   spark: {
     id: 'spark' as const,
@@ -120,13 +122,13 @@ export const PROTOCOL_CONFIG = {
     color: '#FFB347', // Spark brand orange
     bgColor: 'rgba(255, 179, 71, 0.12)',
     logoPath: '/protocols/spark-official.svg',
-    isActive: true,
-    isComingSoon: false,
+    isActive: false,
+    isComingSoon: true,
     minAllocation: 500,
     maxAllocationPct: 0.60,
-    description: 'MakerDAO-backed savings protocol with competitive USDC rates.',
+    description: 'MakerDAO-backed savings protocol. Coming soon to Avalanche.',
     auditBadge: 'Audited',
-    explorerUrl: EXPLORER.address(CONTRACTS.SPARK_VAULT),
+    explorerUrl: CONTRACTS.SPARK_VAULT ? EXPLORER.address(CONTRACTS.SPARK_VAULT) : '',
     vaultUrl: 'https://app.spark.fi/markets/',
   },
 } as const
@@ -143,8 +145,8 @@ export const IDLE_CONFIG = {
 
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
-// Only protocols the waterfall allocator considers for MVP
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'euler_v2', 'spark']
+// Only protocols the waterfall allocator considers for beta (Aave V3 + Benqi)
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi']
 
 // Document: Session key allowedFunctions per protocol
 export const SESSION_KEY_SELECTORS = {

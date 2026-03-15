@@ -14,9 +14,8 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { createPublicClient, http, encodeFunctionData } from "viem";
-import { avalancheFuji } from "viem/chains";
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
-import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL } from "@/lib/constants";
+import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL, CHAIN, IS_TESTNET } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
@@ -39,7 +38,7 @@ function friendlyWithdrawError(err: unknown): string {
   if (msg.includes("zd_getUserOperationGasPrice") || msg.includes("does not exist"))
     return "Gas estimation failed — please try again.";
   if (msg.includes("chainId"))
-    return "Please switch MetaMask to Avalanche Fuji network.";
+    return `Please switch MetaMask to Avalanche ${IS_TESTNET ? 'Fuji' : 'C-Chain'}.`;
   if (msg.length > 120) return msg.slice(0, 100) + "…";
   return msg;
 }
@@ -63,7 +62,7 @@ export default function EmergencyPanel() {
     try {
       // Read qiToken balance on-chain
       const publicClient = createPublicClient({
-        chain: avalancheFuji,
+        chain: CHAIN,
         transport: http(AVALANCHE_RPC_URL),
       });
       const qiBalance = await publicClient.readContract({

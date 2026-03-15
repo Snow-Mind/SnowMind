@@ -14,6 +14,7 @@ import {
   Server,
   Wallet,
 } from "lucide-react";
+import { CONTRACTS, EXPLORER } from "@/lib/constants";
 
 const QUICK_LINKS = [
   {
@@ -30,14 +31,14 @@ const QUICK_LINKS = [
   },
   {
     title: "Live Demo",
-    description: "Watch SnowMind optimize yield on Avalanche Fuji testnet.",
+    description: "Watch SnowMind optimize yield on Avalanche.",
     href: "/demo",
     icon: BookOpen,
   },
   {
     title: "Smart Contracts",
     description: "View our verified contracts on Snowtrace.",
-    href: "https://testnet.snowtrace.io/address/0xf842428ad92689741cafb0029f4d76361b2d02d4#code",
+    href: CONTRACTS.REGISTRY ? EXPLORER.contract(CONTRACTS.REGISTRY) : EXPLORER.base,
     icon: Code2,
     external: true,
   },
@@ -58,7 +59,7 @@ const ARCHITECTURE_SECTIONS = [
     title: "Backend (FastAPI + Python)",
     icon: Server,
     items: [
-      "MILP optimizer (PuLP) for allocation decisions",
+      "Waterfall allocator for yield allocation decisions",
       "TWAP rate fetcher with anomaly detection",
       "ERC-4337 UserOperation execution via Pimlico",
       "Supabase for state persistence",
@@ -277,10 +278,10 @@ export default function DocsPage() {
             <div className="flex items-start gap-3">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
               <div>
-                <h4 className="font-semibold text-amber-800">Testnet Notice</h4>
+                <h4 className="font-semibold text-amber-800">Beta Notice</h4>
                 <p className="mt-1 text-sm text-amber-700">
-                  SnowMind is currently running on Avalanche Fuji testnet. Do not deposit
-                  real funds. Use the Aave faucet to get test USDC for experimentation.
+                  SnowMind is currently in beta on Avalanche mainnet with a $50K deposit cap.
+                  Start with small amounts. All deposits earn real yield.
                 </p>
               </div>
             </div>

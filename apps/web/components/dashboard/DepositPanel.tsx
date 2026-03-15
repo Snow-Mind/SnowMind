@@ -12,9 +12,9 @@ import {
   custom,
   http,
 } from "viem";
-import { avalancheFuji } from "viem/chains";
+
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
-import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER } from "@/lib/constants";
+import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER, CHAIN, IS_TESTNET } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 
@@ -51,7 +51,7 @@ function friendlyError(err: unknown): string {
   if (msg.includes("zd_getUserOperationGasPrice") || msg.includes("does not exist"))
     return "Gas estimation failed — please try again.";
   if (msg.includes("chainId"))
-    return "Please switch MetaMask to Avalanche Fuji network.";
+    return `Please switch MetaMask to Avalanche ${IS_TESTNET ? 'Fuji' : 'C-Chain'}.`;
   if (msg.includes("insufficient"))
     return "Insufficient USDC balance.";
   // Truncate long messages (raw calldata)
@@ -82,11 +82,12 @@ export default function DepositPanel() {
     try {
       const provider = await wallet.getEthereumProvider();
 
-      // Switch to Fuji if needed
+      // Switch to correct chain if needed
+      const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
       try {
         await provider.request({
           method: "wallet_switchEthereumChain",
-          params: [{ chainId: "0xA869" }],
+          params: [{ chainId: hexChainId }],
         });
       } catch (switchErr: unknown) {
         const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
@@ -94,18 +95,18 @@ export default function DepositPanel() {
           await provider.request({
             method: "wallet_addEthereumChain",
             params: [{
-              chainId: "0xA869",
-              chainName: "Avalanche Fuji Testnet",
+              chainId: hexChainId,
+              chainName: CHAIN.name,
               nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-              rpcUrls: ["https://api.avax-test.network/ext/bc/C/rpc"],
-              blockExplorerUrls: ["https://testnet.snowtrace.io"],
+              rpcUrls: [AVALANCHE_RPC_URL],
+              blockExplorerUrls: [EXPLORER.base],
             }],
           });
         }
       }
 
       const walletClient = createWalletClient({
-        chain: avalancheFuji,
+        chain: CHAIN,
         transport: custom(provider),
       });
 
@@ -128,7 +129,7 @@ export default function DepositPanel() {
 
       // Wait for transfer to be mined
       const publicClient = createPublicClient({
-        chain: avalancheFuji,
+        chain: CHAIN,
         transport: http(AVALANCHE_RPC_URL),
       });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
