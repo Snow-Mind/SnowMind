@@ -137,12 +137,14 @@ async def get_portfolio(
     # Fetch live APYs once (with testnet → mainnet DefiLlama overlay)
     live_apys = await _fetch_live_apys()
 
-    # Check on-chain protocol balances for active protocols not in DB
+    # Reconcile on-chain balances with DB allocations
     new_db_rows: list[dict] = []  # Rows to persist for newly discovered allocations
+    stale_db_pids: list[str] = []  # Protocols to DELETE from DB (on-chain = 0)
     for pid in ACTIVE_ADAPTERS:
         onchain_balance = await _get_protocol_balance(address, pid)
+        existing = next((a for a in allocations if a.protocol_id == pid), None)
+
         if onchain_balance > Decimal("0.01"):
-            existing = next((a for a in allocations if a.protocol_id == pid), None)
             if existing:
                 # Prefer on-chain balance if significantly different from DB
                 if abs(onchain_balance - existing.amount_usdc) > Decimal("0.5"):
@@ -171,6 +173,13 @@ async def get_portfolio(
                     "allocation_pct": "1.0000",
                     "apy_at_allocation": str(apy.quantize(Decimal("0.000001"))) if apy else None,
                 })
+        elif existing:
+            # On-chain = 0 but DB has a row → user withdrew. Clean up.
+            logger.info("Cleaning stale allocation %s/%s: DB=%s, on-chain=0", address, pid, existing.amount_usdc)
+            total_deposited -= existing.amount_usdc
+            original_db_deposits -= existing.amount_usdc
+            allocations.remove(existing)
+            stale_db_pids.append(pid)
 
     # Persist newly discovered on-chain allocations to DB for yield baseline
     if new_db_rows:
@@ -179,6 +188,14 @@ async def get_portfolio(
             logger.info("Persisted %d initial allocation(s) for %s", len(new_db_rows), address)
         except Exception as exc:
             logger.warning("Failed to persist initial allocations for %s: %s", address, exc)
+
+    # Remove stale DB allocations where on-chain balance is 0 (user withdrew)
+    for pid in stale_db_pids:
+        try:
+            db.table("allocations").delete().eq("account_id", account_id).eq("protocol_id", pid).execute()
+            logger.info("Deleted stale allocation row %s/%s", address, pid)
+        except Exception as exc:
+            logger.warning("Failed to delete stale allocation %s/%s: %s", address, pid, exc)
 
     # Overwrite stale DB APYs with live rates
     for alloc in allocations:

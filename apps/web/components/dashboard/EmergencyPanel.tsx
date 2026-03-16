@@ -13,13 +13,13 @@ import {
   Loader2,
   CheckCircle2,
 } from "lucide-react";
-import { createPublicClient, http, encodeFunctionData } from "viem";
+import { createPublicClient, http, formatUnits } from "viem";
 import { avalancheFuji } from "viem/chains";
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { createSmartAccount, emergencyWithdrawAll } from "@/lib/zerodev";
 
 const BALANCE_OF_ABI = [
   {
@@ -28,6 +28,49 @@ const BALANCE_OF_ABI = [
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+const EXCHANGE_RATE_ABI = [
+  {
+    name: "exchangeRateStored",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+const ERC4626_CONVERT_ABI = [
+  {
+    name: "convertToAssets",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "shares", type: "uint256" }],
+    outputs: [{ name: "assets", type: "uint256" }],
+  },
+] as const;
+
+const AAVE_GET_RESERVE_DATA_ABI = [
+  { name: "getReserveData", type: "function", stateMutability: "view",
+    inputs: [{ name: "asset", type: "address" }],
+    outputs: [{ name: "", type: "tuple", components: [
+      { name: "configuration", type: "uint256" },
+      { name: "liquidityIndex", type: "uint128" },
+      { name: "currentLiquidityRate", type: "uint128" },
+      { name: "variableBorrowIndex", type: "uint128" },
+      { name: "currentVariableBorrowRate", type: "uint128" },
+      { name: "currentStableBorrowRate", type: "uint128" },
+      { name: "lastUpdateTimestamp", type: "uint40" },
+      { name: "id", type: "uint16" },
+      { name: "aTokenAddress", type: "address" },
+      { name: "stableDebtTokenAddress", type: "address" },
+      { name: "variableDebtTokenAddress", type: "address" },
+      { name: "interestRateStrategyAddress", type: "address" },
+      { name: "accruedToTreasury", type: "uint128" },
+      { name: "unbacked", type: "uint128" },
+      { name: "isolationModeTotalDebt", type: "uint128" },
+    ] }],
   },
 ] as const;
 
@@ -51,6 +94,7 @@ export default function EmergencyPanel() {
   const [activePath, setActivePath] = useState<WithdrawPath>(null);
   const [withdrawing, setWithdrawing] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [withdrawDetails, setWithdrawDetails] = useState<string | null>(null);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
@@ -60,46 +104,79 @@ export default function EmergencyPanel() {
     if (!wallet || !smartAccountAddress) return;
     setWithdrawing(true);
     setTxHash(null);
+    setWithdrawDetails(null);
     try {
-      // Read qiToken balance on-chain
       const publicClient = createPublicClient({
         chain: avalancheFuji,
         transport: http(AVALANCHE_RPC_URL),
       });
-      const qiBalance = await publicClient.readContract({
-        address: CONTRACTS.BENQI_POOL,
-        abi: BALANCE_OF_ABI,
-        functionName: "balanceOf",
-        args: [smartAccountAddress as `0x${string}`],
-      });
+      const smartAddr = smartAccountAddress as `0x${string}`;
 
-      if (qiBalance === 0n) {
-        toast.info("No funds deposited in Benqi to withdraw.");
+      // Read ALL protocol balances in parallel
+      const [qiBalance, eulerShares, sparkShares] = await Promise.all([
+        publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+        publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+        publicClient.readContract({ address: CONTRACTS.SPARK_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+      ]);
+
+      // Check Aave position
+      let hasAavePosition = false;
+      try {
+        const reserveData = await publicClient.readContract({
+          address: CONTRACTS.AAVE_POOL, abi: AAVE_GET_RESERVE_DATA_ABI, functionName: "getReserveData",
+          args: [CONTRACTS.USDC],
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const aTokenAddress = (reserveData as any).aTokenAddress ?? (reserveData as any)[8];
+        if (aTokenAddress) {
+          const aBalance = await publicClient.readContract({
+            address: aTokenAddress as `0x${string}`, abi: BALANCE_OF_ABI, functionName: "balanceOf",
+            args: [smartAddr],
+          });
+          hasAavePosition = (aBalance as bigint) > 0n;
+        }
+      } catch { /* no Aave position */ }
+
+      // Build summary of what we're withdrawing
+      const parts: string[] = [];
+      if (hasAavePosition) parts.push("Aave V3");
+      if ((qiBalance as bigint) > 0n) parts.push("Benqi");
+      if ((eulerShares as bigint) > 0n) parts.push("Euler V2");
+      if ((sparkShares as bigint) > 0n) parts.push("Spark");
+
+      if (parts.length === 0) {
+        toast.info("No funds deposited in any protocol to withdraw.");
         return;
       }
 
-      // Create kernel client and send redeem UserOp (MetaMask signs)
+      console.log("[SnowMind] Withdrawing from:", parts.join(", "),
+        "Balances: qi=", qiBalance.toString(), "euler=", eulerShares.toString(), "spark=", sparkShares.toString(), "aave=", hasAavePosition);
+
+      // Create kernel client and send batched withdraw UserOp
       const viemAccount = await toViemAccount({ wallet });
       const { kernelClient } = await createSmartAccount(viemAccount);
 
-      const hash = await kernelClient.sendTransaction({
-        calls: [
-          {
-            to: CONTRACTS.BENQI_POOL,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: BENQI_ABI,
-              functionName: "redeem",
-              args: [qiBalance],
-            }),
-          },
-        ],
-      });
+      const result = await emergencyWithdrawAll(
+        kernelClient,
+        smartAddr,
+        {
+          AAVE_POOL: CONTRACTS.AAVE_POOL,
+          BENQI_POOL: CONTRACTS.BENQI_POOL,
+          EULER_VAULT: CONTRACTS.EULER_VAULT,
+          SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+          USDC: CONTRACTS.USDC,
+        },
+        qiBalance as bigint,
+        eulerShares as bigint,
+        sparkShares as bigint,
+        hasAavePosition,
+      );
 
-      setTxHash(hash);
-      toast.success("Withdrawal successful! USDC returned to your smart account.");
+      setTxHash(result.txHash);
+      setWithdrawDetails(parts.join(", "));
+      toast.success(`Withdrawn from ${parts.join(", ")}! USDC returned to your smart account.`);
 
-      // Refresh dashboard data
+      // Refresh dashboard data so stale allocations get cleaned
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
       queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
       queryClient.invalidateQueries({ queryKey: ["rebalance-history"] });
@@ -228,7 +305,7 @@ export default function EmergencyPanel() {
                     </li>
                     <li className="flex gap-2">
                       <span className="font-mono text-glacier">2.</span>
-                      SnowMind builds UserOperations to redeem all positions
+                      SnowMind redeems ALL protocol positions (Aave, Benqi, Euler, Spark) in a single transaction
                     </li>
                     <li className="flex gap-2">
                       <span className="font-mono text-glacier">3.</span>
@@ -245,13 +322,15 @@ export default function EmergencyPanel() {
                     className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-crimson/80 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-crimson disabled:opacity-50"
                   >
                     {withdrawing && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {withdrawing ? "Withdrawing…" : "Withdraw All Funds"}
+                    {withdrawing ? "Withdrawing from all protocols…" : "Withdraw All Funds"}
                   </button>
 
                   {txHash && (
                     <div className="mt-2 flex items-center gap-2 rounded-lg border border-mint/20 bg-mint/5 px-3 py-2">
                       <CheckCircle2 className="h-3 w-3 shrink-0 text-mint" />
-                      <span className="text-[11px] text-mint">Withdrawn</span>
+                      <span className="text-[11px] text-mint">
+                        Withdrawn{withdrawDetails ? ` from ${withdrawDetails}` : ""}
+                      </span>
                       <a
                         href={EXPLORER.tx(txHash)}
                         target="_blank"
@@ -286,14 +365,14 @@ export default function EmergencyPanel() {
                       <span className="font-mono text-frost">2.</span>
                       <span>
                         Call <code className="text-arctic">redeem()</code> on
-                        Benqi ({PROTOCOL_CONFIG.benqi.shortName})
+                        each protocol with your position (Benqi, Euler V2, Spark)
                       </span>
                     </li>
                     <li className="flex gap-2">
                       <span className="font-mono text-frost">3.</span>
                       <span>
                         Call <code className="text-arctic">withdraw()</code> on
-                        Aave V3 Pool
+                        Aave V3 Pool (if you have an Aave position)
                       </span>
                     </li>
                     <li className="flex gap-2">
@@ -309,6 +388,8 @@ export default function EmergencyPanel() {
                     {[
                       { label: "Benqi Pool", addr: CONTRACTS.BENQI_POOL },
                       { label: "Aave V3 Pool", addr: CONTRACTS.AAVE_POOL },
+                      { label: "Euler V2 Vault", addr: CONTRACTS.EULER_VAULT },
+                      { label: "Spark Vault", addr: CONTRACTS.SPARK_VAULT },
                       { label: "USDC Token", addr: CONTRACTS.USDC },
                     ].map((c) => (
                       <a
