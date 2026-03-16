@@ -113,7 +113,10 @@ async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
     try:
         from app.services.optimizer.rebalancer import Rebalancer
         rebalancer = Rebalancer()
-        result = await rebalancer.check_and_rebalance(account_id, address)
+        result = await rebalancer.check_and_rebalance(
+            account_id=account_id,
+            smart_account_address=address,
+        )
         logger.info("Initial rebalance for %s: %s", address, result.get("status", "unknown"))
     except Exception as exc:
         logger.warning("Initial rebalance failed for %s (cron will retry): %s", address, exc)

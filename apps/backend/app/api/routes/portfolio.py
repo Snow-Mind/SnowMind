@@ -146,11 +146,12 @@ async def get_portfolio(
 
         if onchain_balance > Decimal("0.01"):
             if existing:
-                # Prefer on-chain balance if significantly different from DB
-                if abs(onchain_balance - existing.amount_usdc) > Decimal("0.5"):
-                    total_deposited -= existing.amount_usdc
-                    existing.amount_usdc = onchain_balance
-                    total_deposited += onchain_balance
+                # Always prefer current on-chain balance for portfolio snapshots.
+                # A large absolute threshold can suppress real accrued yield,
+                # especially for small balances.
+                total_deposited -= existing.amount_usdc
+                existing.amount_usdc = onchain_balance
+                total_deposited += onchain_balance
             else:
                 # Protocol balance found on-chain but not in DB (initial deposit).
                 # Persist to DB so yield can be tracked from this baseline.

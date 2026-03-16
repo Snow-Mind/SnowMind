@@ -276,7 +276,7 @@ class SnowMindScheduler:
             })
             signed = deployer.sign_transaction(tx)
             await w3.eth.send_raw_transaction(signed.raw_transaction)
-            logger.debug("Benqi interest accrued")
+            logger.info("Benqi interest accrued")
         except Exception as e:
             logger.warning("Benqi accrue failed (non-critical): %s", e)
 

@@ -90,6 +90,32 @@ class Rebalancer:
             logger.warning("Failed to read idle USDC for %s: %s", smart_account_address, exc)
             return Decimal("0")
 
+    def _normalize_account_id(self, db, account_id_or_address: str) -> str:
+        """Ensure account identifier is a UUID string, resolving from address when needed."""
+        if not account_id_or_address:
+            return account_id_or_address
+
+        try:
+            return str(UUID(str(account_id_or_address)))
+        except (ValueError, TypeError):
+            pass
+
+        try:
+            if isinstance(account_id_or_address, str) and account_id_or_address.startswith("0x"):
+                acct = (
+                    db.table("accounts")
+                    .select("id")
+                    .eq("address", account_id_or_address)
+                    .limit(1)
+                    .execute()
+                )
+                if acct.data:
+                    return str(acct.data[0]["id"])
+        except Exception as exc:
+            logger.warning("Failed to normalize account_id %s: %s", account_id_or_address, exc)
+
+        return account_id_or_address
+
     # â”€â”€ Full pipeline (cron entry-point) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def check_and_rebalance(
@@ -111,6 +137,7 @@ class Rebalancer:
          10. Return log dict
         """
         db = get_supabase()
+        account_id = self._normalize_account_id(db, account_id)
 
         # 0. Early session-key check — skip expensive pipeline if no key
         session_key_record = get_active_session_key_record(db, UUID(account_id))
@@ -232,7 +259,7 @@ class Rebalancer:
         # 6. Check rebalance gate
         if not result.is_rebalance_needed:
             return await self._log(
-                db, smart_account_address, "skipped",
+                db, account_id, "skipped",
                 reason="Rebalance not worth it",
                 proposed=result.allocations,
             )
@@ -252,7 +279,7 @@ class Rebalancer:
             min_gap = timedelta(hours=self.settings.MIN_REBALANCE_INTERVAL_HOURS)
             if datetime.now(timezone.utc) - last_ts < min_gap:
                 return await self._log(
-                    db, smart_account_address, "skipped",
+                    db, account_id, "skipped",
                     reason=f"Last rebalance too recent ({last_ts.isoformat()})",
                     proposed=result.allocations,
                 )
@@ -648,6 +675,7 @@ class Rebalancer:
         tx_hash: str | None = None,
         apr_improvement: Decimal | None = None,
     ) -> dict:
+        account_id = self._normalize_account_id(db, account_id)
         row = {
             "account_id": account_id,
             "status": status,
