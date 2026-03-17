@@ -24,10 +24,10 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
     except (ValueError, Exception) as exc:
         logger.warning("BenqiAdapter not loaded (BENQI_POOL missing?): %s", exc)
 
-    # Euler V2 — ERC-4626 mock vault
+    # Euler V2 — ERC-4626 vault (inactive for beta)
     adapters["euler_v2"] = EulerV2Adapter()
 
-    # Spark Savings — ERC-4626 mock vault (same interface as Euler)
+    # Spark Savings — ERC-4626 vault
     try:
         from .spark import SparkAdapter
         adapters["spark"] = SparkAdapter()
@@ -39,11 +39,11 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
 
 ALL_ADAPTERS: dict[str, BaseProtocolAdapter] = _build_adapters()
 
-# Protocols that participate in waterfall allocation (all 4 active on mainnet)
+# Protocols that participate in waterfall allocation (mainnet beta: 3 active)
 ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = {
     k: v
     for k, v in ALL_ADAPTERS.items()
-    if k in ("aave_v3", "benqi", "euler_v2", "spark")
+    if k in ("aave_v3", "benqi", "spark")
 }
 
 # Static risk scores — document Section 4.3

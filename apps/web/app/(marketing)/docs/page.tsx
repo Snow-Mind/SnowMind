@@ -127,7 +127,7 @@ const FAQ = [
   },
   {
     q: "What are the fees?",
-    a: "SnowMind is free during the testnet phase. Post-launch, we plan a small performance fee (% of yield generated). Gas costs for rebalancing are sponsored via Pimlico paymaster.",
+    a: "SnowMind charges a 10% performance fee on profits only — calculated at withdrawal as (current_balance − net_principal) × 10%. No deposit fee, no management fee. Gas costs for rebalancing are sponsored via Pimlico paymaster.",
   },
 ] as const;
 

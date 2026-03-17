@@ -106,8 +106,8 @@ export const PROTOCOL_CONFIG = {
     color: '#4A6CF6', // Euler brand blue
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-official.svg',
-    isActive: true,
-    isComingSoon: false,
+    isActive: false,
+    isComingSoon: true,
     minAllocation: 500,
     maxAllocationPct: 0.20,  // Lower cap until proven (document: "start with 20% cap")
     description: 'Next-gen modular lending (ERC-4626) on Avalanche.',
@@ -148,8 +148,8 @@ export const IDLE_CONFIG = {
 
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
-// Only protocols the waterfall allocator considers (all 4 active on mainnet)
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'euler_v2', 'spark']
+// Only protocols the waterfall allocator considers (mainnet beta: 3 active)
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'spark']
 
 // Document: Session key allowedFunctions per protocol
 export const SESSION_KEY_SELECTORS = {

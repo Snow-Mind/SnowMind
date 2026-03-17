@@ -1,4 +1,4 @@
-"""Aave V3 protocol adapter — live Fuji / mainnet contract reads."""
+"""Aave V3 protocol adapter — Avalanche mainnet."""
 
 import logging
 import time
@@ -12,7 +12,7 @@ from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_sh
 
 logger = logging.getLogger(__name__)
 
-# ── Mainnet fallbacks (used when IS_TESTNET is False) ───────────────
+# ── Mainnet addresses ───────────────────────────────────────────────
 _AAVE_V3_POOL_MAINNET = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
 _USDC_MAINNET = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
 

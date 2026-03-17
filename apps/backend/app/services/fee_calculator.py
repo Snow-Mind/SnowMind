@@ -45,6 +45,13 @@ def calculate_withdrawal_fee(
         }
 
     fee = (profit * fee_pct).quantize(Decimal("0.01"))
+
+    # Cap fee at fee_pct of current_value to prevent disproportionate fees
+    # (edge case: user partial-withdrew more than principal, net_principal is
+    # negative, and fee would be unreasonably large vs remaining balance)
+    max_fee = (current_value_usd * fee_pct).quantize(Decimal("0.01"))
+    fee = min(fee, max_fee)
+
     net = current_value_usd - fee
 
     return {
@@ -79,6 +86,34 @@ def record_deposit(db, account_id: str, amount_usdc: Decimal) -> None:
             }).execute()
     except Exception as exc:
         logger.warning("Failed to record deposit for %s: %s", account_id, exc)
+
+
+def record_partial_withdrawal(db, account_id: str, amount_usdc: Decimal) -> None:
+    """Record a partial withdrawal (no fee charged).
+
+    Increments cumulative_withdrawn so the final full-withdrawal profit
+    calculation remains correct.
+    """
+    try:
+        existing = (
+            db.table("account_yield_tracking")
+            .select("total_withdrawn_usdc")
+            .eq("account_id", account_id)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            new_total = Decimal(str(existing.data[0]["total_withdrawn_usdc"])) + amount_usdc
+            db.table("account_yield_tracking").update(
+                {"total_withdrawn_usdc": str(new_total), "updated_at": "now()"}
+            ).eq("account_id", account_id).execute()
+        else:
+            logger.warning(
+                "No yield tracking row for %s during partial withdrawal",
+                account_id,
+            )
+    except Exception as exc:
+        logger.warning("Failed to record partial withdrawal for %s: %s", account_id, exc)
 
 
 def record_withdrawal_fee(

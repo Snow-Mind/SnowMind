@@ -47,7 +47,7 @@ const BENQI_ABI = [
     outputs: [{ name: "", type: "uint256" }] },
 ]
 
-// ERC-4626 vault ABI — used by Euler V2 and Spark mock vaults
+// ERC-4626 vault ABI — used by Euler V2 and Spark vaults
 const ERC4626_ABI = [
   { name: "deposit", type: "function", stateMutability: "nonpayable",
     inputs: [

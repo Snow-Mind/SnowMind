@@ -28,7 +28,14 @@ const stagger = {
   visible: { transition: { staggerChildren: 0.1 } },
 };
 
-const STEPS = [
+const STEPS: {
+  num: string;
+  icon: typeof Wallet;
+  title: string;
+  description: string;
+  time: string;
+  link?: { href: string; label: string };
+}[] = [
   {
     num: "01",
     icon: Wallet,

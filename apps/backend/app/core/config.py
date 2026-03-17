@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
-    # ── Deployer (testnet Benqi accrual only — disabled on mainnet) ─────
+    # ── Deployer (testnet only — unused on mainnet) ─────
     DEPLOYER_PRIVATE_KEY: str = ""
 
     # ── Auth / Privy ──────────────────────────────────────────
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     MAX_SINGLE_EXPOSURE_PCT: float = 0.40  # Default max per-protocol exposure
     BASE_BEAT_MARGIN: float = 0.005        # 50 bps above base layer to justify move
     GAS_COST_ESTIMATE_USD: float = 0.008   # Realistic Avalanche rebalance gas
-    BASE_LAYER_PROTOCOL_ID: str = "aave_v3"  # Safe-harbor protocol (Aave V3 for mainnet)
+    BASE_LAYER_PROTOCOL_ID: str = "spark"  # Safe-harbor base layer (Spark spUSDC for mainnet)
     MIN_PROTOCOL_TVL_USD: float = 100000.0   # Skip protocols with TVL below $100K
 
     # ── Guarded Launch ─────────────────────────────────────

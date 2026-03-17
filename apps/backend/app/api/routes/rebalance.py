@@ -286,6 +286,53 @@ async def withdraw_all(
         return {"status": "skipped", "txHash": None, "reason": str(exc)}
 
 
+# ── POST /{address}/partial-withdraw — partial withdrawal, no fee ────────────
+
+class PartialWithdrawRequest(CamelModel):
+    amount_usdc: float
+    protocol_id: str
+
+
+@router.post("/{address}/partial-withdraw")
+@limiter.limit("5/minute")
+async def partial_withdraw(
+    request: Request,
+    address: str,
+    body: PartialWithdrawRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Partially withdraw from a single protocol — no fee charged.
+
+    Tracks cumulative_withdrawn so the full-withdrawal profit calculation
+    remains correct (Mark's fee architecture: fee only on deactivation).
+    """
+    account = await _lookup_account(db, address)
+    addr = account["address"]
+    account_id = account["id"]
+
+    from app.services.optimizer.rebalancer import Rebalancer
+
+    rebalancer = Rebalancer()
+
+    try:
+        tx_hash = await rebalancer.execute_partial_withdrawal(
+            account_id=account_id,
+            smart_account_address=addr,
+            protocol_id=body.protocol_id,
+            amount_usdc=body.amount_usdc,
+        )
+        return {
+            "status": "executed",
+            "txHash": tx_hash,
+            "feeCharged": False,
+            "amountUsdc": body.amount_usdc,
+            "protocolId": body.protocol_id,
+        }
+    except ValueError as exc:
+        return {"status": "skipped", "txHash": None, "reason": str(exc)}
+
+
 # ── GET /platform/capacity — remaining deposit capacity for guarded launch ──
 
 @router.get("/platform/capacity")

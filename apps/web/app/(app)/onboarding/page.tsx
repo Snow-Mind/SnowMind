@@ -382,6 +382,7 @@ export default function OnboardingPage() {
           maxAmountUSDC: 10_000,
           durationDays: 30,
           maxOpsPerDay: 20,
+          userEOA: wallet.address as `0x${string}`,
         },
       );
 

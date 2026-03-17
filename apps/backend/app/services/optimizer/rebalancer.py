@@ -27,7 +27,7 @@ from app.services.optimizer.milp_solver import (
 from app.services.optimizer.waterfall_allocator import waterfall_allocate
 from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.optimizer.rate_validator import RateValidator, apply_max_move_cap
-from app.services.fee_calculator import record_deposit
+from app.services.fee_calculator import record_deposit, record_partial_withdrawal
 from app.services.protocols import get_adapter
 from app.services.protocols.base import get_shared_async_web3
 
@@ -443,11 +443,13 @@ class Rebalancer:
         deposits: list[dict],
         account_id: str | None = None,
         fee_transfer: dict | None = None,
+        user_transfer: dict | None = None,
     ) -> str:
         """Call the Node.js execution service to execute via ZeroDev.
 
         fee_transfer: optional {"to": treasury_address, "amountUSDC": float}
-        appended to the batch after withdrawals, before deposits.
+        user_transfer: optional {"to": eoa_address, "amountUSDC": float}
+        Both appended to the batch after withdrawals, before deposits.
         """
         payload = {
             "serializedPermission": serialized_permission,
@@ -465,6 +467,8 @@ class Rebalancer:
         }
         if fee_transfer:
             payload["feeTransfer"] = fee_transfer
+        if user_transfer:
+            payload["userTransfer"] = user_transfer
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self.settings.EXECUTION_SERVICE_URL}/execute-rebalance",
@@ -575,6 +579,66 @@ class Rebalancer:
 
         return tx_hash
 
+    # ── Partial withdrawal (no fee) ──────────────────────────────────────────
+
+    async def execute_partial_withdrawal(
+        self,
+        account_id: str,
+        smart_account_address: str,
+        protocol_id: str,
+        amount_usdc: float,
+    ) -> str:
+        """Withdraw a portion from a single protocol — no fee charged.
+
+        Tracks cumulative_withdrawn in account_yield_tracking so the
+        full-withdrawal profit calculation remains correct.
+        """
+        db = get_supabase()
+        amount = Decimal(str(amount_usdc))
+
+        session_key = get_active_session_key(db, UUID(account_id))
+        if not session_key:
+            raise ValueError(f"No active session key for account {account_id}")
+
+        # Build withdrawal instruction
+        entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount)}
+        if protocol_id == "benqi":
+            adapter = get_adapter(protocol_id)
+            amount_wei = int(amount * Decimal("1e6"))
+            qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
+            entry["qiTokenAmount"] = str(qi_amount)
+
+        tx_hash = await self._call_execution_service(
+            serialized_permission=session_key,
+            smart_account_address=smart_account_address,
+            withdrawals=[entry],
+            deposits=[],
+            account_id=account_id,
+        )
+
+        # Track the partial withdrawal for fee calculation
+        record_partial_withdrawal(db, account_id, amount)
+
+        # Update allocations in DB: reduce the protocol allocation
+        current = await self._get_current_allocations(account_id, smart_account_address)
+        current_amt = current.get(protocol_id, Decimal("0"))
+        new_amt = max(current_amt - amount, Decimal("0"))
+        if new_amt < Decimal("1"):
+            # Remove the allocation entirely
+            db.table("allocations").delete().eq(
+                "account_id", account_id
+            ).eq("protocol_id", protocol_id).execute()
+        else:
+            db.table("allocations").update(
+                {"amount_usdc": str(new_amt.quantize(Decimal("0.000001")))}
+            ).eq("account_id", account_id).eq("protocol_id", protocol_id).execute()
+
+        logger.info(
+            "Partial withdrawal of $%.2f from %s for %s: tx=%s",
+            amount_usdc, protocol_id, smart_account_address, tx_hash,
+        )
+        return tx_hash
+
     # â”€â”€ Emergency withdrawal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def execute_emergency_withdrawal(
@@ -630,8 +694,8 @@ class Rebalancer:
             total_withdrawn_usdc=Decimal(str(yield_info["total_withdrawn_usdc"])) if yield_info else Decimal("0"),
         )
 
-        # Include fee transfer in the atomic batch (Mark's approach:
-        # withdraw from protocols + transfer fee to treasury in one UserOp)
+        # Include transfers in the atomic batch (Mark's approach:
+        # withdraw from protocols + fee to treasury + remainder to user EOA in one UserOp)
         fee_transfer = None
         treasury = self.settings.TREASURY_ADDRESS
         if fee_breakdown["fee_usd"] > Decimal("0.01") and treasury:
@@ -644,6 +708,24 @@ class Rebalancer:
                 float(fee_breakdown["fee_usd"]), treasury, smart_account_address,
             )
 
+        # Resolve user's EOA address for the remaining USDC transfer
+        acct = (
+            db.table("accounts")
+            .select("owner_address")
+            .eq("id", account_id)
+            .limit(1)
+            .execute()
+        )
+        owner_eoa = acct.data[0]["owner_address"] if acct.data else None
+
+        # Build user transfer payload (send remaining USDC to user's EOA)
+        user_transfer = None
+        if owner_eoa and fee_breakdown["net_withdrawal_usd"] > Decimal("0.01"):
+            user_transfer = {
+                "to": owner_eoa,
+                "amountUSDC": float(fee_breakdown["net_withdrawal_usd"]),
+            }
+
         tx_hash = await self._call_execution_service(
             serialized_permission=session_key,
             smart_account_address=smart_account_address,
@@ -651,6 +733,7 @@ class Rebalancer:
             deposits=[],
             account_id=account_id,
             fee_transfer=fee_transfer,
+            user_transfer=user_transfer,
         )
 
         # Record fee in DB

@@ -7,7 +7,7 @@ from decimal import Decimal
 from app.core.config import get_settings
 from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
 
-# ── Benqi qiToken ABI — same on mainnet and MockBenqiPool ────────────────────
+# ── Benqi qiToken ABI ────────────────────────────────────────────────────────
 BENQI_QITOKEN_ABI = [
     {
         "name": "mint",
@@ -60,10 +60,10 @@ BENQI_QITOKEN_ABI = [
     },
 ]
 
-# Real mainnet qiUSDC addresses
+# Real mainnet qiUSDC addresses (kept as reference)
 BENQI_MAINNET = {
     "qi_usdc_n": "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C",  # qiUSDCn (native)
-    "usdc":      "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6C",
+    "usdc":      "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",  # Native USDC (Circle-issued)
 }
 
 # Seconds per year for APY calculation (365.25 × 86 400)
@@ -81,15 +81,9 @@ class BenqiAdapter(BaseProtocolAdapter):
         settings = get_settings()
         self.w3 = get_shared_async_web3()
 
-        # Fuji → MockBenqiPool; mainnet → real qiUSDCn
-        self.pool_address = (
-            settings.BENQI_POOL if settings.IS_TESTNET
-            else BENQI_MAINNET["qi_usdc_n"]
-        )
-        self.usdc_address = (
-            settings.USDC_ADDRESS if settings.IS_TESTNET
-            else BENQI_MAINNET["usdc"]
-        )
+        # Always use config addresses (env-driven: defaults to mainnet)
+        self.pool_address = settings.BENQI_POOL
+        self.usdc_address = settings.USDC_ADDRESS
 
         if not self.pool_address:
             raise ValueError(

@@ -97,7 +97,7 @@ export const BENQI_ABI = [
   },
 ] as const
 
-// ERC-4626 vault ABI — shared by Euler V2 and Spark mock vaults
+// ERC-4626 vault ABI — shared by Euler V2 and Spark
 export const ERC4626_VAULT_ABI = [
   {
     name: "deposit", type: "function", stateMutability: "nonpayable",
@@ -224,6 +224,7 @@ export async function grantAndSerializeSessionKey(
     maxAmountUSDC:  number   // max USDC per single tx e.g. 10000
     durationDays:   number   // session key lifetime e.g. 30
     maxOpsPerDay:   number   // rate limit e.g. 20
+    userEOA:        `0x${string}`  // user's EOA address for withdrawal transfers
   }
 ): Promise<{
   serializedPermission: string   // Send to backend — store encrypted in DB
@@ -390,9 +391,22 @@ export async function grantAndSerializeSessionKey(
         abi: ERC20_TRANSFER_ABI,
         functionName: "transfer" as const,
         args: [
-          { condition: ParamCondition.EQUAL, value: contracts.TREASURY },
-          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
-        ],
+          { condition: ParamCondition.EQUAL as const, value: contracts.TREASURY },
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL as const, value: maxAmount },
+        ] as const,
+      }] : []),
+
+      // USDC.transfer — withdrawal to user's own EOA (uncapped, it's their money)
+      // Two separate entries because ZeroDev doesn't support OR-conditions on args
+      ...(config.userEOA !== ZERO_ADDR ? [{
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: "transfer" as const,
+        args: [
+          { condition: ParamCondition.EQUAL as const, value: config.userEOA },
+          null,   // amount — uncapped for user's own withdrawal
+        ] as const,
       }] : []),
     ],
   })

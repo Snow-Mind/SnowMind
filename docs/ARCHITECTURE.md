@@ -289,3 +289,132 @@ Never stored in plaintext. Decrypted only in-memory when building a UserOperatio
 4. **Non-custodial by design**: Session keys enforce supply/withdraw-only permissions at the EVM level. Even a fully compromised backend cannot steal funds.
 
 5. **Stateless optimizer + TWAP**: Rate fetcher smooths over 15 minutes, cross-validates with DefiLlama. Prevents flash loan manipulation.
+
+
+
+
+1. Waterfall Allocator
+What it does: Decides where your USDC goes across 4 protocols.
+
+The logic is simple — think of filling buckets from top to bottom:
+Step 1:  Aave V3 is the "safe default" (base layer, risk score 2/10)
+
+Step 2:  Sort other protocols by APY, highest first
+
+Step 3:  For each protocol:
+           "Does it beat Aave by at least 0.5%?"
+             YES → put money there (up to caps)
+             NO  → skip it, not worth the gas to move
+
+Step 4:  Whatever is left → goes to Aave V3
+
+
+Real example with $10,000:
+
+Rates right now:
+  Aave V3:   3.0%
+  Benqi:     3.3%   ← only 0.3% above Aave (below 0.5% margin → SKIP)
+  Euler V2:  4.2%   ← 1.2% above Aave (qualifies!)
+  Spark:     3.8%   ← 0.8% above Aave (qualifies!)
+
+Result:
+  Euler V2:  $4,000  (40% cap hit)
+  Spark:     $4,000  (40% cap hit)
+  Aave V3:   $2,000  (remainder parked in base layer)
+
+
+Why 0.5% margin? Moving money costs gas. If Benqi is only 0.3% better than Aave, the gas + risk isn't worth it. The 0.5% threshold prevents unnecessary rebalancing.
+
+Safety caps that protect you:
+
+No single protocol gets more than 40% of your deposit
+We never put more than 15% of a protocol's total TVL (so we don't "move the market")
+Protocols with less than $100K TVL are skipped entirely
+Files: apps/backend/app/services/optimizer/waterfall_allocator.py  
+
+
+
+
+
+
+
+2. Atomic Fee Collection
+The problem before: The 10% profit fee was calculated in the code but never actually deducted. When you withdrew, you got 100% back — no fee went to the treasury.
+
+How it works now:
+
+You deposit $10,000
+  ↓
+Over time, yield grows it to $10,500
+  ↓
+You click "Withdraw All"
+  ↓
+Backend calculates:
+  profit = $10,500 - $10,000 = $500
+  fee    = $500 × 10% = $50
+  you get = $10,500 - $50 = $10,450
+  ↓
+ONE single transaction is built with ALL these calls:
+  Call 1: aavePool.withdraw(USDC, MAX)     ← pull from Aave
+  Call 2: eulerVault.redeem(shares)         ← pull from Euler
+  Call 3: USDC.transfer(treasury, $50)      ← fee to treasury
+  ↓
+All 3 calls happen ATOMICALLY — either ALL succeed or NONE do.
+The fee can't be collected without the withdrawal, and vice versa.
+
+
+
+
+Why "atomic" matters: If the fee transfer were a separate transaction, it could fail independently — user gets their money but treasury gets nothing. By batching everything into one UserOperation, it's all-or-nothing.
+
+Files: apps/backend/app/services/optimizer/rebalancer.py (execute_emergency_withdrawal)
+
+3. Treasury-Scoped USDC Transfer Permission
+The problem: The session key (the AI agent's limited key) could call supply, withdraw, mint, redeem on protocols — but couldn't call USDC.transfer() to send the fee to the treasury.
+
+What was added: A new permission in the session key's on-chain call policy:
+
+USDC.transfer() is allowed BUT:
+  - Recipient MUST equal the treasury address (enforced on-chain)
+  - Amount MUST be ≤ maxAmount (enforced on-chain)
+
+
+This means even if someone steals the session key, they can only send USDC to the treasury — not to their own wallet. The blockchain contract itself enforces this.
+
+Files: apps/web/lib/zerodev.ts (call policy), apps/web/app/(app)/onboarding/page.tsx
+
+
+
+
+4. Euler V2 + Spark Re-enabled for Mainnet
+Before: Both were marked "coming soon" and disabled. Only Aave + Benqi were active.
+
+After: Found real mainnet vault addresses and re-enabled both:
+
+Euler V2: 0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e (~$489K TVL)
+Spark spUSDC: 0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d (~$10M TVL)
+Both use ERC-4626 (standard vault interface), so the existing adapters work with just an address change.
+
+Files: apps/backend/app/core/config.py, apps/web/lib/constants.ts, apps/backend/app/services/protocols/__init__.py
+
+5. TVL-Based Protocol Filtering
+What it does: Before the waterfall allocator runs, any protocol with less than $100K in total value locked is automatically skipped.
+
+Why: Low TVL = low liquidity. If a vault only has $50K and we deposit $10K, our withdrawal could be difficult if other users withdraw first. The $100K floor is a safety net.
+
+# In rate_fetcher.py
+if result.tvl_usd > 0 and result.tvl_usd < $100K:
+    skip this protocol for this cycle
+
+
+Files: apps/backend/app/services/optimizer/rate_fetcher.py, apps/backend/app/core/config.py (MIN_PROTOCOL_TVL_USD)
+
+6. Aave Adapter Bug Fix
+Found and fixed a typo in the mainnet USDC address — 0x...48a6C (wrong) → 0x...48a6E (correct). Also removed hardcoded testnet/mainnet conditional logic and made it always use settings.USDC_ADDRESS directly.
+
+Files: apps/backend/app/services/protocols/aave.py
+
+7. Simplified Withdrawal Route
+The /withdraw-all API endpoint had duplicate fee calculation — once in the route handler, once inside execute_emergency_withdrawal(). Cleaned it up so fee logic lives in one place only (inside the rebalancer). The route just calls it and returns the result.
+
+Files: apps/backend/app/api/routes/rebalance.py

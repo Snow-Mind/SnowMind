@@ -2,7 +2,7 @@
 
 Replaces the MILP solver for active allocation decisions. Sorts protocols by APY
 descending, fills each up to min(user_exposure_cap, 15% of protocol TVL), and
-parks any remainder in the base layer (Aave V3 on mainnet) as the stable yield floor.
+parks any remainder in the base layer (Spark on mainnet) as the stable yield floor.
 
 The MILP solver (milp_solver.py) is kept for future yield-curve modeling.
 """
@@ -31,7 +31,7 @@ def waterfall_allocate(
     tvl_cap_pct: Decimal = Decimal("0.15"),
     max_exposure_pct: Decimal = Decimal("0.40"),
     base_beat_margin: Decimal = Decimal("0.005"),
-    base_layer_protocol_id: str = "aave_v3",
+    base_layer_protocol_id: str = "spark",
 ) -> OptimizerOutput:
     """Waterfall allocation: fill highest-APY protocols first, park remainder in base layer.
 
@@ -49,7 +49,7 @@ def waterfall_allocate(
         tvl_cap_pct: Max fraction of a protocol's TVL we can own (default 15%).
         max_exposure_pct: Max fraction of total deposit in any single protocol.
         base_beat_margin: Minimum APY advantage over base layer to justify allocation.
-        base_layer_protocol_id: Protocol ID for the base layer (Aave V3 on mainnet).
+        base_layer_protocol_id: Protocol ID for the base layer (Spark on mainnet).
     """
     t0 = time.time()
     total = inp.total_amount_usd
@@ -58,7 +58,7 @@ def waterfall_allocate(
     if not available:
         return _empty_output(inp)
 
-    # Identify base layer (Aave V3 on mainnet)
+    # Identify base layer (Spark on mainnet)
     base = next((p for p in available if p.protocol_id == base_layer_protocol_id), None)
     base_apy = base.apy if base else _ZERO
 

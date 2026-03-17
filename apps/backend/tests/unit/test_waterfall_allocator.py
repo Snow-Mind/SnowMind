@@ -28,8 +28,8 @@ from app.services.optimizer.waterfall_allocator import waterfall_allocate
 
 D = Decimal  # shorthand
 
-# Default base layer for mainnet = aave_v3
-BASE = "aave_v3"
+# Default base layer for mainnet = spark
+BASE = "spark"
 
 
 def _print_result(label: str, r: OptimizerOutput) -> None:
@@ -84,7 +84,7 @@ def test_small_deposit_goes_to_best_protocol():
     # benqi at 5% beats Aave V3 (3.75%) by 1.25% > 0.5% margin
     assert "benqi" in result.allocations
     assert float(result.allocations["benqi"]) == pytest.approx(2000.0, abs=1.0)
-    # Aave V3 (base layer) should not receive funds
+    # No base layer in this test — all funds to best candidate
     assert result.allocations.get("aave_v3", D("0")) < D("2")
 
 
@@ -122,7 +122,7 @@ def test_large_deposit_splits_with_exposure_cap():
     # Each capped at 40% = $20K
     assert float(result.allocations["benqi"]) == pytest.approx(20000.0, abs=1.0)
     assert float(result.allocations["euler_v2"]) == pytest.approx(20000.0, abs=1.0)
-    # Remainder goes to Aave V3 (base layer)
+    # Remainder goes to aave_v3 (fallback when base layer not in pool)
     total_alloc = sum(float(v) for v in result.allocations.values())
     assert total_alloc == pytest.approx(50000.0, abs=5.0)
 
@@ -155,19 +155,21 @@ def test_tvl_cap_limits_allocation():
     assert result.status == "optimal"
     # small_pool capped at 15% of $100K = $15K
     assert float(result.allocations["small_pool"]) == pytest.approx(15000.0, abs=1.0)
-    # Remainder ($5K) goes to Aave V3 (base layer)
+    # Remainder ($5K) goes to aave_v3 (fallback)
     assert float(result.allocations["aave_v3"]) == pytest.approx(5000.0, abs=1.0)
 
 
 # ── Test 4: No protocol beats base layer → 100% to base layer ───────────────
 
 def test_no_protocol_beats_base_layer():
-    """All protocols below Aave V3 APY → 100% to Aave V3 (base layer)."""
+    """All protocols below Spark APY → 100% to Spark (base layer)."""
     protocols = _make_protocols({
-        "aave_v3": "0.0375",
+        "spark": "0.0375",
+        "aave_v3": "0.035",
         "benqi": "0.030",
     })
     tvl = _make_tvl({
+        "spark": "136000000",
         "aave_v3": "100000000",
         "benqi": "80000000",
     })
@@ -183,9 +185,10 @@ def test_no_protocol_beats_base_layer():
     _print_result("Test 4 — No protocol beats base layer", result)
 
     assert result.status == "optimal"
-    assert "aave_v3" in result.allocations
-    assert float(result.allocations["aave_v3"]) == pytest.approx(10000.0, abs=1.0)
+    assert "spark" in result.allocations
+    assert float(result.allocations["spark"]) == pytest.approx(10000.0, abs=1.0)
     assert result.allocations.get("benqi", D("0")) < D("2")
+    assert result.allocations.get("aave_v3", D("0")) < D("2")
 
 
 # ── Test 5: Base layer barely beaten (above margin) ─────────────────────────
@@ -219,13 +222,13 @@ def test_base_layer_barely_beaten_above_margin():
 # ── Test 6: Base layer not beaten enough (below margin) ─────────────────────
 
 def test_base_layer_not_beaten_below_margin():
-    """Benqi at 4.0%, Aave at 3.75%, margin 0.50%. Diff = 0.25% < margin → Aave."""
+    """Benqi at 4.0%, Spark at 3.75%, margin 0.50%. Diff = 0.25% < margin → Spark."""
     protocols = _make_protocols({
-        "aave_v3": "0.0375",
+        "spark": "0.0375",
         "benqi": "0.040",
     })
     tvl = _make_tvl({
-        "aave_v3": "100000000",
+        "spark": "136000000",
         "benqi": "80000000",
     })
     inp = OptimizerInput(
@@ -240,8 +243,8 @@ def test_base_layer_not_beaten_below_margin():
     _print_result("Test 6 — Base layer not beaten enough", result)
 
     assert result.status == "optimal"
-    assert "aave_v3" in result.allocations
-    assert float(result.allocations["aave_v3"]) == pytest.approx(10000.0, abs=1.0)
+    assert "spark" in result.allocations
+    assert float(result.allocations["spark"]) == pytest.approx(10000.0, abs=1.0)
     assert result.allocations.get("benqi", D("0")) < D("2")
 
 
@@ -352,18 +355,18 @@ def test_base_layer_only_gets_100_pct():
 # ── Test 12: Multiple protocols beat base layer, exposure cap causes waterfall
 
 def test_waterfall_cascading_fill():
-    """3 protocols beat Aave V3, 30% exposure cap → cascading fill + base layer."""
+    """3 protocols beat Spark (base), 30% exposure cap → cascading fill + base."""
     protocols = _make_protocols({
-        "aave_v3": "0.0375",
+        "spark": "0.0375",
         "benqi": "0.06",
         "euler_v2": "0.055",
-        "spark": "0.05",
+        "aave_v3": "0.05",
     })
     tvl = _make_tvl({
-        "aave_v3": "100000000",
+        "spark": "136000000",
         "benqi": "80000000",
         "euler_v2": "50000000",
-        "spark": "136000000",
+        "aave_v3": "100000000",
     })
     inp = OptimizerInput(
         total_amount_usd=D("100000"),
@@ -378,12 +381,12 @@ def test_waterfall_cascading_fill():
     _print_result("Test 12 — Cascading waterfall", result)
 
     assert result.status == "optimal"
-    # All 3 protocols beat Aave, each gets $30K cap
+    # All 3 protocols beat Spark base, each gets $30K cap
     assert float(result.allocations.get("benqi", 0)) == pytest.approx(30000.0, abs=1.0)
     assert float(result.allocations.get("euler_v2", 0)) == pytest.approx(30000.0, abs=1.0)
-    assert float(result.allocations.get("spark", 0)) == pytest.approx(30000.0, abs=1.0)
-    # Remaining $10K to Aave V3 (base layer)
-    assert float(result.allocations.get("aave_v3", 0)) == pytest.approx(10000.0, abs=1.0)
+    assert float(result.allocations.get("aave_v3", 0)) == pytest.approx(30000.0, abs=1.0)
+    # Remaining $10K to Spark (base layer)
+    assert float(result.allocations.get("spark", 0)) == pytest.approx(10000.0, abs=1.0)
     # Total = $100K
     total = sum(float(v) for v in result.allocations.values())
     assert total == pytest.approx(100000.0, abs=5.0)

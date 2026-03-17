@@ -6,7 +6,7 @@ from decimal import Decimal
 from app.core.config import get_settings
 from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
 
-# ── ERC-4626 + MockEulerVault ABI ────────────────────────────────────────────
+# ── ERC-4626 Euler V2 Vault ABI ──────────────────────────────────────────────
 EULER_V2_ABI = [
     {
         "name": "deposit",
