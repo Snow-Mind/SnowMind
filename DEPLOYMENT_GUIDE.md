@@ -216,7 +216,7 @@ TVL_CAP_PCT=0.15
 MAX_SINGLE_EXPOSURE_PCT=0.40
 BASE_BEAT_MARGIN=0.005
 GAS_COST_ESTIMATE_USD=0.008
-BASE_LAYER_PROTOCOL_ID=aave_v3
+BASE_LAYER_PROTOCOL_ID=spark
 MIN_PROTOCOL_TVL_USD=100000.0
 
 # ── Guarded Launch ───────────────────────────────────────────
@@ -272,7 +272,7 @@ NEXT_PUBLIC_TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
 ```bash
 PIMLICO_API_KEY=your_pimlico_api_key
 ZERODEV_PROJECT_ID=your_zerodev_project_id
-CHAIN_ID=43114
+AVALANCHE_CHAIN_ID=43114
 INTERNAL_SERVICE_KEY=your_shared_secret_matching_backend
 ```
 
@@ -685,7 +685,7 @@ Before going live, verify each item:
 
 ### Unit Tests
 - [ ] All existing unit tests pass (`pytest tests/unit/ -v`)
-- [ ] Waterfall allocator tests pass with aave_v3 as base layer
+- [ ] Waterfall allocator tests pass with spark as base layer
 
 ---
 
@@ -705,5 +705,5 @@ Before going live, verify each item:
 | Deposit cap | None | $50,000 total (guarded beta) |
 | Fee | None active | 10% on profits at withdrawal |
 | Faucet | FujiTestFaucet component | Deleted |
-| Base layer | spark | aave_v3 |
+| Base layer | spark | spark |
 | Optimizer | MILP (PuLP) | Waterfall allocator |

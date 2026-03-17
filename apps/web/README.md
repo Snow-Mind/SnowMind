@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SnowMind Frontend
 
-## Getting Started
+Next.js 16 frontend for the SnowMind yield optimizer, deployed on Vercel.
 
-First, run the development server:
+## Stack
+
+- **Framework**: Next.js 16 (App Router)
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS 4
+- **Auth**: Privy (social login + wallet connection)
+- **Smart Accounts**: ZeroDev SDK (Kernel v3.1, ERC-4337)
+- **State**: Zustand + React Query
+- **Animations**: Framer Motion
+
+## Pages
+
+| Route | Description |
+|-------|-------------|
+| `/` | Landing page |
+| `/onboarding` | 4-step setup: account → strategy → deposit → activate |
+| `/dashboard` | Portfolio overview, allocations, deposit/withdraw panels |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `lib/constants.ts` | All mainnet contract addresses, chain config, protocol metadata |
+| `lib/zerodev.ts` | Smart account creation, session key granting, call policies |
+| `lib/api-client.ts` | Typed API client for backend communication |
+| `components/dashboard/DepositPanel.tsx` | USDC deposit flow ($100 minimum) |
+| `components/dashboard/EmergencyPanel.tsx` | Emergency withdraw from all protocols |
+| `hooks/useSmartAccount.ts` | Smart account setup hook |
+| `hooks/useProtocolRates.ts` | Live protocol APY data |
+| `stores/portfolio.store.ts` | Zustand store for portfolio state |
+
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# From repo root
+pnpm install
+pnpm dev        # starts on http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+See `apps/web/.env.example` for required variables:
+- `NEXT_PUBLIC_PRIVY_APP_ID` — Privy application ID
+- `NEXT_PUBLIC_ZERODEV_PROJECT_ID` — ZeroDev project ID
+- `NEXT_PUBLIC_API_URL` — Backend API URL
+- `NEXT_PUBLIC_PIMLICO_API_KEY` — Pimlico bundler key
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Deployment
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Deployed automatically to Vercel on push to `main`. Security headers (CSP, X-Frame-Options, etc.) are configured in `vercel.json`.

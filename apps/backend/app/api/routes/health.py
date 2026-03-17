@@ -1,10 +1,11 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.core.database import get_db
 from app.core.limiter import limiter
+from app.core.security import require_api_key
 from app.services.protocols import ACTIVE_ADAPTERS
 from app.services.protocols.circuit_breaker import protocol_circuit_breaker
 
@@ -24,7 +25,7 @@ async def health_check(request: Request):
 
 
 @router.get("/health/detailed")
-async def health_detailed(request: Request):
+async def health_detailed(request: Request, _key: str = Depends(require_api_key)):
     """Comprehensive system health for ops monitoring."""
     now = datetime.now(timezone.utc).isoformat()
 

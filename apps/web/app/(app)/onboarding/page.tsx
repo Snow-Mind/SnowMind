@@ -181,8 +181,8 @@ export default function OnboardingPage() {
 
   const eoaBalanceNum = parseFloat(eoaBalance);
   const parsedAmount = parseFloat(depositAmount);
-  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
-  const hasWalletFunds = eoaBalanceNum >= 1;
+  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 100 && parsedAmount <= eoaBalanceNum;
+  const hasWalletFunds = eoaBalanceNum >= 100;
 
   // Best APY from selected protocols (for now, show Benqi APY as highest)
   const bestApy = (() => {
@@ -317,7 +317,6 @@ export default function OnboardingPage() {
         EULER_VAULT: CONTRACTS.EULER_VAULT,
         SPARK_VAULT: CONTRACTS.SPARK_VAULT,
       });
-      console.log("[SnowMind] Smart account deployed & approvals set:", approvalResult.txHash);
       toast.success("Smart account deployed on-chain!");
 
       // Phase 2b: Immediate initial deployment via sudo path (guarantees non-idle start)
@@ -351,12 +350,10 @@ export default function OnboardingPage() {
             protocolId,
             parsedAmount,
           );
-          console.log("[SnowMind] Initial deployment tx:", deployResult.txHash, "protocol:", protocolId);
           deployedProtocol = protocolId;
           break;
         } catch (deployErr) {
           lastDeployError = deployErr instanceof Error ? deployErr.message : String(deployErr);
-          console.warn("[SnowMind] Initial deployment failed for", protocolId, lastDeployError);
         }
       }
 
@@ -821,8 +818,8 @@ export default function OnboardingPage() {
                 {parsedAmount > eoaBalanceNum && (
                   <span className="text-[#DC2626]">Exceeds balance</span>
                 )}
-                {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 1 && (
-                  <span className="text-[#DC2626]">Min $1.00</span>
+                {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 100 && (
+                  <span className="text-[#DC2626]">Min $100.00</span>
                 )}
               </div>
 

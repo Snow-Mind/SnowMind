@@ -15,12 +15,14 @@ import {
 } from "viem"
 import { avalancheFuji, avalanche } from "viem/chains"
 
-const CHAIN_ID      = Number(process.env.AVALANCHE_CHAIN_ID || 43113)
+const CHAIN_ID      = Number(process.env.AVALANCHE_CHAIN_ID || 43114)
 const CHAIN         = CHAIN_ID === 43114 ? avalanche : avalancheFuji
 const ENTRYPOINT    = getEntryPoint("0.7")
 const ZERODEV_ID    = process.env.ZERODEV_PROJECT_ID
 const BUNDLER_URL   = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 const PAYMASTER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
+
+const EXPLORER_BASE = CHAIN_ID === 43114 ? 'https://snowtrace.io' : 'https://testnet.snowtrace.io'
 
 const AAVE_ABI = [
   { name: "supply",   type: "function", stateMutability: "nonpayable",
@@ -340,13 +342,13 @@ export async function executeRebalance({
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
-    return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+    return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
   } catch (err) {
     // Fallback: if sponsorship fails, retry without paymaster.
     if (isLikelyPaymasterError(err)) {
       const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
       const txHash = await noPaymasterClient.sendTransaction({ calls })
-      return { txHash, explorerUrl: `https://testnet.snowtrace.io/tx/${txHash}` }
+      return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
     }
     throw new Error(formatExecutionError(err))
   }

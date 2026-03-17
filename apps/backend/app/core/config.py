@@ -3,7 +3,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEFAULT_ORIGINS = "https://www.snowmind.xyz,http://localhost:3000"
+_DEFAULT_ORIGINS = "https://www.snowmind.xyz"
 
 
 class Settings(BaseSettings):

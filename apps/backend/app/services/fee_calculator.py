@@ -7,6 +7,7 @@ computed at any point as:
 """
 
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.core.config import get_settings
@@ -75,7 +76,7 @@ def record_deposit(db, account_id: str, amount_usdc: Decimal) -> None:
         if existing.data:
             new_total = Decimal(str(existing.data[0]["total_deposited_usdc"])) + amount_usdc
             db.table("account_yield_tracking").update(
-                {"total_deposited_usdc": str(new_total), "updated_at": "now()"}
+                {"total_deposited_usdc": str(new_total), "updated_at": datetime.now(timezone.utc).isoformat()}
             ).eq("account_id", account_id).execute()
         else:
             db.table("account_yield_tracking").insert({
@@ -105,7 +106,7 @@ def record_partial_withdrawal(db, account_id: str, amount_usdc: Decimal) -> None
         if existing.data:
             new_total = Decimal(str(existing.data[0]["total_withdrawn_usdc"])) + amount_usdc
             db.table("account_yield_tracking").update(
-                {"total_withdrawn_usdc": str(new_total), "updated_at": "now()"}
+                {"total_withdrawn_usdc": str(new_total), "updated_at": datetime.now(timezone.utc).isoformat()}
             ).eq("account_id", account_id).execute()
         else:
             logger.warning(
@@ -138,7 +139,7 @@ def record_withdrawal_fee(
             db.table("account_yield_tracking").update({
                 "total_withdrawn_usdc": str(new_withdrawn),
                 "total_fees_collected_usdc": str(new_fees),
-                "updated_at": "now()",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("account_id", account_id).execute()
     except Exception as exc:
         logger.warning("Failed to record withdrawal fee for %s: %s", account_id, exc)

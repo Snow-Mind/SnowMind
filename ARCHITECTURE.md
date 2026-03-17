@@ -179,16 +179,16 @@ The **Rate Validator** runs three safety checks before any decision:
 The **Waterfall Allocator** decides where your money should go. It's simple and predictable:
 
 ```
-1. Aave V3 is the "base layer" — the safe default.
+1. Spark is the "base layer" — the safe default (MakerDAO-backed).
 
 2. Sort all other protocols by APY (highest first).
 
-3. For each protocol (Euler, Spark, Benqi):
-   - Does it beat Aave V3 by at least 0.5% (50 basis points)?
+3. For each protocol (Aave, Benqi, Euler):
+   - Does it beat Spark by at least 0.5% (50 basis points)?
    - If YES: allocate funds there (up to caps)
    - If NO: skip it, not worth the gas
 
-4. Anything left over → goes to Aave V3.
+4. Anything left over → goes to Spark.
 ```
 
 **Caps that limit how much goes to each protocol:**
@@ -198,15 +198,15 @@ The **Waterfall Allocator** decides where your money should go. It's simple and 
 
 **Example with $10,000 deposit:**
 ```
-  Aave V3 APY:  3.0%
-  Benqi APY:    3.3%  (only 0.3% above Aave — below 0.5% margin, SKIP)
-  Euler V2 APY: 4.2%  (1.2% above Aave — qualifies!)
-  Spark APY:    3.8%  (0.8% above Aave — qualifies!)
+  Spark APY:   3.0%  (base layer)
+  Benqi APY:    3.3%  (only 0.3% above Spark — below 0.5% margin, SKIP)
+  Euler V2 APY: 4.2%  (1.2% above Spark — qualifies!)
+  Aave V3 APY:  3.8%  (0.8% above Spark — qualifies!)
 
   Result:
     Euler V2: $4,000  (40% exposure cap)
-    Spark:    $4,000  (40% exposure cap)
-    Aave V3:  $2,000  (remainder → base layer)
+    Aave V3:  $4,000  (40% exposure cap)
+    Spark:    $2,000  (remainder → base layer)
 ```
 
 **Technology**: Pure Python, Decimal math (no floating point errors)
@@ -291,13 +291,21 @@ After withdrawal, the session key is revoked and the account is deactivated. The
 
 ## The Four Protocols
 
-### Aave V3 — The Base Layer
+### Spark — The Base Layer (MakerDAO-Backed)
+
+- **Contract**: `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` (spUSDC)
+- **Type**: ERC-4626 vault (deposit USDC → receive spUSDC shares)
+- **Interface**: `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
+- **Risk Score**: 3/10 (backed by MakerDAO/Sky, well-audited, ~$10M TVL)
+- **Role in SnowMind**: Default "parking spot" for funds. If no other protocol beats it by 0.5%, everything stays here.
+
+### Aave V3 — The Blue Chip
 
 - **Contract**: `0x794a61358D6845594F94dc1DB02A252b5b4814aD`
 - **Type**: Lending pool (supply USDC → receive aUSDC)
 - **Interface**: `supply(asset, amount, onBehalfOf, referralCode)` / `withdraw(asset, amount, to)`
 - **Risk Score**: 2/10 (safest — $10B+ TVL globally, battle-tested since 2020)
-- **Role in SnowMind**: Default "parking spot" for funds. If no other protocol beats it by 0.5%, everything stays here.
+- **Exposure cap**: 40% max
 
 ### Benqi — The Avalanche Native
 
@@ -322,6 +330,7 @@ After withdrawal, the session key is revoked and the account is deactivated. The
 - **Interface**: `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
 - **Risk Score**: 3/10 (backed by MakerDAO/Sky, well-audited, ~$10M TVL)
 - **Exposure cap**: 40% max
+- **Note**: Also serves as the base layer (listed first in protocol ordering above).
 
 ---
 
@@ -329,7 +338,7 @@ After withdrawal, the session key is revoked and the account is deactivated. The
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Frontend** | Next.js 14, React, TypeScript | User interface |
+| **Frontend** | Next.js 16, React, TypeScript | User interface |
 | **Auth** | Privy | Social login + wallet connection |
 | **Smart Accounts** | ZeroDev SDK, Kernel v3.1 | ERC-4337 accounts with session keys |
 | **Bundler** | Pimlico | Packages and submits UserOperations |
@@ -516,7 +525,7 @@ User can transfer USDC from smart account to their EOA
 | **TWAP** | Time-Weighted Average Price/Rate. Averaging over time prevents manipulation from single-point readings. |
 | **Circuit Breaker** | Automatically excludes a protocol after 3 consecutive failures. Resets on success. |
 | **Waterfall Allocator** | SnowMind's allocation strategy: fill highest-APY protocols first, park remainder in the base layer. |
-| **Base Layer** | Aave V3 — the safe default. Funds go here when nothing else beats it by enough. |
+| **Base Layer** | Spark — the safe default (MakerDAO-backed). Funds go here when nothing else beats it by enough. |
 | **Beat Margin** | 0.5% (50 basis points). A protocol must beat the base layer by this much to justify moving funds. |
 | **Gnosis Safe** | A multi-signature wallet. The SnowMind treasury is a Gnosis Safe requiring multiple signatures to move funds. |
 | **RLS** | Row-Level Security. Supabase feature that restricts which rows a user can read based on their identity. |

@@ -18,7 +18,7 @@ import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL, CHAIN, IS_TESTNET } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
-import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { createSmartAccount, BENQI_ABI, ERC4626_VAULT_ABI } from "@/lib/zerodev";
 
 const BALANCE_OF_ABI = [
   {
@@ -26,6 +26,20 @@ const BALANCE_OF_ABI = [
     type: "function",
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+const AAVE_WITHDRAW_ABI = [
+  {
+    name: "withdraw",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "asset", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "to", type: "address" },
+    ],
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
@@ -60,40 +74,90 @@ export default function EmergencyPanel() {
     setWithdrawing(true);
     setTxHash(null);
     try {
-      // Read qiToken balance on-chain
+      const sa = smartAccountAddress as `0x${string}`;
       const publicClient = createPublicClient({
         chain: CHAIN,
         transport: http(AVALANCHE_RPC_URL),
       });
-      const qiBalance = await publicClient.readContract({
-        address: CONTRACTS.BENQI_POOL,
-        abi: BALANCE_OF_ABI,
-        functionName: "balanceOf",
-        args: [smartAccountAddress as `0x${string}`],
-      });
 
-      if (qiBalance === 0n) {
-        toast.info("No funds deposited in Benqi to withdraw.");
+      // Check balances across all active protocols
+      const [qiBalance, aTokenBalance, sparkShares] = await Promise.all([
+        publicClient.readContract({
+          address: CONTRACTS.BENQI_POOL,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }),
+        publicClient.readContract({
+          address: CONTRACTS.USDC, // aUSDC mirrors USDC balance
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
+        CONTRACTS.SPARK_VAULT
+          ? publicClient.readContract({
+              address: CONTRACTS.SPARK_VAULT,
+              abi: BALANCE_OF_ABI,
+              functionName: "balanceOf",
+              args: [sa],
+            }).catch(() => 0n)
+          : Promise.resolve(0n),
+      ]);
+
+      const hasAnyFunds = qiBalance > 0n || aTokenBalance > 0n || sparkShares > 0n;
+
+      if (!hasAnyFunds) {
+        toast.info("No funds deposited in any protocol to withdraw.");
         return;
       }
 
-      // Create kernel client and send redeem UserOp (MetaMask signs)
+      // Create kernel client and send batched withdrawal UserOp
       const viemAccount = await toViemAccount({ wallet });
       const { kernelClient } = await createSmartAccount(viemAccount);
 
-      const hash = await kernelClient.sendTransaction({
-        calls: [
-          {
-            to: CONTRACTS.BENQI_POOL,
-            value: 0n,
-            data: encodeFunctionData({
-              abi: BENQI_ABI,
-              functionName: "redeem",
-              args: [qiBalance],
-            }),
-          },
-        ],
-      });
+      const calls: { to: `0x${string}`; value: bigint; data: `0x${string}` }[] = [];
+
+      // Benqi: redeem qiTokens
+      if (qiBalance > 0n) {
+        calls.push({
+          to: CONTRACTS.BENQI_POOL,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: BENQI_ABI,
+            functionName: "redeem",
+            args: [qiBalance],
+          }),
+        });
+      }
+
+      // Aave: withdraw max USDC
+      if (aTokenBalance > 0n) {
+        const maxUint = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        calls.push({
+          to: CONTRACTS.AAVE_POOL,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: AAVE_WITHDRAW_ABI,
+            functionName: "withdraw",
+            args: [CONTRACTS.USDC, maxUint, sa],
+          }),
+        });
+      }
+
+      // Spark: redeem shares
+      if (sparkShares > 0n && CONTRACTS.SPARK_VAULT) {
+        calls.push({
+          to: CONTRACTS.SPARK_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_VAULT_ABI,
+            functionName: "redeem",
+            args: [sparkShares, sa, sa],
+          }),
+        });
+      }
+
+      const hash = await kernelClient.sendTransaction({ calls });
 
       setTxHash(hash);
       toast.success("Withdrawal successful! USDC returned to your smart account.");
@@ -308,8 +372,9 @@ export default function EmergencyPanel() {
                     {[
                       { label: "Benqi Pool", addr: CONTRACTS.BENQI_POOL },
                       { label: "Aave V3 Pool", addr: CONTRACTS.AAVE_POOL },
+                      { label: "Spark Vault", addr: CONTRACTS.SPARK_VAULT },
                       { label: "USDC Token", addr: CONTRACTS.USDC },
-                    ].map((c) => (
+                    ].filter(c => c.addr).map((c) => (
                       <a
                         key={c.label}
                         href={EXPLORER.contract(c.addr)}

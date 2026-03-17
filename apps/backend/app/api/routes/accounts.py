@@ -119,8 +119,7 @@ async def register_account(
     request: Request,
     req: RegisterAccountRequest,
     db: Client = Depends(get_db),
-    # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
-    # _auth: dict = Depends(require_privy_auth),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Register a new smart account (and optionally store its session key)."""
     return await _do_register(req, db)
@@ -132,8 +131,7 @@ async def register_account_alias(
     request: Request,
     req: RegisterAccountRequest,
     db: Client = Depends(get_db),
-    # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
-    # _auth: dict = Depends(require_privy_auth),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Alias of POST /accounts for frontend compatibility."""
     return await _do_register(req, db)
@@ -255,8 +253,7 @@ async def update_diversification_preference(
     address: str,
     req: DiversificationPreferenceRequest,
     db: Client = Depends(get_db),
-    # TODO: Re-enable auth once PRIVY_APP_ID is set on backend
-    # _auth: dict = Depends(require_privy_auth),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Update the diversification preference for an account."""
     address = validate_eth_address(address)
