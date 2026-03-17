@@ -323,15 +323,6 @@ After withdrawal, the session key is revoked and the account is deactivated. The
 - **Risk Score**: 5/10 (newer protocol, audited on Ethereum, lower TVL ~$489K)
 - **Exposure cap**: 20% max (more conservative than other protocols)
 
-### Spark — MakerDAO-Backed
-
-- **Contract**: `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` (spUSDC)
-- **Type**: ERC-4626 vault (deposit USDC → receive spUSDC shares)
-- **Interface**: `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
-- **Risk Score**: 3/10 (backed by MakerDAO/Sky, well-audited, ~$10M TVL)
-- **Exposure cap**: 40% max
-- **Note**: Also serves as the base layer (listed first in protocol ordering above).
-
 ---
 
 ## Technology Stack

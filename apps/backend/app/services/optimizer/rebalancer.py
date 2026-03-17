@@ -46,20 +46,6 @@ ERC20_BALANCE_ABI = [
     }
 ]
 
-REGISTRY_ABI = [
-    {
-        "name": "logRebalance",
-        "type": "function",
-        "inputs": [
-            {"name": "fromProtocol", "type": "address"},
-            {"name": "toProtocol", "type": "address"},
-            {"name": "amount", "type": "uint256"},
-        ],
-        "outputs": [],
-        "stateMutability": "nonpayable",
-    }
-]
-
 
 class Rebalancer:
     """Decides whether to rebalance and executes the on-chain moves."""
@@ -760,30 +746,6 @@ class Rebalancer:
             smart_account_address, tx_hash, float(fee_breakdown["fee_usd"]),
         )
         return tx_hash, fee_breakdown
-
-    # â”€â”€ Registry log encoding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-    def _encode_registry_log(
-        self,
-        from_protocol_address: str,
-        to_protocol_address: str,
-        amount_wei: int,
-    ) -> dict:
-        """Encode a logRebalance call for the SnowMindRegistry contract."""
-        registry = Web3().eth.contract(abi=REGISTRY_ABI)
-        log_calldata = registry.encode_abi(
-            "logRebalance",
-            args=[
-                Web3.to_checksum_address(from_protocol_address),
-                Web3.to_checksum_address(to_protocol_address),
-                amount_wei,
-            ],
-        )
-        return {
-            "to": self.settings.REGISTRY_CONTRACT_ADDRESS,
-            "data": log_calldata,
-            "value": 0,
-        }
 
     # â”€â”€ DB helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

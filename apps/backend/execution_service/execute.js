@@ -195,6 +195,8 @@ export async function executeRebalance({
   withdrawals,   // [{ protocol: "benqi", amountUSDC: 3000, qiTokenAmount: "12345678" }]
   deposits,      // [{ protocol: "aave_v3", amountUSDC: 3000 }]
   contracts,     // { AAVE_POOL, BENQI_POOL, EULER_VAULT, SPARK_VAULT, USDC, REGISTRY }
+  feeTransfer,   // optional: { to: "0xTreasury", amountUSDC: 50 }
+  userTransfer,  // optional: { to: "0xUserEOA", amountUSDC: 9950 }
 }) {
   if (!ZERODEV_ID) {
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
@@ -256,6 +258,30 @@ export async function executeRebalance({
         }),
       })
     }
+  }
+
+  // ── FEE TRANSFER — send profit fee to treasury (atomic with withdrawal) ──
+  if (feeTransfer && feeTransfer.to && feeTransfer.amountUSDC > 0) {
+    calls.push({
+      to: contracts.USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC20_ABI, functionName: "transfer",
+        args: [feeTransfer.to, parseUnits(String(feeTransfer.amountUSDC), 6)],
+      }),
+    })
+  }
+
+  // ── USER TRANSFER — send remaining funds to user's EOA (atomic with withdrawal) ──
+  if (userTransfer && userTransfer.to && userTransfer.amountUSDC > 0) {
+    calls.push({
+      to: contracts.USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC20_ABI, functionName: "transfer",
+        args: [userTransfer.to, parseUnits(String(userTransfer.amountUSDC), 6)],
+      }),
+    })
   }
 
   // ── REGISTRY LOG — between withdrawals and deposits ────────────────────────

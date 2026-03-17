@@ -141,7 +141,7 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **Aave V3 Pool** | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` | Avalanche C-Chain |
 | **Benqi qiUSDCn** | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` | Avalanche C-Chain |
 | **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Avalanche C-Chain |
-| **SnowMindRegistry** | *Deploy with Foundry (see below)* | Avalanche C-Chain |
+| **SnowMindRegistry** | *Deploy with Foundry (see Step 1 in Section 6)* | Avalanche C-Chain |
 | **Euler V2 Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
 | **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
 
@@ -477,7 +477,12 @@ CREATE TABLE IF NOT EXISTS account_yield_tracking (
 
 ### Step 1: Deploy SnowMindRegistry Contract
 
-The Registry is a simple on-chain logging contract. It records rebalance events.
+The Registry is an on-chain logging contract with access control. It records account registrations and rebalance events. Only the owner can mutate state.
+
+**Prerequisites:**
+- Foundry installed (`curl -L https://foundry.paradigm.xyz | bash && foundryup`)
+- A deployer EOA wallet with ~0.001 AVAX for gas (deployment costs ~0.00003 AVAX)
+- A Snowtrace API key for contract verification (get one at https://snowtrace.io/myapikey)
 
 ```bash
 cd contracts
@@ -487,20 +492,41 @@ forge install
 
 # Set your deployer private key (EOA with some AVAX for gas)
 export DEPLOYER_PRIVATE_KEY=0x_your_private_key_with_avax
+export SNOWTRACE_API_KEY=your_snowtrace_api_key
 
-# Deploy to Avalanche mainnet
+# Deploy to Avalanche mainnet + verify on Snowtrace
 forge script script/DeployMainnet.s.sol:DeployMainnet \
   --rpc-url https://api.avax.network/ext/bc/C/rpc \
   --broadcast \
-  --verify
-
-# The script will print the deployed Registry address.
-# Copy it → set as REGISTRY_CONTRACT_ADDRESS in env vars.
+  --verify \
+  --etherscan-api-key $SNOWTRACE_API_KEY
 ```
 
-**Gas cost**: ~0.01-0.05 AVAX (~$0.30-1.50 depending on gas prices).
+The script will print the deployed Registry address. Example output:
+```
+=== MAINNET DEPLOYMENT COMPLETE ===
+SnowMindRegistry: 0x849Ca487D5DeD85c93fc3600338a419B100833a8
+Owner:            0x97950A98980a2Fc61ea7eb043bb7666845f77071
+```
 
-**After deployment**: Transfer ownership of the Registry to your Gnosis Safe multisig (see Step 2).
+**After deployment — update these locations with the Registry address:**
+
+| Location | Variable | Example |
+|----------|----------|---------|
+| **Backend env** (Railway) | `REGISTRY_CONTRACT_ADDRESS` | `0x849Ca...33a8` |
+| **Frontend env** (Vercel) | `NEXT_PUBLIC_REGISTRY_ADDRESS` | `0x849Ca...33a8` |
+| **Root .env** (local dev) | Both of the above | `0x849Ca...33a8` |
+
+**Then transfer ownership to your Gnosis Safe multisig:**
+```bash
+cast send <REGISTRY_ADDRESS> "transferOwnership(address)" <GNOSIS_SAFE_ADDRESS> \
+  --rpc-url https://api.avax.network/ext/bc/C/rpc \
+  --private-key $DEPLOYER_PRIVATE_KEY
+```
+
+**Verify on Snowtrace:**
+- Visit `https://snowtrace.io/address/<REGISTRY_ADDRESS>#code`
+- Confirm the contract source is verified and ownership is transferred
 
 ### Step 2: Create Gnosis Safe Multisig
 
