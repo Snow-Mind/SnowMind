@@ -384,6 +384,8 @@ export default function OnboardingPage() {
         BENQI_POOL: CONTRACTS.BENQI_POOL,
         SPARK_VAULT: CONTRACTS.SPARK_VAULT,
         EULER_VAULT: CONTRACTS.EULER_VAULT,
+        SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+        SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
       });
       toast.success("Smart account deployed on-chain!");
 
@@ -397,9 +399,9 @@ export default function OnboardingPage() {
           return effectiveSelectedProtocols.has(r.protocolId) || effectiveSelectedProtocols.has(normalizedProtocolId);
         })
         .filter((r) => r.isActive && !r.isComingSoon)
-        .filter((r) => ["aave_v3", "benqi", "spark", "euler_v2"].includes(r.protocolId))
+        .filter((r) => ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"].includes(r.protocolId))
         .sort((a, b) => b.currentApy - a.currentApy)
-        .map((r) => r.protocolId as "aave_v3" | "benqi" | "spark" | "euler_v2");
+        .map((r) => r.protocolId as "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc");
 
       const deploymentCandidates = candidateProtocols;
 
@@ -419,6 +421,8 @@ export default function OnboardingPage() {
               BENQI_POOL: CONTRACTS.BENQI_POOL,
               SPARK_VAULT: CONTRACTS.SPARK_VAULT,
               EULER_VAULT: CONTRACTS.EULER_VAULT,
+              SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+              SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
               USDC: CONTRACTS.USDC,
             },
             protocolId,
@@ -446,6 +450,8 @@ export default function OnboardingPage() {
           BENQI_POOL: CONTRACTS.BENQI_POOL,
           SPARK_VAULT: CONTRACTS.SPARK_VAULT,
           EULER_VAULT: CONTRACTS.EULER_VAULT,
+          SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+          SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
           USDC: CONTRACTS.USDC,
           TREASURY: CONTRACTS.TREASURY,
         },

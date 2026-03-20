@@ -330,6 +330,19 @@ async def execute_withdrawal(
         except Exception as exc:
             logger.warning("Failed to read Euler share balance for %s: %s", address, exc)
 
+        silo_savusd_share_balance = 0
+        silo_susdp_share_balance = 0
+        try:
+            silo_savusd_adapter = get_adapter("silo_savusd_usdc")
+            silo_savusd_share_balance = int(await silo_savusd_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Silo savUSD share balance for %s: %s", address, exc)
+        try:
+            silo_susdp_adapter = get_adapter("silo_susdp_usdc")
+            silo_susdp_share_balance = int(await silo_susdp_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
+
         agent_fee_raw = int(fee_calc.agent_fee * Decimal("1e6"))  # Convert to 6-decimal raw
         withdraw_raw = int(withdraw_amount * Decimal("1e6"))
 
@@ -344,6 +357,8 @@ async def execute_withdrawal(
                 "BENQI_POOL": settings.BENQI_QIUSDC,
                 "SPARK_VAULT": settings.SPARK_SPUSDC,
                 "EULER_VAULT": settings.EULER_VAULT,
+                "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
+                "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
                 "USDC": settings.USDC_ADDRESS,
                 "TREASURY": settings.TREASURY_ADDRESS,
             },
@@ -351,6 +366,8 @@ async def execute_withdrawal(
                 "benqiQiTokenBalance": str(benqi_qi_balance),
                 "sparkShareBalance": str(spark_share_balance),
                 "eulerShareBalance": str(euler_share_balance),
+                "siloSavusdShareBalance": str(silo_savusd_share_balance),
+                "siloSusdpShareBalance": str(silo_susdp_share_balance),
             },
         }
 

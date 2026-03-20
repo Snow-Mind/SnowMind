@@ -35,6 +35,18 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
     except Exception as exc:
         logger.warning("EulerV2Adapter not loaded (EULER_VAULT missing?): %s", exc)
 
+    try:
+        from .silo import SiloSavUSDAdapter
+        adapters["silo_savusd_usdc"] = SiloSavUSDAdapter()
+    except Exception as exc:
+        logger.warning("SiloSavUSDAdapter not loaded (SILO_SAVUSD_VAULT missing?): %s", exc)
+
+    try:
+        from .silo import SiloSUSDpAdapter
+        adapters["silo_susdp_usdc"] = SiloSUSDpAdapter()
+    except Exception as exc:
+        logger.warning("SiloSUSDpAdapter not loaded (SILO_SUSDP_VAULT missing?): %s", exc)
+
     return adapters
 
 
@@ -47,6 +59,8 @@ RISK_SCORES: dict[str, float] = {
     "benqi": 9.0,      # Safety 3 + Liquidity 2 + Collateral 2 + Yield 2 + Architecture 1
     "spark": 9.0,      # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 0
     "euler_v2": 6.0,   # Safety 2 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 0
+    "silo_savusd_usdc": 8.0,  # Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1
+    "silo_susdp_usdc": 8.0,   # Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1
 }
 
 

@@ -224,6 +224,8 @@ function resolveContractKey(protocol, contracts) {
     benqi: "BENQI_POOL",
     spark: "SPARK_VAULT",
     euler_v2: "EULER_VAULT",
+    silo_savusd_usdc: "SILO_SAVUSD_VAULT",
+    silo_susdp_usdc: "SILO_SUSDP_VAULT",
   }
   return contracts[map[protocol]] || null
 }
@@ -305,6 +307,28 @@ export async function executeRebalance({
       const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
       calls.push({
         to: contracts.EULER_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "redeem",
+          args: [shares, smartAccountAddress, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
+      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
+      calls.push({
+        to: contracts.SILO_SAVUSD_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "redeem",
+          args: [shares, smartAccountAddress, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
+      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
+      calls.push({
+        to: contracts.SILO_SUSDP_VAULT,
         value: 0n,
         data: encodeFunctionData({
           abi: ERC4626_ABI,
@@ -414,6 +438,26 @@ export async function executeRebalance({
           args: [amount, smartAccountAddress],
         }),
       })
+    } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
+      calls.push({
+        to: contracts.SILO_SAVUSD_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
+      calls.push({
+        to: contracts.SILO_SUSDP_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
     }
   }
 
@@ -514,6 +558,40 @@ export async function executeWithdrawal({
         abi: ERC4626_ABI,
         functionName: "redeem",
         args: [eulerShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    })
+  }
+
+  const siloSavusdShareBalance = BigInt(balances?.siloSavusdShareBalance || "0")
+  if (
+    contracts.SILO_SAVUSD_VAULT &&
+    contracts.SILO_SAVUSD_VAULT !== "0x0000000000000000000000000000000000000000" &&
+    siloSavusdShareBalance > 0n
+  ) {
+    calls.push({
+      to: contracts.SILO_SAVUSD_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI,
+        functionName: "redeem",
+        args: [siloSavusdShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    })
+  }
+
+  const siloSusdpShareBalance = BigInt(balances?.siloSusdpShareBalance || "0")
+  if (
+    contracts.SILO_SUSDP_VAULT &&
+    contracts.SILO_SUSDP_VAULT !== "0x0000000000000000000000000000000000000000" &&
+    siloSusdpShareBalance > 0n
+  ) {
+    calls.push({
+      to: contracts.SILO_SUSDP_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI,
+        functionName: "redeem",
+        args: [siloSusdpShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     })
   }

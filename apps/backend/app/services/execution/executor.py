@@ -79,6 +79,8 @@ class ExecutionService:
                 "BENQI_POOL": settings.BENQI_QIUSDC,
                 "SPARK_VAULT": settings.SPARK_SPUSDC,
                 "EULER_VAULT": settings.EULER_VAULT,
+                "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
+                "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
                 "USDC": settings.USDC_ADDRESS,
                 "REGISTRY": settings.REGISTRY_CONTRACT_ADDRESS,
             },

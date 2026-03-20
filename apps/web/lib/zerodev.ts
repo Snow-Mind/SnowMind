@@ -181,7 +181,7 @@ export async function createSmartAccount(walletClient: WalletClientLike) {
 
 export async function approveAllProtocols(
   kernelClient: KernelClientLike,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}` }
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}` }
 ): Promise<{ txHash: string; explorerUrl: string }> {
 
   const approvalCalls = [
@@ -189,6 +189,8 @@ export async function approveAllProtocols(
     contracts.BENQI_POOL,
     contracts.SPARK_VAULT,
     contracts.EULER_VAULT,
+    contracts.SILO_SAVUSD_VAULT,
+    contracts.SILO_SUSDP_VAULT,
   ]
     .filter(addr => addr !== '0x0000000000000000000000000000000000000000')
     .map(spender => ({
@@ -219,6 +221,8 @@ export async function grantAndSerializeSessionKey(
     BENQI_POOL:   `0x${string}`
     SPARK_VAULT:  `0x${string}`
     EULER_VAULT:  `0x${string}`
+    SILO_SAVUSD_VAULT: `0x${string}`
+    SILO_SUSDP_VAULT:  `0x${string}`
     USDC:         `0x${string}`
     TREASURY:     `0x${string}`
   },
@@ -324,6 +328,28 @@ export async function grantAndSerializeSessionKey(
           null,
         ],
       },
+      // Silo savUSD/USDC USDC approve
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.SILO_SAVUSD_VAULT },
+          null,
+        ],
+      },
+      // Silo sUSDp/USDC USDC approve
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.SILO_SUSDP_VAULT },
+          null,
+        ],
+      },
 
       // AAVE V3 — supply (USDC only, amount capped)
       {
@@ -408,6 +434,48 @@ export async function grantAndSerializeSessionKey(
       // EULER (9Summits) — redeem (ERC-4626)
       {
         target: contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [null, null, null],
+      },
+
+      // SILO savUSD/USDC — deposit (ERC-4626)
+      {
+        target: contracts.SILO_SAVUSD_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,
+        ],
+      },
+
+      // SILO savUSD/USDC — redeem (ERC-4626)
+      {
+        target: contracts.SILO_SAVUSD_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [null, null, null],
+      },
+
+      // SILO sUSDp/USDC — deposit (ERC-4626)
+      {
+        target: contracts.SILO_SUSDP_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,
+        ],
+      },
+
+      // SILO sUSDp/USDC — redeem (ERC-4626)
+      {
+        target: contracts.SILO_SUSDP_VAULT,
         valueLimit: 0n,
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
@@ -515,9 +583,11 @@ export async function deployInitialToProtocol(
     BENQI_POOL: `0x${string}`
     SPARK_VAULT: `0x${string}`
     EULER_VAULT: `0x${string}`
+    SILO_SAVUSD_VAULT: `0x${string}`
+    SILO_SUSDP_VAULT: `0x${string}`
     USDC: `0x${string}`
   },
-  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2",
+  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc",
   amountUsdc: number,
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const amount = parseUnits(amountUsdc.toFixed(6), 6)
@@ -529,6 +599,8 @@ export async function deployInitialToProtocol(
     protocolId === "aave_v3" ? contracts.AAVE_POOL
       : protocolId === "benqi" ? contracts.BENQI_POOL
       : protocolId === "spark" ? contracts.SPARK_VAULT
+      : protocolId === "silo_savusd_usdc" ? contracts.SILO_SAVUSD_VAULT
+      : protocolId === "silo_susdp_usdc" ? contracts.SILO_SUSDP_VAULT
       : contracts.EULER_VAULT
 
   calls.push({
@@ -571,6 +643,26 @@ export async function deployInitialToProtocol(
         args: [amount, smartAccountAddress],
       }),
     })
+  } else if (protocolId === "silo_savusd_usdc") {
+    calls.push({
+      to: contracts.SILO_SAVUSD_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else if (protocolId === "silo_susdp_usdc") {
+    calls.push({
+      to: contracts.SILO_SUSDP_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
   } else {
     calls.push({
       to: contracts.EULER_VAULT,
@@ -602,10 +694,12 @@ export async function revokeSessionKey(
 export async function emergencyWithdrawAll(
   kernelClient: KernelClientLike,
   smartAccountAddress: `0x${string}`,
-  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; USDC: `0x${string}` },
+  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}`; USDC: `0x${string}` },
   benqiQiTokenBalance: bigint,   // fetch this from on-chain before calling
   sparkShareBalance: bigint,     // ERC-4626 shares
   eulerShareBalance: bigint = 0n, // ERC-4626 shares
+  siloSavusdShareBalance: bigint = 0n, // ERC-4626 shares
+  siloSusdpShareBalance: bigint = 0n,  // ERC-4626 shares
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const calls = [
     // Withdraw all from Aave (MAX_UINT = full balance)
@@ -646,6 +740,26 @@ export async function emergencyWithdrawAll(
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
         args: [eulerShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    }] : []),
+    // Redeem all from Silo savUSD/USDC (ERC-4626)
+    ...(siloSavusdShareBalance > 0n && contracts.SILO_SAVUSD_VAULT !== '0x0000000000000000000000000000000000000000' ? [{
+      to: contracts.SILO_SAVUSD_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [siloSavusdShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    }] : []),
+    // Redeem all from Silo sUSDp/USDC (ERC-4626)
+    ...(siloSusdpShareBalance > 0n && contracts.SILO_SUSDP_VAULT !== '0x0000000000000000000000000000000000000000' ? [{
+      to: contracts.SILO_SUSDP_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [siloSusdpShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     }] : []),
   ]
