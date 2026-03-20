@@ -61,7 +61,7 @@ class ProtocolInput:
 
     protocol_id: str
     apy: Decimal  # Annual yield as decimal (Decimal("0.041") = 4.1%)
-    risk_score: Decimal  # 0 (safe) to 10 (risky)
+    risk_score: Decimal  # 10 (safest) to 0 (riskiest)
     min_allocation: Decimal = Decimal("500")  # Minimum USD if participating
     max_allocation_pct: Decimal = Decimal("0.60")  # Max fraction of total
     is_available: bool = True

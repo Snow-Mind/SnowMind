@@ -41,12 +41,12 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
 ALL_ADAPTERS: dict[str, BaseProtocolAdapter] = _build_adapters()
 ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = ALL_ADAPTERS
 
-# Risk scores per architecture spec
+# Risk scores per snowmind-risk-scoring.md framework (higher = safer, out of 10)
 RISK_SCORES: dict[str, float] = {
-    "aave_v3":  2.0,   # Battle-tested since 2020, $10B+ TVL globally
-    "benqi": 3.0,   # Established on Avalanche since 2021
-    "spark": 3.0,   # MakerDAO-backed, well-audited (Avalanche < 6 months)
-    "euler_v2": 5.0,  # Higher-yield isolated market with additional collateral/volatility risk
+    "aave_v3":  10.0,  # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1
+    "benqi": 9.0,      # Safety 3 + Liquidity 2 + Collateral 2 + Yield 2 + Architecture 1
+    "spark": 9.0,      # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 0
+    "euler_v2": 6.0,   # Safety 2 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 0
 }
 
 

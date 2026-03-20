@@ -89,7 +89,7 @@ async def get_all_rates(request: Request):
                 is_coming_soon=is_coming_soon,
                 current_apy=rate.apy if rate else Decimal("0"),
                 tvl_usd=rate.tvl_usd if rate else Decimal("0"),
-                risk_score=Decimal(str(RISK_SCORES.get(pid, 10.0))),
+                risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
                 last_updated=rate.fetched_at if rate else time.time(),
             )
         )

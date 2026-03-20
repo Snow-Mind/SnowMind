@@ -182,8 +182,11 @@ SUPABASE_SERVICE_KEY=eyJ...your_production_service_role_key...
 
 # ── Blockchain (Avalanche Mainnet) ───────────────────────────
 AVALANCHE_RPC_URL=https://api.avax.network/ext/bc/C/rpc
+INFURA_RPC_URL=https://avalanche-mainnet.infura.io/v3/YOUR_INFURA_KEY
+ALCHEMY_RPC_URL=https://avax-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 AVALANCHE_CHAIN_ID=43114
 PIMLICO_API_KEY=your_pimlico_api_key
+ALCHEMY_AA_API_KEY=your_alchemy_aa_api_key
 ZERODEV_PROJECT_ID=your_zerodev_project_id
 
 # ── Contract Addresses (Avalanche Mainnet) ───────────────────
@@ -194,6 +197,11 @@ SPARK_SPUSDC=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
 EULER_VAULT=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
 USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 ENTRYPOINT_V07=0x0000000071727De22E5E9d8BAf0edAc6f37da032
+
+# ── Protocol-Specific Addresses ──────────────────────────────
+SPARK_PSM_WRAPPER=0x_SPARK_PSM_WRAPPER_ADDRESS
+SPARK_VAT=0x_SPARK_VAT_ADDRESS
+BENQI_COMPTROLLER=0x_BENQI_COMPTROLLER_ADDRESS
 
 # ── Security ─────────────────────────────────────────────────
 # Production: use KMS envelope encryption (master key never in env)
@@ -235,12 +243,22 @@ MIN_PROTOCOL_TVL_USD=100000.0
 MAX_TOTAL_PLATFORM_DEPOSIT_USD=50000.0
 
 # ── Fees ─────────────────────────────────────────────────────
+AGENT_FEE_RATE=0.10
 PROFIT_FEE_PCT=0.10
 TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
 
 # ── Oracle Cross-Validation ──────────────────────────────────
 DEFILLAMA_BASE_URL=https://yields.llama.fi
 RATE_DIVERGENCE_THRESHOLD=0.02
+
+# ── Monitoring & Alerting ────────────────────────────────────
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+SENTRY_DSN=https://your_sentry_dsn
+PAYMASTER_LOW_BALANCE_AVAX=10.0
+
+# ── Scheduler ────────────────────────────────────────────────
+SCHEDULER_LOCK_TTL_MINUTES=35
 
 # ── Deployer (optional local deployment helper) ───────────────
 DEPLOYER_PRIVATE_KEY=

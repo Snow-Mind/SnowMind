@@ -830,9 +830,9 @@ export default function OnboardingPage() {
                         <span
                           className={cn(
                             "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
-                            protocol.riskScore <= 2.5
+                            protocol.riskScore >= 9
                               ? "bg-[#059669]/10 text-[#059669]"
-                              : protocol.riskScore <= 4.0
+                              : protocol.riskScore >= 7
                                 ? "bg-[#D97706]/10 text-[#D97706]"
                                 : "bg-[#DC2626]/10 text-[#DC2626]",
                           )}
