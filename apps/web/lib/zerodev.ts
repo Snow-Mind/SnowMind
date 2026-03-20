@@ -602,9 +602,10 @@ export async function revokeSessionKey(
 export async function emergencyWithdrawAll(
   kernelClient: KernelClientLike,
   smartAccountAddress: `0x${string}`,
-  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; USDC: `0x${string}` },
+  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; USDC: `0x${string}` },
   benqiQiTokenBalance: bigint,   // fetch this from on-chain before calling
   sparkShareBalance: bigint,     // ERC-4626 shares
+  eulerShareBalance: bigint = 0n, // ERC-4626 shares
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const calls = [
     // Withdraw all from Aave (MAX_UINT = full balance)
@@ -635,6 +636,16 @@ export async function emergencyWithdrawAll(
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
         args: [sparkShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    }] : []),
+    // Redeem all from Euler (ERC-4626)
+    ...(eulerShareBalance > 0n && contracts.EULER_VAULT !== '0x0000000000000000000000000000000000000000' ? [{
+      to: contracts.EULER_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [eulerShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     }] : []),
   ]

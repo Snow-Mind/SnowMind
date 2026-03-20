@@ -261,6 +261,22 @@ class RateFetcher:
             if twap_buffer.has_cold_start(pid) and not circuit_breaker.is_open(pid)
         ]
 
+    @staticmethod
+    def validate_rate(rate: ProtocolRate) -> bool:
+        """Return True if a fetched rate is sane enough for allocation decisions.
+
+        Rejects negative APY, absurdly high APY (>200%), and negative TVL.
+        Allows 0% APY (e.g. Spark base layer when no snapshot delta is available).
+        """
+        if rate.apy < Decimal("0"):
+            return False
+        if rate.apy > Decimal("2.0"):  # 200% — likely a data error
+            logger.warning("Rate for %s rejected: APY=%s exceeds 200%%", rate.protocol_id, rate.apy)
+            return False
+        if rate.tvl_usd < Decimal("0"):
+            return False
+        return True
+
     def get_circuit_breaker_failures(self) -> dict[str, int]:
         """Return failure counts for all protocols (used by health checker)."""
         return {

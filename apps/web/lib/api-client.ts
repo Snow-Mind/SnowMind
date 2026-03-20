@@ -180,4 +180,41 @@ export const api = {
         body: JSON.stringify({ diversificationPreference: preference }),
       },
     ),
+
+  // Withdrawals
+  previewWithdrawal: (data: {
+    smartAccountAddress: string;
+    withdrawAmount: string;
+    isFullWithdrawal: boolean;
+  }) =>
+    request<{
+      withdrawAmount: string;
+      currentBalance: string;
+      netPrincipal: string;
+      accruedProfit: string;
+      attributableProfit: string;
+      agentFee: string;
+      userReceives: string;
+      feeRate: string;
+      feeExempt: boolean;
+    }>("/api/v1/withdrawals/preview", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  executeWithdrawal: (data: {
+    smartAccountAddress: string;
+    withdrawAmount: string;
+    isFullWithdrawal: boolean;
+  }) =>
+    request<{
+      status: string;
+      txHash: string | null;
+      agentFee: string;
+      userReceives: string;
+      message: string;
+    }>("/api/v1/withdrawals/execute", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };

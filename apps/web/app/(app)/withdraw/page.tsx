@@ -10,7 +10,7 @@
  * 4. Shows success with tx hash link to Snowtrace
  */
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowDownToLine,
@@ -22,7 +22,9 @@ import {
   Shield,
   Info,
 } from 'lucide-react'
-import { BACKEND_URL, EXPLORER, FEE_CONFIG } from '@/lib/constants'
+import { EXPLORER, FEE_CONFIG } from '@/lib/constants'
+import { api, APIError } from '@/lib/api-client'
+import { usePortfolioStore } from '@/stores/portfolio.store'
 
 type WithdrawalStep = 'input' | 'preview' | 'executing' | 'success' | 'error'
 
@@ -56,109 +58,68 @@ export default function WithdrawPage() {
   const [step, setStep] = useState<WithdrawalStep>('input')
   const [amount, setAmount] = useState('')
   const [isFullWithdrawal, setIsFullWithdrawal] = useState(false)
-  const [balance, setBalance] = useState<number>(0)
   const [preview, setPreview] = useState<FeePreview | null>(null)
   const [result, setResult] = useState<WithdrawalResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
-  // Fetch current balance on mount
-  useEffect(() => {
-    const fetchBalance = async () => {
-      try {
-        const token = localStorage.getItem('privy_token')
-        const smartAccount = localStorage.getItem('smart_account_address')
-        if (!smartAccount) return
-
-        const resp = await fetch(`${BACKEND_URL}/api/v1/accounts/${smartAccount}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (resp.ok) {
-          const data = await resp.json()
-          setBalance(parseFloat(data.totalBalance || '0'))
-        }
-      } catch {
-        // Non-critical: user can still enter amount manually
-      }
-    }
-    fetchBalance()
-  }, [])
+  const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress)
+  const totalDepositedUsd = usePortfolioStore((s) => s.totalDepositedUsd)
+  const balance = parseFloat(totalDepositedUsd || '0')
 
   const handlePreview = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
-      const token = localStorage.getItem('privy_token')
-      const smartAccount = localStorage.getItem('smart_account_address')
-      if (!smartAccount) throw new Error('Smart account not found')
+      if (!smartAccountAddress) throw new Error('Smart account not found')
 
       const withdrawAmount = isFullWithdrawal ? String(balance) : amount
       if (!withdrawAmount || parseFloat(withdrawAmount) <= 0) {
         throw new Error('Please enter a valid amount')
       }
 
-      const resp = await fetch(`${BACKEND_URL}/api/v1/withdrawals/preview`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          smartAccountAddress: smartAccount,
-          withdrawAmount,
-          isFullWithdrawal,
-        }),
+      const data = await api.previewWithdrawal({
+        smartAccountAddress,
+        withdrawAmount,
+        isFullWithdrawal,
       })
 
-      if (!resp.ok) {
-        const err = await resp.json()
-        throw new Error(err.detail || 'Failed to preview withdrawal')
-      }
-
-      const data = await resp.json()
       setPreview(data)
       setStep('preview')
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to preview withdrawal'))
+      if (err instanceof APIError) {
+        setError(err.message)
+      } else {
+        setError(getErrorMessage(err, 'Failed to preview withdrawal'))
+      }
     } finally {
       setIsLoading(false)
     }
-  }, [amount, isFullWithdrawal, balance])
+  }, [amount, isFullWithdrawal, balance, smartAccountAddress])
 
   const handleExecute = useCallback(async () => {
     setStep('executing')
     setError(null)
     try {
-      const token = localStorage.getItem('privy_token')
-      const smartAccount = localStorage.getItem('smart_account_address')
-      if (!smartAccount) throw new Error('Smart account not found')
+      if (!smartAccountAddress) throw new Error('Smart account not found')
 
-      const resp = await fetch(`${BACKEND_URL}/api/v1/withdrawals/execute`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          smartAccountAddress: smartAccount,
-          withdrawAmount: preview?.withdrawAmount || amount,
-          isFullWithdrawal,
-        }),
+      const data = await api.executeWithdrawal({
+        smartAccountAddress,
+        withdrawAmount: preview?.withdrawAmount || amount,
+        isFullWithdrawal,
       })
 
-      if (!resp.ok) {
-        const err = await resp.json()
-        throw new Error(err.detail || 'Withdrawal failed')
-      }
-
-      const data = await resp.json()
       setResult(data)
       setStep('success')
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Withdrawal failed'))
+      if (err instanceof APIError) {
+        setError(err.message)
+      } else {
+        setError(getErrorMessage(err, 'Withdrawal failed'))
+      }
       setStep('error')
     }
-  }, [amount, isFullWithdrawal, preview])
+  }, [amount, isFullWithdrawal, preview, smartAccountAddress])
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">

@@ -493,10 +493,11 @@ async function readAllProtocolBalances(
   smartAddr: `0x${string}`,
 ) {
   // Read all balances in parallel
-  const [idleBalance, qiBalance, sparkShares] = await Promise.all([
+  const [idleBalance, qiBalance, sparkShares, eulerShares] = await Promise.all([
     publicClient.readContract({ address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.SPARK_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
   ]);
 
   // Convert share tokens → USDC value
@@ -516,6 +517,14 @@ async function readAllProtocolBalances(
     } catch { /* fallback: 0 */ }
   }
 
+  let eulerUsdc = 0;
+  if ((eulerShares as bigint) > 0n) {
+    try {
+      const assets = await publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: ERC4626_CONVERT_ABI, functionName: "convertToAssets", args: [eulerShares as bigint] });
+      eulerUsdc = Number(formatUnits(assets as bigint, 6));
+    } catch { /* fallback: 0 */ }
+  }
+
   // Aave: aToken balance IS the USDC value (1:1). Use MAX_UINT to withdraw all via withdraw().
   // We don't need a separate aToken address — Aave withdraw(MAX_UINT) handles it.
   // But we need to know if there's an Aave position. The simplest check: try the Aave withdraw
@@ -524,13 +533,15 @@ async function readAllProtocolBalances(
   const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
 
   return {
-    totalUsdc: idleUsdc + benqiUsdc + sparkUsdc,
+    totalUsdc: idleUsdc + benqiUsdc + sparkUsdc + eulerUsdc,
     idleUsdc,
     benqiUsdc,
     sparkUsdc,
+    eulerUsdc,
     // Raw values for on-chain redeem calls
     qiBalance: qiBalance as bigint,
     sparkShares: sparkShares as bigint,
+    eulerShares: eulerShares as bigint,
   };
 }
 
@@ -581,7 +592,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -589,6 +600,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
           CONTRACTS,
           balances.qiBalance,
           balances.sparkShares,
+          balances.eulerShares,
         );
       }
 
@@ -766,7 +778,7 @@ function AgentDetailsModal({
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Step 1: Redeem from ALL protocols in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -774,6 +786,7 @@ function AgentDetailsModal({
           CONTRACTS,
           balances.qiBalance,
           balances.sparkShares,
+          balances.eulerShares,
         );
       }
 
