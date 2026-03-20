@@ -139,6 +139,7 @@ const MARKET_PROTOCOL_IDS: ProtocolId[] = [
   "euler_v2",
   "spark",
   "silo_savusd_usdc",
+  "silo_susdp_usdc",
 ];
 
 const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
@@ -170,7 +171,7 @@ export default function OnboardingPage() {
 
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
-    () => new Set(MARKET_PROTOCOLS.filter((p) => p.isActive).map((p) => p.id)),
+    () => new Set(MARKET_PROTOCOLS.filter((p) => p.defaultEnabled).map((p) => p.id)),
   );
   const [allocationCaps, setAllocationCaps] = useState<Record<ActiveProtocolId, number>>({
     aave: 50,
@@ -307,6 +308,7 @@ export default function OnboardingPage() {
     aave_v3: allocationCaps.aave,
     euler_v2: 0,
     silo_savusd_usdc: 0,
+    silo_susdp_usdc: 0,
   };
 
   // Poll USDC balance of user's EOA wallet
@@ -820,7 +822,7 @@ export default function OnboardingPage() {
                             )}
                           </div>
                           <p className="text-[10px] text-[#8A837C] truncate">
-                            {protocol.id === "silo_savusd_usdc" ? "sUSDp/USDC" : `${protocol.shortName} · USDC`}
+                            {protocol.id === "silo_savusd_usdc" ? "savUSD/USDC" : protocol.id === "silo_susdp_usdc" ? "sUSDp/USDC" : `${protocol.shortName} · USDC`}
                           </p>
                         </div>
                       </div>

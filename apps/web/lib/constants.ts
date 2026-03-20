@@ -33,6 +33,10 @@ export const CONTRACTS = {
   SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d') as `0x${string}`,
   EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e') as `0x${string}`,
 
+  // Silo isolated lending markets on Avalanche mainnet
+  SILO_SAVUSD_VAULT: (process.env.NEXT_PUBLIC_SILO_SAVUSD_VAULT_ADDRESS ?? '0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1') as `0x${string}`,
+  SILO_SUSDP_VAULT: (process.env.NEXT_PUBLIC_SILO_SUSDP_VAULT_ADDRESS ?? '0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca') as `0x${string}`,
+
   // Native USDC on Avalanche mainnet (Circle-issued)
   USDC:        (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E') as `0x${string}`,
 
@@ -70,6 +74,7 @@ export const PROTOCOL_CONFIG = {
     bgColor: 'rgba(131, 129, 217, 0.12)',
     logoPath: '/protocols/aave-official.svg',
     isActive: true,
+    defaultEnabled: true,
     description: 'Battle-tested lending protocol with $10B+ TVL globally',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.AAVE_POOL),
@@ -85,6 +90,7 @@ export const PROTOCOL_CONFIG = {
     bgColor: 'rgba(131, 129, 217, 0.12)',
     logoPath: '/protocols/aave-official.svg',
     isActive: true,
+    defaultEnabled: true,
     description: 'Battle-tested lending protocol with $10B+ TVL globally',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.AAVE_POOL),
@@ -100,6 +106,7 @@ export const PROTOCOL_CONFIG = {
     bgColor: 'rgba(42, 114, 255, 0.12)',
     logoPath: '/protocols/benqi-official.svg',
     isActive: true,
+    defaultEnabled: true,
     description: 'Native Avalanche lending protocol — the original Avalanche DeFi pillar',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.BENQI_QIUSDC),
@@ -115,6 +122,7 @@ export const PROTOCOL_CONFIG = {
     bgColor: 'rgba(255, 179, 71, 0.12)',
     logoPath: '/protocols/spark-official.svg',
     isActive: true,
+    defaultEnabled: true,
     description: 'MakerDAO-backed savings protocol (ERC-4626) on Avalanche',
     auditBadge: 'Audited',
     explorerUrl: CONTRACTS.SPARK_SPUSDC ? EXPLORER.address(CONTRACTS.SPARK_SPUSDC) : '',
@@ -130,6 +138,7 @@ export const PROTOCOL_CONFIG = {
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-official.svg',
     isActive: true,
+    defaultEnabled: false,
     description: 'High-yield isolated vault; optimizer still enforces utilization and safety checks',
     auditBadge: 'Audited',
     explorerUrl: CONTRACTS.EULER_VAULT ? EXPLORER.address(CONTRACTS.EULER_VAULT) : '',
@@ -139,15 +148,32 @@ export const PROTOCOL_CONFIG = {
     id: 'silo_savusd_usdc' as const,
     name: 'Silo (savUSD/USDC)',
     shortName: 'Silo',
-    contractAddress: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+    contractAddress: CONTRACTS.SILO_SAVUSD_VAULT,
     riskScore: 8,     // Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1 = 8/10
     color: '#22C55E',
     bgColor: 'rgba(34, 197, 94, 0.12)',
     logoPath: '/protocols/silo-placeholder.svg',
-    isActive: false,
-    description: 'Coming soon',
-    auditBadge: 'Coming Soon',
-    explorerUrl: '',
+    isActive: true,
+    defaultEnabled: false,
+    description: 'Isolated lending market — savUSD/USDC on Silo V2',
+    auditBadge: 'Audited',
+    explorerUrl: EXPLORER.address(CONTRACTS.SILO_SAVUSD_VAULT),
+    vaultUrl: 'https://app.silo.finance/markets/avalanche/142?action=deposit',
+  },
+  silo_susdp_usdc: {
+    id: 'silo_susdp_usdc' as const,
+    name: 'Silo (sUSDp/USDC)',
+    shortName: 'Silo',
+    contractAddress: CONTRACTS.SILO_SUSDP_VAULT,
+    riskScore: 8,     // Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1 = 8/10
+    color: '#16A34A',
+    bgColor: 'rgba(22, 163, 74, 0.12)',
+    logoPath: '/protocols/silo-placeholder.svg',
+    isActive: true,
+    defaultEnabled: false,
+    description: 'Isolated lending market — sUSDp/USDC on Silo V2',
+    auditBadge: 'Audited',
+    explorerUrl: EXPLORER.address(CONTRACTS.SILO_SUSDP_VAULT),
     vaultUrl: 'https://app.silo.finance/markets/avalanche/susdp-usdc-162?action=deposit',
   },
 } as const
@@ -165,7 +191,7 @@ export const IDLE_CONFIG = {
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
 // Protocol IDs used by optimizer/runtime paths (keep aave alias for compatibility)
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'aave', 'benqi', 'spark', 'euler_v2']
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'aave', 'benqi', 'spark', 'euler_v2', 'silo_savusd_usdc', 'silo_susdp_usdc']
 
 // Session key on-chain call policy — function selectors per protocol
 export const SESSION_KEY_SELECTORS = {
@@ -189,7 +215,14 @@ export const SESSION_KEY_SELECTORS = {
     deposit: '0x6e553f65',
     redeem:  '0xba087652',
   },
-  silo_savusd_usdc: {},
+  silo_savusd_usdc: {
+    deposit: '0x6e553f65',  // deposit(uint256,address) — ERC-4626
+    redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+  },
+  silo_susdp_usdc: {
+    deposit: '0x6e553f65',  // deposit(uint256,address) — ERC-4626
+    redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+  },
 } as const
 
 // Risk presets for per-protocol caps (≥$10K deposits)
@@ -197,17 +230,17 @@ export const RISK_PRESETS = {
   conservative: {
     label: 'Conservative',
     description: 'Higher allocation to battle-tested Aave',
-    caps: { aave: 0.70, benqi: 0.20, spark: 1.0 },  // Spark unlimited (no TVL cap)
+    caps: { aave: 0.70, benqi: 0.20, spark: 1.0, euler_v2: 0.10, silo_savusd_usdc: 0.10, silo_susdp_usdc: 0.10 },
   },
   balanced: {
     label: 'Balanced',
     description: 'Equal opportunity across all protocols',
-    caps: { aave: 0.50, benqi: 0.40, spark: 1.0 },
+    caps: { aave: 0.50, benqi: 0.40, spark: 1.0, euler_v2: 0.20, silo_savusd_usdc: 0.20, silo_susdp_usdc: 0.20 },
   },
   aggressive: {
     label: 'Aggressive',
     description: 'Maximize yield — higher Benqi allocation',
-    caps: { aave: 0.40, benqi: 0.40, spark: 1.0 },
+    caps: { aave: 0.40, benqi: 0.40, spark: 1.0, euler_v2: 0.30, silo_savusd_usdc: 0.30, silo_susdp_usdc: 0.30 },
   },
 } as const
 

@@ -27,14 +27,14 @@ from app.services.optimizer.allocator import (
 from app.services.optimizer.health_checker import (
     HealthCheckResult,
     RebalanceFlag,
-    run_all_health_checks,
+    check_protocol_health,
 )
 from app.services.optimizer.rate_fetcher import RateFetcher, circuit_breaker
 from app.services.optimizer.rate_validator import RateValidator
 from app.services.protocols import ALL_ADAPTERS
 from app.services.fee_calculator import record_deposit, record_partial_withdrawal
 from app.services.protocols import get_adapter
-from app.services.protocols.base import get_shared_async_web3
+from app.services.protocols.base import ProtocolHealth, ProtocolStatus, get_shared_async_web3
 
 logger = logging.getLogger("snowmind")
 
@@ -218,35 +218,14 @@ class Rebalancer:
             # Record the deposit for fee tracking (initial deployment)
             record_deposit(db, account_id, idle_usdc)
 
-        # 5. Run real health checks for all allowed protocols
-        protocol_healths = {}
-        for pid in allowed_rates:
-            try:
-                adapter = ALL_ADAPTERS.get(pid)
-                if adapter:
-                    protocol_healths[pid] = await adapter.get_health()
-                else:
-                    from app.services.protocols.base import ProtocolHealth, ProtocolStatus
-                    protocol_healths[pid] = ProtocolHealth(
-                        protocol_id=pid,
-                        status=ProtocolStatus.HEALTHY,
-                        is_deposit_safe=True,
-                        is_withdrawal_safe=True,
-                    )
-            except Exception as exc:
-                logger.warning("Health check failed for %s: %s", pid, exc)
-                from app.services.protocols.base import ProtocolHealth, ProtocolStatus
-                protocol_healths[pid] = ProtocolHealth(
-                    protocol_id=pid,
-                    status=ProtocolStatus.HEALTHY,
-                    is_deposit_safe=True,
-                    is_withdrawal_safe=True,
-                )
-
+        # ── 5. TARGETED health checks ──────────────────────────────
+        # Architecture: check ONLY (a) protocols with active positions
+        # and (b) candidate protocols in APY-ranked order until we have
+        # enough healthy capacity. Never blanket-check all protocols.
         apy_by_protocol = {pid: rate.apy for pid, rate in allowed_rates.items()}
         tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in allowed_rates.items()}
 
-        # Gather historical APY data for health checks
+        # 5a. Load historical APY data for ALL allowed protocols (cheap DB reads)
         previous_apys: dict[str, Decimal | None] = {}
         yesterday_avg_apys: dict[str, Decimal | None] = {}
         daily_snapshots_7d: dict[str, list[Decimal] | None] = {}
@@ -255,9 +234,7 @@ class Rebalancer:
             yesterday_avg_apys[pid] = None
             daily_snapshots_7d[pid] = None
 
-        # Load yesterday's avg APY and 7-day snapshots from DB
         try:
-            from datetime import date
             today = datetime.now(timezone.utc).date()
             week_ago = (today - timedelta(days=7)).isoformat()
             yesterday = (today - timedelta(days=1)).isoformat()
@@ -284,48 +261,67 @@ class Rebalancer:
         except Exception as exc:
             logger.warning("Failed to load APY history for health checks: %s", exc)
 
-        # Load previous APY from TWAP buffer for velocity check
         from app.services.optimizer.rate_fetcher import twap_buffer
         for pid in allowed_rates:
             latest = twap_buffer.get_latest(pid)
             if latest:
                 previous_apys[pid] = latest.apy
 
-        health_results = await run_all_health_checks(
-            health_results=protocol_healths,
-            current_apys=apy_by_protocol,
-            twap_apys=apy_by_protocol,
-            previous_apys=previous_apys,
-            yesterday_avg_apys=yesterday_avg_apys,
-            daily_snapshots_7d=daily_snapshots_7d,
-            current_positions=current,
-            protocol_tvls=tvl_by_protocol,
-            circuit_breaker_failures={
-                pid: circuit_breaker.get_failure_count(pid)
-                for pid in allowed_rates
-            },
+        # ── Helper: health-check a SINGLE protocol via its adapter ───
+        _NO_TVL_CAP_PROTOCOLS = frozenset(
+            ("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc")
         )
 
-        # ── 5b. Current-Protocol Health Enforcement ─────────────────
-        # Security-critical: if ANY protocol where we CURRENTLY hold funds
-        # is unhealthy, we MUST force-exit regardless of APY delta.
-        # Flow:
-        #   (1) Check health of protocols with active positions
-        #   (2) If unhealthy → forced exit to best healthy alternative
-        #   (3) If healthy → normal APY-driven rebalance with health gates
-        #
-        # The allocator excludes unhealthy protocols (is_deposit_safe=False)
-        # from the new allocation, so the rebalancer will automatically
-        # withdraw from them. The global_flag ensures soft gates are bypassed.
+        async def _check_one(pid: str, position: Decimal) -> HealthCheckResult:
+            """Fetch adapter health + run check_protocol_health for one protocol."""
+            try:
+                adapter = ALL_ADAPTERS.get(pid)
+                if adapter:
+                    proto_health = await adapter.get_health()
+                else:
+                    proto_health = ProtocolHealth(
+                        protocol_id=pid,
+                        status=ProtocolStatus.HEALTHY,
+                        is_deposit_safe=True,
+                        is_withdrawal_safe=True,
+                    )
+            except Exception as exc:
+                logger.warning("Health check RPC failed for %s: %s", pid, exc)
+                proto_health = ProtocolHealth(
+                    protocol_id=pid,
+                    status=ProtocolStatus.HEALTHY,
+                    is_deposit_safe=True,
+                    is_withdrawal_safe=True,
+                )
+            return await check_protocol_health(
+                protocol_id=pid,
+                protocol_health=proto_health,
+                current_apy=apy_by_protocol.get(pid, Decimal("0")),
+                twap_apy=apy_by_protocol.get(pid, Decimal("0")),
+                previous_apy=previous_apys.get(pid),
+                yesterday_avg_apy=yesterday_avg_apys.get(pid),
+                daily_snapshots_7d=daily_snapshots_7d.get(pid),
+                current_position=position,
+                protocol_tvl=tvl_by_protocol.get(pid, Decimal("0")),
+                circuit_breaker_failures=circuit_breaker.get_failure_count(pid),
+            )
+
+        def _estimate_capacity(pid: str) -> Decimal:
+            """Rough protocol capacity for early-stop estimation."""
+            if pid in _NO_TVL_CAP_PROTOCOLS:
+                return total_usd
+            tvl = tvl_by_protocol.get(pid, Decimal("0"))
+            return Decimal(str(self.settings.TVL_CAP_PCT)) * tvl
+
+        # ── 5b. Check health of CURRENT positions ONLY ──────────────
+        health_results: dict[str, HealthCheckResult] = {}
         unhealthy_positions: list[str] = []
+
         for pid, position_amt in current.items():
             if position_amt < Decimal("1"):
                 continue
-            hr = health_results.get(pid)
-            if hr is None:
-                # Protocol not in allowed_rates — session key may have changed.
-                # Treat as forced exit: we have funds in a protocol the session
-                # key no longer covers.
+            if pid not in allowed_rates:
+                # Session key no longer covers this protocol → forced exit
                 logger.warning(
                     "FORCED EXIT: position $%.2f in %s but protocol not in "
                     "allowed rates — forcing withdrawal",
@@ -333,14 +329,70 @@ class Rebalancer:
                 )
                 unhealthy_positions.append(pid)
                 continue
+
+            hr = await _check_one(pid, position_amt)
+            health_results[pid] = hr
+
             if not hr.is_deposit_safe or not hr.is_healthy:
                 logger.warning(
                     "FORCED EXIT: position $%.2f in %s failed health checks: %s",
-                    float(position_amt),
-                    pid,
+                    float(position_amt), pid,
                     "; ".join(hr.exclusion_reasons) or "unhealthy",
                 )
                 unhealthy_positions.append(pid)
+
+        # ── 5c. Check CANDIDATES in APY-ranked order (one at a time) ─
+        # Walk the ranked list; health-check each candidate ONE at a
+        # time and stop once we have enough healthy capacity for total_usd.
+        ranked_candidates = sorted(
+            allowed_rates.keys(),
+            key=lambda pid: apy_by_protocol.get(pid, Decimal("0")),
+            reverse=True,
+        )
+
+        remaining_to_allocate = total_usd
+        # Deduct capacity already covered by healthy current positions
+        for pid, hr in health_results.items():
+            if hr.is_deposit_safe:
+                remaining_to_allocate -= min(
+                    remaining_to_allocate, _estimate_capacity(pid)
+                )
+
+        for pid in ranked_candidates:
+            if remaining_to_allocate <= Decimal("1"):
+                break  # Enough healthy capacity found
+            if pid in health_results:
+                continue  # Already checked (current position)
+
+            # Health-check this ONE candidate (targeted, not blanket)
+            hr = await _check_one(pid, Decimal("0"))
+            health_results[pid] = hr
+
+            if hr.is_deposit_safe:
+                remaining_to_allocate -= min(
+                    remaining_to_allocate, _estimate_capacity(pid)
+                )
+                logger.info(
+                    "Candidate %s passed health check (TWAP APY: %.2f%%)",
+                    pid, float(apy_by_protocol.get(pid, Decimal("0")) * 100),
+                )
+            else:
+                logger.info(
+                    "Candidate %s failed health check: %s — trying next",
+                    pid, "; ".join(hr.exclusion_reasons),
+                )
+
+        # ── 5d. Determine global rebalance flag ─────────────────────
+        global_flag = RebalanceFlag.NONE
+        for hr in health_results.values():
+            if hr.flag == RebalanceFlag.EMERGENCY_EXIT:
+                global_flag = RebalanceFlag.EMERGENCY_EXIT
+                break
+            if hr.flag == RebalanceFlag.FORCED_REBALANCE:
+                global_flag = RebalanceFlag.FORCED_REBALANCE
+
+        if unhealthy_positions and global_flag == RebalanceFlag.NONE:
+            global_flag = RebalanceFlag.FORCED_REBALANCE
 
         if unhealthy_positions:
             logger.warning(
@@ -350,22 +402,7 @@ class Rebalancer:
                 ", ".join(unhealthy_positions),
             )
 
-        # Determine highest-priority flag across all protocols
-        global_flag = RebalanceFlag.NONE
-        for hr in health_results.values():
-            if hr.flag == RebalanceFlag.EMERGENCY_EXIT:
-                global_flag = RebalanceFlag.EMERGENCY_EXIT
-                break
-            if hr.flag == RebalanceFlag.FORCED_REBALANCE:
-                global_flag = RebalanceFlag.FORCED_REBALANCE
-
-        # Also force rebalance if we detected unhealthy positions above
-        # (covers edge case where health_checker didn't set the flag
-        # because the protocol wasn't in health_results at all)
-        if unhealthy_positions and global_flag == RebalanceFlag.NONE:
-            global_flag = RebalanceFlag.FORCED_REBALANCE
-
-        # Log exclusions
+        # Log exclusions for checked protocols only
         for pid, hr in health_results.items():
             if hr.exclusion_reasons:
                 logger.warning(

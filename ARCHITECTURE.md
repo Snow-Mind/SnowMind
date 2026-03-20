@@ -12,8 +12,8 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
 
 **Key facts:**
 - Chain: Avalanche C-Chain (mainnet, chain ID 43114)
-- Supported protocols: Aave V3, Benqi, Spark, Euler V2 (9Summits)
-- Coming soon: Silo (savUSD/USDC market 142, sUSDp/USDC market 162)
+- Supported protocols: Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo (savUSD/USDC, sUSDp/USDC)
+- Default-enabled: Aave V3, Benqi, Spark — Euler and Silo are opt-in (user must explicitly enable)
 - Asset: Native USDC only (`0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E`)
 - Non-custodial: User's EOA owns the smart account. SnowMind has scoped permissions only.
 - Agent fee: 10% of profit, charged proportionally on every withdrawal
@@ -75,13 +75,13 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
                        │    ├─► Benqi qiUSDCn   │
                        │    ├► Spark spUSDC    │
                        │    ├► Euler V2 Vault  │
-                       │    └► Silo Vaults *   │
+                       │    └► Silo Vaults     │
                        │                        │
                        │  SnowMindRegistry      │
                        │  EntryPoint v0.7       │
                        └────────────────────────┘
 
-\* Silo vaults (savUSD/USDC, sUSDp/USDC) coming soon.
+Euler and Silo vaults are opt-in: fully active in the optimizer but not enabled by default in the onboarding UI.
 ```
 
 ---
@@ -128,12 +128,12 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
 - **Risk Score**: 6/10 — fresh V2 deployment, lower TVL, 9Summits-curated vault
 - **Health checks**: ERC-4626 vault health, circuit breaker. Exempt from lending-specific checks (utilization, velocity, exploit detection) since it is a curated vault, not a lending pool.
 
-### Silo — Isolated Lending Markets (Coming Soon)
-- **Contracts**: savUSD/USDC (market 142), sUSDp/USDC (market 162) on [app.silo.finance](https://app.silo.finance)
+### Silo — Isolated Lending Markets (Opt-In)
+- **Contracts**: savUSD/USDC `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` (market 142), sUSDp/USDC `0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca` (market 162)
 - **Type**: Isolated lending markets — each market has its own risk parameters
 - **Interface**: ERC-4626 compatible `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
 - **Risk Score**: 8/10 — growing protocol, isolated markets reduce contagion risk between assets
-- **Status**: Placeholder in onboarding UI; adapter integration pending
+- **Status**: Fully active in optimizer; opt-in only (user must explicitly enable in onboarding UI)
 
 ---
 
@@ -394,7 +394,7 @@ User signs a session key. This is a limited-permission key the agent uses to reb
 - `qiUSDCn.mint()` and `qiUSDCn.redeem()` (Benqi)
 - `spUSDC.deposit()` and `spUSDC.redeem()` (Spark)
 - `eulerVault.deposit()` and `eulerVault.redeem()` (Euler V2 / 9Summits)
-- `siloVault.deposit()` and `siloVault.redeem()` (Silo — when active)
+- `siloVault.deposit()` and `siloVault.redeem()` (Silo savUSD/USDC + sUSDp/USDC)
 - `USDC.approve()` on all protocol contracts
 - `USDC.transfer()` to SNOWMIND_TREASURY (agent fee, amount-capped)
 - `USDC.transfer()` to user's EOA (withdrawal — read from on-chain owner, NEVER from DB)
@@ -681,8 +681,8 @@ CREATE POLICY "Users read own allocations only"
 | Benqi qiUSDCn | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` | Compound-style lending |
 | Spark spUSDC | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Fixed-rate savings vault |
 | Euler V2 / 9Summits | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Curated ERC-4626 vault |
-| Silo savUSD/USDC | *(coming soon — market 142)* | Isolated lending market |
-| Silo sUSDp/USDC | *(coming soon — market 162)* | Isolated lending market |
+| Silo savUSD/USDC | `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` | Isolated lending market |
+| Silo sUSDp/USDC | `0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca` | Isolated lending market |
 | EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | ERC-4337 standard entry point |
 | SnowMindRegistry | *(deploy with Foundry)* | On-chain account registry + audit logs |
 | Treasury | *(Gnosis Safe multisig)* | Agent fee collection |

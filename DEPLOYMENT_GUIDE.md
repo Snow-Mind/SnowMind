@@ -155,8 +155,8 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **SnowMindRegistry** | `0x849Ca487D5DeD85c93fc3600338a419B100833a8` | Avalanche C-Chain |
 | **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
 | **Euler V2 / 9Summits Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
-| **Silo savUSD/USDC** | *(coming soon — market 142 on app.silo.finance)* | Avalanche C-Chain |
-| **Silo sUSDp/USDC** | *(coming soon — market 162 on app.silo.finance)* | Avalanche C-Chain |
+| **Silo savUSD/USDC** | `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` | Avalanche C-Chain |
+| **Silo sUSDp/USDC** | `0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca` | Avalanche C-Chain |
 
 ### Explorer
 
@@ -727,7 +727,7 @@ Before going live, verify each item:
 - [ ] Benqi adapter returns valid APY from mainnet
 - [ ] Spark adapter returns valid APY from mainnet (ERC-4626)
 - [ ] Euler V2 (9Summits) adapter returns valid APY from mainnet (ERC-4626)
-- [ ] Silo adapters return valid APY from mainnet (when deployed)
+- [ ] Silo adapters return valid APY from mainnet (ERC-4626)
 - [ ] Rate validator cross-checks pass against DefiLlama
 
 ### Security
@@ -787,8 +787,8 @@ Optional but strongly recommended for production security:
 ## Mainnet Readiness Notes
 
 - Production chain: Avalanche C-Chain only (`43114`)
-- Active protocols: `aave_v3`, `benqi`, `spark`, `euler_v2`
-- Coming soon: `silo_savusd_usdc` (savUSD/USDC, market 142), `silo_susdp_usdc` (sUSDp/USDC, market 162) — on [app.silo.finance](https://app.silo.finance)
+- Active protocols: `aave_v3`, `benqi`, `spark`, `euler_v2`, `silo_savusd_usdc`, `silo_susdp_usdc`
+- Opt-in protocols: `euler_v2`, `silo_savusd_usdc`, `silo_susdp_usdc` — fully active but not enabled by default in onboarding UI (user must explicitly toggle them on)
 - Euler V2 is branded as **Euler (9Summits)** in user-facing UI (the vault is curated by 9Summits on Euler V2 infra)
 - Registry ownership transfer is two-step (`proposeOwnership` then Safe `acceptOwnership`)
 - Fee language and user-facing disclosures should use "agent fee"
