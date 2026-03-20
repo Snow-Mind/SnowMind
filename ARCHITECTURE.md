@@ -12,7 +12,8 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
 
 **Key facts:**
 - Chain: Avalanche C-Chain (mainnet, chain ID 43114)
-- Supported protocols: Aave V3, Benqi, Spark
+- Supported protocols: Aave V3, Benqi, Spark, Euler V2 (9Summits)
+- Coming soon: Silo (savUSD/USDC market 142, sUSDp/USDC market 162)
 - Asset: Native USDC only (`0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E`)
 - Non-custodial: User's EOA owns the smart account. SnowMind has scoped permissions only.
 - Agent fee: 10% of profit, charged proportionally on every withdrawal
@@ -72,16 +73,20 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
                        │  Kernel v3.1 Smart Acct│
                        │    ├─► Aave V3 Pool    │
                        │    ├─► Benqi qiUSDCn   │
-                       │    └─► Spark spUSDC    │
+                       │    ├► Spark spUSDC    │
+                       │    ├► Euler V2 Vault  │
+                       │    └► Silo Vaults *   │
                        │                        │
                        │  SnowMindRegistry      │
                        │  EntryPoint v0.7       │
                        └────────────────────────┘
+
+\* Silo vaults (savUSD/USDC, sUSDp/USDC) coming soon.
 ```
 
 ---
 
-## The Three Protocols
+## The Protocols
 
 ### Aave V3 — Primary Lending Protocol
 - **Contract**: `0x794a61358D6845594F94dc1DB02A252b5b4814aD`
@@ -89,7 +94,7 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
 - **Interface**: `supply(asset, amount, onBehalfOf, referralCode)` / `withdraw(asset, amount, to)`
 - **APY Source**: `getReserveData(USDC).currentLiquidityRate` → RAY (1e27) → annualized
 - **TVL Cap**: 15% of total USDC supplied (prevents market impact)
-- **Risk Score**: 2/10 — battle-tested since 2020, $10B+ TVL globally
+- **Risk Score**: 10/10 — battle-tested since 2020, $10B+ TVL globally
 - **Health checks**: Reserve flags (is_active, is_frozen, is_paused), utilization rate, exploit detection
 
 ### Benqi — Avalanche-Native Lending
@@ -98,7 +103,7 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
 - **Interface**: `mint(amount)` / `redeem(qiTokenAmount)`
 - **APY Source**: `supplyRatePerTimestamp()` → annualized (use `exchangeRateStored()` for balance, NOT `exchangeRateCurrent()`)
 - **TVL Cap**: 15% of total USDC supplied
-- **Risk Score**: 3/10 — established on Avalanche since 2021
+- **Risk Score**: 9/10 — established on Avalanche since 2021
 - **Health checks**: Comptroller pause flags (mintGuardianPaused, redeemGuardianPaused), utilization, exploit detection
 
 ### Spark — Fixed-Rate Savings Vault
@@ -109,10 +114,26 @@ Think of it as a yield routing layer with your risk rules, not ours. Unlike comp
 - **Effective APY**: `gross_apy × 0.90` — only 90% of deposit is deployed for yield (10% instant-redemption buffer per Spark V2)
 - **PSM Fee**: Read `psmWrapper.tin()` before every deposit. If `tin > 0`: `effective_apy -= (tin/1e18) × (365/expected_hold_days)`. If `tin == type(uint256).max`: deposits are disabled, exclude from allocation.
 - **TVL Cap**: NONE — fixed rate does not compress under deposit pressure
-- **Risk Score**: 3/10 — MakerDAO-backed, well-audited, but Avalanche deployment is < 6 months old
+- **Risk Score**: 9/10 — MakerDAO-backed, well-audited governance
 - **Health checks**: `vat.live() == 1` (MakerDAO global settlement), `tin` value only. NO utilization, NO TVL minimum, NO sanity bound, NO velocity check, NO APY stability check.
 
 **Why Spark is different:** All other checks (utilization, rate volatility, velocity spikes, TVL depth) exist to detect borrow-side demand anomalies on lending protocols. Spark has no borrow side on Avalanche. Its rate is a governance parameter. Running lending-protocol checks on Spark produces meaningless output. The only real risks for Spark are MakerDAO global settlement (vat.live) and the PSM deposit gate (tin).
+
+### Euler V2 (9Summits) — Curated ERC-4626 Vault
+- **Contract**: `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e`
+- **Type**: ERC-4626 vault curated by 9Summits on Euler V2 infrastructure
+- **Interface**: `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
+- **APY Source**: `convertToAssets(1e6)` delta vs 24h-ago snapshot × 365
+- **TVL Cap**: NONE — ERC-4626 vault, same as Spark
+- **Risk Score**: 6/10 — fresh V2 deployment, lower TVL, 9Summits-curated vault
+- **Health checks**: ERC-4626 vault health, circuit breaker. Exempt from lending-specific checks (utilization, velocity, exploit detection) since it is a curated vault, not a lending pool.
+
+### Silo — Isolated Lending Markets (Coming Soon)
+- **Contracts**: savUSD/USDC (market 142), sUSDp/USDC (market 162) on [app.silo.finance](https://app.silo.finance)
+- **Type**: Isolated lending markets — each market has its own risk parameters
+- **Interface**: ERC-4626 compatible `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
+- **Risk Score**: 8/10 — growing protocol, isolated markets reduce contagion risk between assets
+- **Status**: Placeholder in onboarding UI; adapter integration pending
 
 ---
 
@@ -125,13 +146,13 @@ There is no default "base layer." Every protocol competes on effective APY. The 
 ```
 1. Rank all healthy protocols by effective TWAP APY (highest first)
    Use spark_effective_apy = spark_gross_apy × 0.90 - annualized_psm_fee for Spark
-   Use twap_apy directly for Aave and Benqi
+   Use twap_apy directly for Aave, Benqi, Euler, and Silo
 
 2. For each protocol in ranked order:
    a. If protocol is Aave or Benqi:
       max_allowed = min(remaining_funds, 0.15 × protocol_tvl)
-   b. If protocol is Spark:
-      max_allowed = remaining_funds  (no TVL cap)
+   b. If protocol is Spark, Euler, or Silo:
+      max_allowed = remaining_funds  (no TVL cap — ERC-4626 vaults)
    c. Allocate min(remaining_funds, max_allowed)
    d. Subtract allocated amount from remaining_funds
    e. Stop when remaining_funds == 0
@@ -144,7 +165,7 @@ There is no default "base layer." Every protocol competes on effective APY. The 
 
 ### Why This Works
 
-Spark almost always ranks third (lowest APY) and absorbs overflow — giving it the same practical effect as the old "base layer" design, but without the artificial bias. If governance raises the DSR and Spark ranks first, it captures all funds, which is also correct. The algorithm is neutral and APY-driven.
+Spark/Euler/Silo almost always rank lower and absorb overflow — giving them the same practical effect as the old "base layer" design, but without the artificial bias. If any vault's rate rises above the lending protocols, it captures all funds, which is correct. The algorithm is neutral and APY-driven.
 
 ### User Allocation Preferences (≥ $10,000 deposits)
 
@@ -165,12 +186,12 @@ def get_effective_cap(protocol, user_prefs, total_balance, protocol_tvl):
 ```
 
 **Risk Presets:**
-| Preset | Aave max | Benqi max | Spark |
-|---|---|---|---|
-| Conservative | 70% | 20% | unlimited |
-| Balanced (default) | 50% | 40% | unlimited |
-| Aggressive | 40% | 40% | unlimited |
-| Custom | user-set | user-set | user-set |
+| Preset | Aave max | Benqi max | Spark | Euler | Silo |
+|---|---|---|---|---|---|
+| Conservative | 70% | 20% | unlimited | 10% | 10% |
+| Balanced (default) | 50% | 40% | unlimited | 20% | 20% |
+| Aggressive | 40% | 40% | unlimited | 30% | 30% |
+| Custom | user-set | user-set | user-set | user-set | user-set |
 
 **UX Flow:**
 - Deposit < $10,000 → skip allocation preferences, auto-allocate to highest APY
@@ -211,6 +232,7 @@ SCHEDULER FIRES (every 30 minutes)
    aave_bal   = aavePool.getUserAccountData(smartAccount) → USDC supplied
    benqi_bal  = qiUSDCn.balanceOfUnderlying(smartAccount) → uses exchangeRateStored()
    spark_bal  = spUSDC.convertToAssets(spUSDC.balanceOf(smartAccount))
+   euler_bal  = eulerVault.convertToAssets(eulerVault.balanceOf(smartAccount))
    total_bal  = sum
    If total_bal < $10: SKIP (dust)
 
@@ -241,9 +263,28 @@ SCHEDULER FIRES (every 30 minutes)
    vat_live = vat.live()
    If vat_live != 1: EMERGENCY_EXIT → move ALL spark funds immediately
 
+7b. PROTOCOL HEALTH CHECKS — EULER V2 [parallel with above]
+    ERC-4626 vault health check: totalAssets() > 0, convertToAssets() valid
+    Circuit breaker check (consecutive RPC failures)
+    Exempt from lending-specific checks (utilization, velocity, exploit detection)
+
+7c. CURRENT-PROTOCOL HEALTH ENFORCEMENT (SECURITY-CRITICAL)
+    For EACH protocol where the user currently holds funds:
+      If that protocol failed ANY health check (is_deposit_safe=false or is_healthy=false):
+        → Log "FORCED EXIT" with position amount and failure reasons
+        → Set global_flag = FORCED_REBALANCE (or EMERGENCY_EXIT)
+        → The allocator will exclude the unhealthy protocol from the new allocation
+        → Funds will be moved to the best HEALTHY alternative regardless of APY delta
+    If the protocol we're in still passes health checks:
+        → Proceed with normal APY-driven rebalance logic
+    
+    This ensures we never passively sit in a protocol that has become unsafe.
+    Health checks don't just gate new deposits — they force exits from existing positions.
+
 8. FETCH APYs [only for non-excluded protocols, parallel]
    aave_apy   = currentLiquidityRate → RAY to APY conversion
    benqi_apy  = supplyRatePerTimestamp() → annualized
+   euler_apy  = convertToAssets delta vs 24h snapshot × 365
    spark_gross = (today_convertToAssets - yesterday_snapshot) / yesterday × 365
    spark_effective = spark_gross × 0.90 - (spark_fee_rate × 365 / expected_hold_days)
 
@@ -352,7 +393,9 @@ User signs a session key. This is a limited-permission key the agent uses to reb
 - `aavePool.supply()` and `aavePool.withdraw()` (Aave V3)
 - `qiUSDCn.mint()` and `qiUSDCn.redeem()` (Benqi)
 - `spUSDC.deposit()` and `spUSDC.redeem()` (Spark)
-- `USDC.approve()` on the three protocol contracts
+- `eulerVault.deposit()` and `eulerVault.redeem()` (Euler V2 / 9Summits)
+- `siloVault.deposit()` and `siloVault.redeem()` (Silo — when active)
+- `USDC.approve()` on all protocol contracts
 - `USDC.transfer()` to SNOWMIND_TREASURY (agent fee, amount-capped)
 - `USDC.transfer()` to user's EOA (withdrawal — read from on-chain owner, NEVER from DB)
 
@@ -396,13 +439,14 @@ User keeps smart account, can re-deposit anytime.
 Call 1: aavePool.withdraw(USDC, MAX, smartAccount)
 Call 2: qiUSDCn.redeem(full_qi_balance)
 Call 3: spUSDC.redeem(full_share_balance, smartAccount, smartAccount)
-Call 4: USDC.transfer(TREASURY, agent_fee_amount)  ← fixed amount
-Call 5: USDC.transfer(userEOA, type(uint256).max)   ← sweep everything remaining
+Call 4: eulerVault.redeem(full_share_balance, smartAccount, smartAccount)
+Call 5: USDC.transfer(TREASURY, agent_fee_amount)  ← fixed amount
+Call 6: USDC.transfer(userEOA, type(uint256).max)   ← sweep everything remaining
 ```
 
-Call 5 uses MAX sweep — not a hardcoded amount — to avoid rounding residuals from interest accrued between balance-read and execution.
+Call 6 uses MAX sweep — not a hardcoded amount — to avoid rounding residuals from interest accrued between balance-read and execution.
 
-**Fee-exempt accounts:** If `accounts.fee_exempt = true`, Call 4 is omitted. The UserOperation has only 4 calls. This is set by SnowMind admin in the database for beta users.
+**Fee-exempt accounts:** If `accounts.fee_exempt = true`, Call 5 is omitted. The UserOperation has only calls to withdraw + sweep. This is set by SnowMind admin in the database for beta users.
 
 ---
 
@@ -445,27 +489,34 @@ Layer 2: Rate Validation (Backend)
   └─ 7-day APY stability (>50% relative swing → skip)
 
 Layer 3: Protocol Safety (Backend)
-  ├─ Admin pause flag detection (Aave reserve flags, Benqi comptroller, Spark vat.live)
+  ├─ Admin pause flag detection (Aave reserve flags, Benqi comptroller, Spark vat.live, Euler vault health)
   ├─ Utilization monitoring (>90% → no new deposits)
   ├─ TVL minimum ($100K for Aave/Benqi)
   ├─ TVL cap enforcement (15% of pool, auto-withdraw if exceeded)
-  └─ Circuit breaker (3 RPC failures → exclude, resets on success)
+  ├─ Circuit breaker (3 RPC failures → exclude, resets on success)
+  └─ Current-protocol health enforcement: if the protocol you're IN fails any check,
+     force-exit to best healthy alternative regardless of APY delta
 
-Layer 4: Infrastructure Security
+Layer 4: Operational Monitoring
+  ├─ Paymaster balance monitoring (alert at < 10 AVAX remaining)
+  ├─ Scheduler health watchdog (detects missed cycles, fires alerts)
+  ├─ Telegram bot alerts for critical events
+  └─ Sentry error tracking for all backend exceptions
+
+Layer 5: Infrastructure Security
   ├─ Session key encryption: AES-256-GCM with KMS envelope encryption
   ├─ Encryption key: AWS KMS or Supabase Vault — never in environment variables
-  ├─ Key rotation: aligned with 7-day session key expiry
-  ├─ Supabase RLS: users can only read their own accounts/allocations
+  ├─ Key rotation: aligned with 7-day session key expiry  ├─ Session key renewal guard: rejects new key if existing key has >24h remaining  ├─ Supabase RLS: users can only read their own accounts/allocations
   ├─ Session keys: USING (false) policy — frontend cannot read them ever
   ├─ Audit log: every session key operation logged to session_key_audit
   └─ Fallback bundler: Pimlico primary, Alchemy AA API as fallback
 
-Layer 5: Platform Caps (Guarded Beta)
+Layer 6: Platform Caps (Guarded Beta)
   ├─ $50,000 total platform deposit cap
   ├─ Cap increase schedule: $50K → $500K (after 30 days + audit) → $5M (after security review)
   └─ Each increase updates SnowMindRegistry on-chain (transparent, verifiable)
 
-Layer 6: User Always Has the Exit
+Layer 7: User Always Has the Exit
   ├─ Owner EOA has full control of smart account
   ├─ Can withdraw directly via Snowtrace (no UI needed)
   ├─ Can revoke session key at any time from frontend
@@ -516,7 +567,7 @@ CREATE TABLE session_keys (
 CREATE TABLE allocations (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id          uuid REFERENCES accounts(id),
-    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark'
+    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark', 'euler_v2', 'silo_*'
     usdc_amount         numeric(30, 6) NOT NULL,
     updated_at          timestamptz DEFAULT now(),
     UNIQUE(account_id, protocol)
@@ -596,7 +647,7 @@ CREATE TABLE session_key_audit (
 -- User allocation preferences
 CREATE TABLE user_preferences (
     account_id          uuid REFERENCES accounts(id),
-    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark'
+    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark', 'euler_v2', 'silo_*'
     enabled             boolean DEFAULT true,
     max_pct             numeric(5, 4),              -- 0.5000 = 50% cap
     updated_at          timestamptz DEFAULT now(),
@@ -629,6 +680,9 @@ CREATE POLICY "Users read own allocations only"
 | Aave V3 Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` | Primary lending pool |
 | Benqi qiUSDCn | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` | Compound-style lending |
 | Spark spUSDC | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Fixed-rate savings vault |
+| Euler V2 / 9Summits | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Curated ERC-4626 vault |
+| Silo savUSD/USDC | *(coming soon — market 142)* | Isolated lending market |
+| Silo sUSDp/USDC | *(coming soon — market 162)* | Isolated lending market |
 | EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | ERC-4337 standard entry point |
 | SnowMindRegistry | *(deploy with Foundry)* | On-chain account registry + audit logs |
 | Treasury | *(Gnosis Safe multisig)* | Agent fee collection |
@@ -776,7 +830,7 @@ contract SnowMindRegistry {
 | RPC (fallback) | Alchemy Avalanche | Auto-failover on primary failure |
 | RPC (emergency) | Public Avalanche RPC | Last resort |
 | Smart Contracts | Foundry | Deploy + verify |
-| Monitoring | Sentry (errors) + Telegram (alerts) | Scheduler health, paymaster balance |
+| Monitoring | Sentry (errors) + Telegram (alerts) | Scheduler health, paymaster balance, forced exits |
 | On-chain monitoring | Tenderly Sentinels | Large USDC movements from managed accounts |
 | Treasury | Gnosis Safe multisig | Agent fee collection |
 

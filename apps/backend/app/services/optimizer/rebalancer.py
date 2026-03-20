@@ -306,6 +306,50 @@ class Rebalancer:
             },
         )
 
+        # ── 5b. Current-Protocol Health Enforcement ─────────────────
+        # Security-critical: if ANY protocol where we CURRENTLY hold funds
+        # is unhealthy, we MUST force-exit regardless of APY delta.
+        # Flow:
+        #   (1) Check health of protocols with active positions
+        #   (2) If unhealthy → forced exit to best healthy alternative
+        #   (3) If healthy → normal APY-driven rebalance with health gates
+        #
+        # The allocator excludes unhealthy protocols (is_deposit_safe=False)
+        # from the new allocation, so the rebalancer will automatically
+        # withdraw from them. The global_flag ensures soft gates are bypassed.
+        unhealthy_positions: list[str] = []
+        for pid, position_amt in current.items():
+            if position_amt < Decimal("1"):
+                continue
+            hr = health_results.get(pid)
+            if hr is None:
+                # Protocol not in allowed_rates — session key may have changed.
+                # Treat as forced exit: we have funds in a protocol the session
+                # key no longer covers.
+                logger.warning(
+                    "FORCED EXIT: position $%.2f in %s but protocol not in "
+                    "allowed rates — forcing withdrawal",
+                    float(position_amt), pid,
+                )
+                unhealthy_positions.append(pid)
+                continue
+            if not hr.is_deposit_safe or not hr.is_healthy:
+                logger.warning(
+                    "FORCED EXIT: position $%.2f in %s failed health checks: %s",
+                    float(position_amt),
+                    pid,
+                    "; ".join(hr.exclusion_reasons) or "unhealthy",
+                )
+                unhealthy_positions.append(pid)
+
+        if unhealthy_positions:
+            logger.warning(
+                "Current-protocol health enforcement triggered for %s: "
+                "forcing rebalance out of %s",
+                smart_account_address,
+                ", ".join(unhealthy_positions),
+            )
+
         # Determine highest-priority flag across all protocols
         global_flag = RebalanceFlag.NONE
         for hr in health_results.values():
@@ -314,6 +358,12 @@ class Rebalancer:
                 break
             if hr.flag == RebalanceFlag.FORCED_REBALANCE:
                 global_flag = RebalanceFlag.FORCED_REBALANCE
+
+        # Also force rebalance if we detected unhealthy positions above
+        # (covers edge case where health_checker didn't set the flag
+        # because the protocol wasn't in health_results at all)
+        if unhealthy_positions and global_flag == RebalanceFlag.NONE:
+            global_flag = RebalanceFlag.FORCED_REBALANCE
 
         # Log exclusions
         for pid, hr in health_results.items():

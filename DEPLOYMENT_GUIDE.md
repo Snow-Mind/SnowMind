@@ -21,7 +21,7 @@
 
 ## 1. How SnowMind Works (Plain English)
 
-SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3, Benqi, Spark, and Euler V2) to earn the highest safe yield.
+SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3, Benqi, Spark, Euler (9Summits), and Silo) to earn the highest safe yield.
 
 ### The Flow
 
@@ -38,7 +38,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 
 - All healthy protocols are ranked by effective TWAP APY each cycle.
 - Aave V3 and Benqi apply TVL caps (max 15% of protocol TVL).
-- Spark and Euler V2 are ERC-4626 vaults with no system TVL cap and act as overflow when they rank below lending protocols.
+- Spark, Euler (9Summits), and Silo are ERC-4626 vaults with no system TVL cap and act as overflow when they rank below lending protocols.
 - User exposure caps still limit concentration at the account level.
 
 **Example:**
@@ -88,7 +88,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 │  /api/v1/accounts/         → Register, status            │
 │                                                         │
 │  Scheduler: check_and_rebalance every 30 min            │
-│  Rate Fetcher → Aave V3 + Benqi + Spark + Euler rates    │
+│  Rate Fetcher → Aave + Benqi + Spark + Euler + Silo rates │
 │  Rate Validator → TWAP + DefiLlama cross-check          │
 │  Fee Calculator → 10% profit fee on withdrawal          │
 └────────┬──────────────────────┬─────────────────────────┘
@@ -111,7 +111,8 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
                       │  Aave V3 Pool (supply/withdraw)  │
                       │  Benqi qiUSDCn (mint/redeem)     │
                       │  Spark spUSDC (ERC-4626 vault)   │
-                      │  Euler V2 (ERC-4626 vault)       │
+                      │  Euler V2 / 9Summits (ERC-4626)  │
+                      │  Silo (ERC-4626 vaults)          │
                       │  Native USDC (ERC-20)            │
                       │  SnowMindRegistry (logging)      │
                       │  EntryPoint v0.7 (ERC-4337)      │
@@ -153,7 +154,9 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Avalanche C-Chain |
 | **SnowMindRegistry** | `0x849Ca487D5DeD85c93fc3600338a419B100833a8` | Avalanche C-Chain |
 | **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
-| **Euler V2 Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
+| **Euler V2 / 9Summits Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
+| **Silo savUSD/USDC** | *(coming soon — market 142 on app.silo.finance)* | Avalanche C-Chain |
+| **Silo sUSDp/USDC** | *(coming soon — market 162 on app.silo.finance)* | Avalanche C-Chain |
 
 ### Explorer
 
@@ -723,7 +726,8 @@ Before going live, verify each item:
 - [ ] Aave V3 adapter returns valid APY from mainnet
 - [ ] Benqi adapter returns valid APY from mainnet
 - [ ] Spark adapter returns valid APY from mainnet (ERC-4626)
-- [ ] Euler V2 adapter returns valid APY from mainnet (ERC-4626)
+- [ ] Euler V2 (9Summits) adapter returns valid APY from mainnet (ERC-4626)
+- [ ] Silo adapters return valid APY from mainnet (when deployed)
 - [ ] Rate validator cross-checks pass against DefiLlama
 
 ### Security
@@ -784,9 +788,25 @@ Optional but strongly recommended for production security:
 
 - Production chain: Avalanche C-Chain only (`43114`)
 - Active protocols: `aave_v3`, `benqi`, `spark`, `euler_v2`
-- Coming soon: `silo_savusd_usdc` (placeholder in onboarding UI)
+- Coming soon: `silo_savusd_usdc` (savUSD/USDC, market 142), `silo_susdp_usdc` (sUSDp/USDC, market 162) — on [app.silo.finance](https://app.silo.finance)
+- Euler V2 is branded as **Euler (9Summits)** in user-facing UI (the vault is curated by 9Summits on Euler V2 infra)
 - Registry ownership transfer is two-step (`proposeOwnership` then Safe `acceptOwnership`)
 - Fee language and user-facing disclosures should use "agent fee"
-- Euler V2 vault uses ERC-4626 interface (deposit/redeem), same as Spark
-- Session keys grant scoped permissions per-protocol; Euler included in call policies
+- Euler V2 and Silo vaults use ERC-4626 interface (deposit/redeem), same as Spark
+- Session keys grant scoped permissions per-protocol; Euler and Silo included in call policies
 - Platform deposit cap: $50K during guarded beta launch
+
+### Risk Scores (higher = safer, out of 10)
+
+| Protocol | Score | Rationale |
+|----------|-------|-----------|
+| Aave V3 | 10/10 | Battle-tested since 2020, $10B+ TVL globally |
+| Benqi | 9/10 | Established Avalanche-native since 2021 |
+| Spark | 9/10 | MakerDAO-backed governance |
+| Silo | 8/10 | Growing protocol, isolated markets reduce contagion |
+| Euler (9Summits) | 6/10 | Fresh V2 deployment, lower TVL, 9Summits-curated |
+
+### Referral Program Reference
+
+- Sail.money referral program: [docs.sail.money/learn/incentives/referral-program](https://docs.sail.money/learn/incentives/referral-program)
+- Competitor reference for rebalancing tiers by deposit size
