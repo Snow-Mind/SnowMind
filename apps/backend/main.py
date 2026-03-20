@@ -11,7 +11,7 @@ from slowapi import _rate_limit_exceeded_handler
 
 from fastapi import HTTPException
 
-from app.api.routes import accounts, health, optimizer, portfolio, rebalance
+from app.api.routes import accounts, health, optimizer, portfolio, rebalance, withdrawal
 from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.core.limiter import limiter
@@ -224,3 +224,4 @@ app.include_router(accounts.router, prefix=f"{PREFIX}/accounts", tags=["accounts
 app.include_router(portfolio.router, prefix=f"{PREFIX}/portfolio", tags=["portfolio"])
 app.include_router(optimizer.router, prefix=f"{PREFIX}/optimizer", tags=["optimizer"])
 app.include_router(rebalance.router, prefix=f"{PREFIX}/rebalance", tags=["rebalance"])
+app.include_router(withdrawal.router, prefix=f"{PREFIX}/withdrawal", tags=["withdrawal"])

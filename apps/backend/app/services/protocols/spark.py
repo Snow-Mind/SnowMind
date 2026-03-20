@@ -274,7 +274,7 @@ class SparkAdapter(BaseProtocolAdapter):
             logger.warning("Failed to read Spark vault state: %s", exc)
             details["vault_error"] = str(exc)
             # Conservative: if we can't even read the vault, mark as degraded
-            status = ProtocolStatus.DEGRADED
+            status = ProtocolStatus.EMERGENCY
             is_deposit_safe = False
 
         # Check 2: PSM3 liquidity — is the underlying PSM pool healthy?

@@ -119,19 +119,10 @@ async def _get_account(db: Client, address: str) -> dict:
     result = (
         db.table("accounts")
         .select("*")
-        .eq("smart_account", address)
+        .eq("address", address)
         .limit(1)
         .execute()
     )
-    if not result.data:
-        # Try legacy 'address' column
-        result = (
-            db.table("accounts")
-            .select("*")
-            .eq("address", address)
-            .limit(1)
-            .execute()
-        )
     if not result.data:
         raise HTTPException(status_code=404, detail="Account not found")
     return result.data[0]
@@ -260,6 +251,13 @@ async def execute_withdrawal(
     settings = get_settings()
     address = validate_eth_address(req.smart_account_address)
     account = await _get_account(db, address)
+
+    # ── Treasury address guard ──────────────────────────────────────────
+    if not settings.TREASURY_ADDRESS or settings.TREASURY_ADDRESS == "0x" + "0" * 40:
+        raise HTTPException(
+            status_code=500,
+            detail="Treasury address not configured — withdrawals disabled",
+        )
 
     # ── Concurrent withdrawal lock ──────────────────────────────────────
     # Prevent double-submit: one in-flight withdrawal per account at a time.
