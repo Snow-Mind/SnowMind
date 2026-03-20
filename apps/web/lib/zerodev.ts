@@ -324,17 +324,6 @@ export async function grantAndSerializeSessionKey(
           null,
         ],
       },
-      // Spark USDC approve
-      {
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.SPARK_VAULT },
-          null,
-        ],
-      },
 
       // AAVE V3 — supply (USDC only, amount capped)
       {

@@ -1,4 +1,4 @@
-"""Protocol adapter registry — Mainnet beta: Aave V3, Benqi, Spark only."""
+"""Protocol adapter registry — Mainnet: Aave V3, Benqi, Spark, Euler V2."""
 
 import logging
 

@@ -21,7 +21,7 @@
 
 ## 1. How SnowMind Works (Plain English)
 
-SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3, Benqi, and Spark) to earn the highest safe yield.
+SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3, Benqi, Spark, and Euler V2) to earn the highest safe yield.
 
 ### The Flow
 
@@ -38,7 +38,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 
 - All healthy protocols are ranked by effective TWAP APY each cycle.
 - Aave V3 and Benqi apply TVL caps (max 15% of protocol TVL).
-- Spark has no system TVL cap and acts as overflow when it ranks below lending protocols.
+- Spark and Euler V2 are ERC-4626 vaults with no system TVL cap and act as overflow when they rank below lending protocols.
 - User exposure caps still limit concentration at the account level.
 
 **Example:**
@@ -88,7 +88,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 │  /api/v1/accounts/         → Register, status            │
 │                                                         │
 │  Scheduler: check_and_rebalance every 30 min            │
-│  Rate Fetcher → Aave V3 + Benqi on-chain rates          │
+│  Rate Fetcher → Aave V3 + Benqi + Spark + Euler rates    │
 │  Rate Validator → TWAP + DefiLlama cross-check          │
 │  Fee Calculator → 10% profit fee on withdrawal          │
 └────────┬──────────────────────┬─────────────────────────┘
@@ -110,6 +110,8 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
                       │                                  │
                       │  Aave V3 Pool (supply/withdraw)  │
                       │  Benqi qiUSDCn (mint/redeem)     │
+                      │  Spark spUSDC (ERC-4626 vault)   │
+                      │  Euler V2 (ERC-4626 vault)       │
                       │  Native USDC (ERC-20)            │
                       │  SnowMindRegistry (logging)      │
                       │  EntryPoint v0.7 (ERC-4337)      │
@@ -151,6 +153,7 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Avalanche C-Chain |
 | **SnowMindRegistry** | `0x849Ca487D5DeD85c93fc3600338a419B100833a8` | Avalanche C-Chain |
 | **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
+| **Euler V2 Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
 
 ### Explorer
 
@@ -188,6 +191,7 @@ REGISTRY_CONTRACT_ADDRESS=0x_YOUR_DEPLOYED_REGISTRY_ADDRESS
 AAVE_V3_POOL=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 BENQI_QIUSDC=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
 SPARK_SPUSDC=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
+EULER_VAULT=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
 USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 ENTRYPOINT_V07=0x0000000071727De22E5E9d8BAf0edAc6f37da032
 
@@ -267,7 +271,9 @@ NEXT_PUBLIC_REGISTRY_ADDRESS=0x_YOUR_DEPLOYED_REGISTRY_ADDRESS
 NEXT_PUBLIC_AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 NEXT_PUBLIC_BENQI_POOL_ADDRESS=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
 NEXT_PUBLIC_SPARK_VAULT_ADDRESS=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
+NEXT_PUBLIC_EULER_VAULT_ADDRESS=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
 NEXT_PUBLIC_TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
+NEXT_PUBLIC_PIMLICO_API_KEY=your_pimlico_api_key
 ```
 
 **Important**: `NEXT_PUBLIC_CHAIN_ID` must be set to `43114` in production.
@@ -279,6 +285,7 @@ PIMLICO_API_KEY=your_pimlico_api_key
 ZERODEV_PROJECT_ID=your_zerodev_project_id
 AVALANCHE_CHAIN_ID=43114
 INTERNAL_SERVICE_KEY=your_shared_secret_matching_backend
+INTERNAL_REQUEST_TTL_SECONDS=300
 ```
 
 ---
@@ -369,7 +376,7 @@ CREATE TABLE IF NOT EXISTS protocol_health (
   updated_at        TIMESTAMPTZ DEFAULT now()
 );
 
-INSERT INTO protocol_health (protocol_id) VALUES ('aave_v3'), ('benqi')
+INSERT INTO protocol_health (protocol_id) VALUES ('aave_v3'), ('benqi'), ('spark'), ('euler_v2')
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS session_key_audit (
@@ -652,8 +659,10 @@ AVALANCHE_RPC_URL=https://api.avax.network/ext/bc/C/rpc \
 
 1. **Aave V3**: `getReserveData()` returns a valid APY (0-25%) and TVL > $1M for USDC
 2. **Benqi**: `supplyRatePerTimestamp()` returns a valid APY and `exchangeRateCurrent()` > 0
-3. **Cross-protocol**: Both adapters return rates simultaneously via `RateFetcher`
-4. **Waterfall allocator**: Produces valid allocations using real mainnet APY data
+3. **Spark**: ERC-4626 `totalAssets()` / `convertToAssets()` return valid share ratios
+4. **Euler V2**: ERC-4626 vault `totalAssets()` and rate fetch return valid APY
+5. **Cross-protocol**: All adapters return rates simultaneously via `RateFetcher`
+6. **Waterfall allocator**: Produces valid allocations using real mainnet APY data
 
 ### Expected output:
 
@@ -695,6 +704,8 @@ Before going live, verify each item:
 - [ ] Fork tests pass (`pytest tests/fork/test_mainnet_adapters.py`)
 - [ ] Aave V3 adapter returns valid APY from mainnet
 - [ ] Benqi adapter returns valid APY from mainnet
+- [ ] Spark adapter returns valid APY from mainnet (ERC-4626)
+- [ ] Euler V2 adapter returns valid APY from mainnet (ERC-4626)
 - [ ] Rate validator cross-checks pass against DefiLlama
 
 ### Security
@@ -726,7 +737,9 @@ All variables below must be set and non-empty before launch.
 - [ ] Frontend: `NEXT_PUBLIC_CHAIN_ID=43114`
 - [ ] Frontend: `NEXT_PUBLIC_REGISTRY_ADDRESS`
 - [ ] Frontend: `NEXT_PUBLIC_TREASURY_ADDRESS`
+- [ ] Frontend: `NEXT_PUBLIC_PIMLICO_API_KEY`
 - [ ] Execution Service: `INTERNAL_SERVICE_KEY` (must exactly match backend)
+- [ ] Execution Service: `INTERNAL_REQUEST_TTL_SECONDS`
 
 Optional but strongly recommended for production security:
 
@@ -752,6 +765,10 @@ Optional but strongly recommended for production security:
 ## Mainnet Readiness Notes
 
 - Production chain: Avalanche C-Chain only (`43114`)
-- Active protocols: `aave_v3`, `benqi`, `spark`
+- Active protocols: `aave_v3`, `benqi`, `spark`, `euler_v2`
+- Coming soon: `silo_savusd_usdc` (placeholder in onboarding UI)
 - Registry ownership transfer is two-step (`proposeOwnership` then Safe `acceptOwnership`)
 - Fee language and user-facing disclosures should use "agent fee"
+- Euler V2 vault uses ERC-4626 interface (deposit/redeem), same as Spark
+- Session keys grant scoped permissions per-protocol; Euler included in call policies
+- Platform deposit cap: $50K during guarded beta launch

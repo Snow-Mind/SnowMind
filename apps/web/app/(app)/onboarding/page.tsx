@@ -763,8 +763,9 @@ export default function OnboardingPage() {
               {/* Protocol table */}
               <div className="overflow-hidden rounded-lg border border-[#E8E2DA]">
                 {/* Table header */}
-                <div className="grid grid-cols-[1fr_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
+                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-14">Risk</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-right w-20">TVL</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-12">Active</span>
                 </div>
@@ -779,7 +780,7 @@ export default function OnboardingPage() {
                     <div
                       key={protocol.id}
                       className={cn(
-                        "grid grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
+                        "grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected
@@ -822,6 +823,22 @@ export default function OnboardingPage() {
                             {protocol.id === "silo_savusd_usdc" ? "sUSDp/USDC" : `${protocol.shortName} · USDC`}
                           </p>
                         </div>
+                      </div>
+
+                      {/* Risk Score */}
+                      <div className="flex justify-center w-14">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                            protocol.riskScore <= 2.5
+                              ? "bg-[#059669]/10 text-[#059669]"
+                              : protocol.riskScore <= 4.0
+                                ? "bg-[#D97706]/10 text-[#D97706]"
+                                : "bg-[#DC2626]/10 text-[#DC2626]",
+                          )}
+                        >
+                          {protocol.riskScore.toFixed(1)}
+                        </span>
                       </div>
 
                       {/* TVL */}

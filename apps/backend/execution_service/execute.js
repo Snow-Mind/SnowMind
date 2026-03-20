@@ -49,7 +49,7 @@ const BENQI_ABI = [
     outputs: [{ name: "", type: "uint256" }] },
 ]
 
-// ERC-4626 vault ABI — used by Spark vault
+// ERC-4626 vault ABI — used by Spark and Euler vaults
 const ERC4626_ABI = [
   { name: "deposit", type: "function", stateMutability: "nonpayable",
     inputs: [
@@ -66,6 +66,7 @@ const ERC4626_ABI = [
     outputs: [{ name: "assets", type: "uint256" }] },
 ]
 
+// ERC-20 ABI — shared by USDC approve/transfer across all protocols
 const ERC20_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable",
     inputs: [
