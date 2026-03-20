@@ -13,6 +13,12 @@ from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.services.optimizer.rebalancer import Rebalancer
 from app.services.optimizer.rate_fetcher import RateFetcher
+from app.services.monitoring import (
+    check_paymaster_balance,
+    scheduler_watchdog,
+    send_telegram_alert,
+    send_sentry_alert,
+)
 
 logger = logging.getLogger("snowmind")
 
@@ -117,6 +123,13 @@ class SnowMindScheduler:
     async def _run_with_lock(self) -> None:
         if not self._active.is_set():
             return
+
+        # Watchdog check — fires even if we don't acquire lock
+        try:
+            await scheduler_watchdog.check()
+        except Exception as exc:
+            logger.error("Watchdog check error: %s", exc)
+
         if not await self._acquire_lock():
             logger.debug("Lock held by another instance, skipping")
             return
@@ -127,6 +140,15 @@ class SnowMindScheduler:
 
     async def _run_all_accounts(self) -> None:
         self.last_run = datetime.now(timezone.utc)
+
+        # ── Paymaster balance check ──────────────────────────────────
+        try:
+            from decimal import Decimal
+            balance = await check_paymaster_balance()
+            if balance == Decimal("-1"):
+                logger.warning("Paymaster balance check inconclusive — proceeding")
+        except Exception as exc:
+            logger.error("Paymaster balance check error: %s", exc)
 
         accounts = (
             self.db.table("accounts")
@@ -162,6 +184,9 @@ class SnowMindScheduler:
         }
         self.last_run_stats = stats
         logger.info("Scheduler tick done — %s", stats)
+
+        # ── Record healthy tick for watchdog ─────────────────────────
+        scheduler_watchdog.record_tick()
 
     # ── Retry logic ──────────────────────────────────────────────────────────
 

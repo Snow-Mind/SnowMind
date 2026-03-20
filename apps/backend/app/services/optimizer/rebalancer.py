@@ -24,9 +24,14 @@ from app.services.optimizer.allocator import (
     compute_allocation,
     compute_weighted_apy as compute_alloc_weighted_apy,
 )
-from app.services.optimizer.health_checker import HealthCheckResult, RebalanceFlag
-from app.services.optimizer.rate_fetcher import RateFetcher
+from app.services.optimizer.health_checker import (
+    HealthCheckResult,
+    RebalanceFlag,
+    run_all_health_checks,
+)
+from app.services.optimizer.rate_fetcher import RateFetcher, circuit_breaker
 from app.services.optimizer.rate_validator import RateValidator
+from app.services.protocols import ALL_ADAPTERS
 from app.services.fee_calculator import record_deposit, record_partial_withdrawal
 from app.services.protocols import get_adapter
 from app.services.protocols.base import get_shared_async_web3
@@ -213,19 +218,111 @@ class Rebalancer:
             # Record the deposit for fee tracking (initial deployment)
             record_deposit(db, account_id, idle_usdc)
 
-        # 5. APY-ranked allocation: no base layer, no move cap truncation
-        health_results = {
-            pid: HealthCheckResult(
-                protocol_id=pid,
-                is_healthy=True,
-                is_deposit_safe=True,
-                is_withdrawal_safe=True,
-                flag=RebalanceFlag.NONE,
-            )
-            for pid in allowed_rates
-        }
+        # 5. Run real health checks for all allowed protocols
+        protocol_healths = {}
+        for pid in allowed_rates:
+            try:
+                adapter = ALL_ADAPTERS.get(pid)
+                if adapter:
+                    protocol_healths[pid] = await adapter.get_health()
+                else:
+                    from app.services.protocols.base import ProtocolHealth, ProtocolStatus
+                    protocol_healths[pid] = ProtocolHealth(
+                        protocol_id=pid,
+                        status=ProtocolStatus.HEALTHY,
+                        is_deposit_safe=True,
+                        is_withdrawal_safe=True,
+                    )
+            except Exception as exc:
+                logger.warning("Health check failed for %s: %s", pid, exc)
+                from app.services.protocols.base import ProtocolHealth, ProtocolStatus
+                protocol_healths[pid] = ProtocolHealth(
+                    protocol_id=pid,
+                    status=ProtocolStatus.HEALTHY,
+                    is_deposit_safe=True,
+                    is_withdrawal_safe=True,
+                )
+
         apy_by_protocol = {pid: rate.apy for pid, rate in allowed_rates.items()}
         tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in allowed_rates.items()}
+
+        # Gather historical APY data for health checks
+        previous_apys: dict[str, Decimal | None] = {}
+        yesterday_avg_apys: dict[str, Decimal | None] = {}
+        daily_snapshots_7d: dict[str, list[Decimal] | None] = {}
+        for pid in allowed_rates:
+            previous_apys[pid] = None
+            yesterday_avg_apys[pid] = None
+            daily_snapshots_7d[pid] = None
+
+        # Load yesterday's avg APY and 7-day snapshots from DB
+        try:
+            from datetime import date
+            today = datetime.now(timezone.utc).date()
+            week_ago = (today - timedelta(days=7)).isoformat()
+            yesterday = (today - timedelta(days=1)).isoformat()
+
+            snap_result = (
+                db.table("daily_apy_snapshots")
+                .select("protocol_id, date, apy")
+                .gte("date", week_ago)
+                .execute()
+            )
+            if snap_result.data:
+                from collections import defaultdict
+                by_proto: dict[str, list[tuple[str, Decimal]]] = defaultdict(list)
+                for row in snap_result.data:
+                    by_proto[row["protocol_id"]].append(
+                        (row["date"], Decimal(str(row["apy"])))
+                    )
+                for pid, entries in by_proto.items():
+                    if pid in allowed_rates:
+                        daily_snapshots_7d[pid] = [apy for _, apy in entries]
+                        yesterday_entries = [apy for d, apy in entries if d == yesterday]
+                        if yesterday_entries:
+                            yesterday_avg_apys[pid] = yesterday_entries[0]
+        except Exception as exc:
+            logger.warning("Failed to load APY history for health checks: %s", exc)
+
+        # Load previous APY from TWAP buffer for velocity check
+        from app.services.optimizer.rate_fetcher import twap_buffer
+        for pid in allowed_rates:
+            latest = twap_buffer.get_latest(pid)
+            if latest:
+                previous_apys[pid] = latest.apy
+
+        health_results = await run_all_health_checks(
+            health_results=protocol_healths,
+            current_apys=apy_by_protocol,
+            twap_apys=apy_by_protocol,
+            previous_apys=previous_apys,
+            yesterday_avg_apys=yesterday_avg_apys,
+            daily_snapshots_7d=daily_snapshots_7d,
+            current_positions=current,
+            protocol_tvls=tvl_by_protocol,
+            circuit_breaker_failures={
+                pid: circuit_breaker.get_failure_count(pid)
+                for pid in allowed_rates
+            },
+        )
+
+        # Determine highest-priority flag across all protocols
+        global_flag = RebalanceFlag.NONE
+        for hr in health_results.values():
+            if hr.flag == RebalanceFlag.EMERGENCY_EXIT:
+                global_flag = RebalanceFlag.EMERGENCY_EXIT
+                break
+            if hr.flag == RebalanceFlag.FORCED_REBALANCE:
+                global_flag = RebalanceFlag.FORCED_REBALANCE
+
+        # Log exclusions
+        for pid, hr in health_results.items():
+            if hr.exclusion_reasons:
+                logger.warning(
+                    "Health check exclusions for %s: %s",
+                    pid,
+                    "; ".join(hr.exclusion_reasons),
+                )
 
         allocation_result = compute_allocation(
             health_results=health_results,
@@ -248,8 +345,8 @@ class Rebalancer:
         )
         apy_improvement = new_weighted_apy - current_weighted_apy
 
-        # 6. Beat-margin gate
-        if apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
+        # 6. Beat-margin gate (bypassed by FORCED/EMERGENCY flags)
+        if global_flag == RebalanceFlag.NONE and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
             return await self._log(
                 db, account_id, "skipped",
                 reason="APY improvement below beat margin",
@@ -266,7 +363,7 @@ class Rebalancer:
             .limit(1)
             .execute()
         )
-        if last.data:
+        if last.data and global_flag == RebalanceFlag.NONE:
             last_ts = datetime.fromisoformat(last.data[0]["created_at"])
             min_gap = timedelta(hours=self.settings.MIN_REBALANCE_INTERVAL_HOURS)
             if datetime.now(timezone.utc) - last_ts < min_gap:
@@ -276,13 +373,13 @@ class Rebalancer:
                     proposed=result_allocations,
                 )
 
-        # 8. Delta check — skip if total movement is below $1
+        # 8. Delta check — skip if total movement is below $1 (bypassed by FORCED/EMERGENCY)
         all_protocols = set(current.keys()) | set(result_allocations.keys())
         total_movement = sum(
             abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
             for pid in all_protocols
         ) / Decimal("2")
-        if total_movement < Decimal("1"):
+        if global_flag == RebalanceFlag.NONE and total_movement < Decimal("1"):
             return await self._log(
                 db,
                 account_id,
@@ -290,6 +387,19 @@ class Rebalancer:
                 reason="Total movement below $1",
                 proposed=result_allocations,
             )
+
+        # 8b. Profitability gate — skip if daily gain does not cover gas + fees
+        if global_flag == RebalanceFlag.NONE and total_usd > 0:
+            daily_gain = apy_improvement * total_usd / Decimal("365")
+            gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
+            if daily_gain < gas_cost:
+                return await self._log(
+                    db,
+                    account_id,
+                    "skipped",
+                    reason=f"Profitability gate: daily gain ${float(daily_gain):.4f} < gas ${float(gas_cost):.4f}",
+                    proposed=result_allocations,
+                )
 
         # 9. Execute
         try:
