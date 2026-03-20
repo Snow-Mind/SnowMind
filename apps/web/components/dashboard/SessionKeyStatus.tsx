@@ -39,7 +39,7 @@ function getAuthorizedActions(): AuthorizedAction[] {
   for (const pid of ACTIVE_PROTOCOLS) {
     const meta = PROTOCOL_CONFIG[pid];
     const sels = SESSION_KEY_SELECTORS[pid];
-    for (const [name, selector] of Object.entries(sels)) {
+    for (const [name, selector] of Object.entries(sels as Record<string, string>)) {
       actions.push({
         protocol: meta.shortName,
         action: name,

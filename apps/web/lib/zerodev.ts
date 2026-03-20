@@ -181,13 +181,14 @@ export async function createSmartAccount(walletClient: WalletClientLike) {
 
 export async function approveAllProtocols(
   kernelClient: KernelClientLike,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}` }
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}` }
 ): Promise<{ txHash: string; explorerUrl: string }> {
 
   const approvalCalls = [
     contracts.AAVE_POOL,
     contracts.BENQI_POOL,
     contracts.SPARK_VAULT,
+    contracts.EULER_VAULT,
   ]
     .filter(addr => addr !== '0x0000000000000000000000000000000000000000')
     .map(spender => ({
@@ -217,6 +218,7 @@ export async function grantAndSerializeSessionKey(
     AAVE_POOL:    `0x${string}`
     BENQI_POOL:   `0x${string}`
     SPARK_VAULT:  `0x${string}`
+    EULER_VAULT:  `0x${string}`
     USDC:         `0x${string}`
     TREASURY:     `0x${string}`
   },
@@ -311,6 +313,17 @@ export async function grantAndSerializeSessionKey(
           null,
         ],
       },
+      // Euler USDC approve
+      {
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.EULER_VAULT },
+          null,
+        ],
+      },
       // Spark USDC approve
       {
         target: contracts.USDC,
@@ -385,6 +398,27 @@ export async function grantAndSerializeSessionKey(
       // SPARK — redeem (ERC-4626)
       {
         target: contracts.SPARK_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [null, null, null],
+      },
+
+      // EULER (9Summits) — deposit (ERC-4626)
+      {
+        target: contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,
+        ],
+      },
+
+      // EULER (9Summits) — redeem (ERC-4626)
+      {
+        target: contracts.EULER_VAULT,
         valueLimit: 0n,
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
@@ -491,9 +525,10 @@ export async function deployInitialToProtocol(
     AAVE_POOL: `0x${string}`
     BENQI_POOL: `0x${string}`
     SPARK_VAULT: `0x${string}`
+    EULER_VAULT: `0x${string}`
     USDC: `0x${string}`
   },
-  protocolId: "aave_v3" | "benqi" | "spark",
+  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2",
   amountUsdc: number,
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const amount = parseUnits(amountUsdc.toFixed(6), 6)
@@ -504,7 +539,8 @@ export async function deployInitialToProtocol(
   const spender =
     protocolId === "aave_v3" ? contracts.AAVE_POOL
       : protocolId === "benqi" ? contracts.BENQI_POOL
-      : contracts.SPARK_VAULT
+      : protocolId === "spark" ? contracts.SPARK_VAULT
+      : contracts.EULER_VAULT
 
   calls.push({
     to: contracts.USDC,
@@ -536,9 +572,19 @@ export async function deployInitialToProtocol(
         args: [amount],
       }),
     })
-  } else {
+  } else if (protocolId === "spark") {
     calls.push({
       to: contracts.SPARK_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else {
+    calls.push({
+      to: contracts.EULER_VAULT,
       value: 0n,
       data: encodeFunctionData({
         abi: ERC4626_VAULT_ABI,

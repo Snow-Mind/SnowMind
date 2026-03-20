@@ -62,6 +62,8 @@ class Rebalancer:
         }
         if self.settings.SPARK_SPUSDC:
             self._protocol_addresses["spark"] = self.settings.SPARK_SPUSDC
+        if self.settings.EULER_VAULT:
+            self._protocol_addresses["euler_v2"] = self.settings.EULER_VAULT
 
     async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
         """Read the on-chain USDC balance sitting idle in the smart account."""

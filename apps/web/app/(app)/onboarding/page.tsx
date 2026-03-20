@@ -8,6 +8,7 @@ import {
   Copy,
   ExternalLink,
   Loader2,
+  MessageCircle,
   Wallet,
   Zap,
   Shield,
@@ -126,13 +127,23 @@ type FormStep = "account" | "strategy" | "deposit" | "activate";
 const ALLOCATION_THRESHOLD_USDC = 10_000;
 
 function normalizeProtocolId(protocolId: string): ProtocolId | null {
-  if (protocolId === "aave_v3") return "aave";
+  if (protocolId === "aave") return "aave_v3";
   if (ACTIVE_PROTOCOLS.includes(protocolId as ProtocolId)) return protocolId as ProtocolId;
   return null;
 }
 
-// All protocols available for user selection
-const ALL_PROTOCOLS = Object.values(PROTOCOL_CONFIG);
+// Ordered markets shown in onboarding strategy step.
+const MARKET_PROTOCOL_IDS: ProtocolId[] = [
+  "aave_v3",
+  "benqi",
+  "euler_v2",
+  "spark",
+  "silo_savusd_usdc",
+];
+
+const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
+  .map((id) => PROTOCOL_CONFIG[id])
+  .filter(Boolean);
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -159,7 +170,7 @@ export default function OnboardingPage() {
 
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
-    () => new Set(ALL_PROTOCOLS.map((p) => p.id)),
+    () => new Set(MARKET_PROTOCOLS.filter((p) => p.isActive).map((p) => p.id)),
   );
   const [allocationCaps, setAllocationCaps] = useState<Record<ActiveProtocolId, number>>({
     aave: 50,
@@ -171,7 +182,8 @@ export default function OnboardingPage() {
   const [diversificationPref, setDiversificationPref] =
     useState<DiversificationPreference>("balanced");
 
-  const toggleProtocol = (id: string) => {
+  const toggleProtocol = (id: string, isEnabled: boolean) => {
+    if (!isEnabled) return;
     setSelectedProtocols((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -257,12 +269,44 @@ export default function OnboardingPage() {
       ? Math.max(0, (topProtocolApy - projectedCustomApy) * parsedAmount)
       : 0;
 
+  const selectedMarketNames = MARKET_PROTOCOLS
+    .filter((p) => selectedProtocols.has(p.id))
+    .map((p) => p.name);
+
+  const assistantHeadline =
+    diversificationPref === "max_yield"
+      ? "Go concentrated on top APY"
+      : diversificationPref === "balanced"
+        ? "Blend APY with resiliency"
+        : "Diversify across multiple markets";
+
+  const assistantSuggestion = (() => {
+    if (!selectedMarketNames.length) {
+      return "Select at least one active market to continue.";
+    }
+    if (diversificationPref === "max_yield") {
+      return topProtocolByApy
+        ? `Recommended: prioritize ${PROTOCOL_CONFIG[topProtocolByApy].name} for this cycle based on current APY.`
+        : "Recommended: choose the single market with the strongest live APY.";
+    }
+    if (diversificationPref === "balanced") {
+      return `Recommended: keep 2-3 markets active (${selectedMarketNames.slice(0, 3).join(", ")}) to reduce single-market risk.`;
+    }
+    return `Recommended: keep all high-quality markets active and let caps reduce concentration. Current: ${selectedMarketNames.join(", ")}.`;
+  })();
+
+  const assistantRiskNote =
+    selectedProtocols.has("euler_v2")
+      ? "Euler (9Summits) can show elevated APY during high utilization. SnowMind still applies utilization and health gates."
+      : "Enable Euler (9Summits) if you want a higher-volatility APY option in your allowed market set.";
+
   const sliderCaps: Record<ProtocolId, number> = {
     aave: allocationCaps.aave,
     benqi: allocationCaps.benqi,
     spark: allocationCaps.spark,
     aave_v3: allocationCaps.aave,
     euler_v2: 0,
+    silo_savusd_usdc: 0,
   };
 
   // Poll USDC balance of user's EOA wallet
@@ -312,7 +356,7 @@ export default function OnboardingPage() {
 
     const effectiveSelectedProtocols =
       !needsAllocationStep && topProtocolByApy
-        ? new Set<string>([topProtocolByApy, topProtocolByApy === "aave" ? "aave_v3" : topProtocolByApy])
+        ? new Set<string>([topProtocolByApy])
         : selectedProtocols;
 
     const amountWei = parseUnits(parsedAmount.toFixed(6), 6);
@@ -390,6 +434,7 @@ export default function OnboardingPage() {
         AAVE_POOL: CONTRACTS.AAVE_POOL,
         BENQI_POOL: CONTRACTS.BENQI_POOL,
         SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+        EULER_VAULT: CONTRACTS.EULER_VAULT,
       });
       toast.success("Smart account deployed on-chain!");
 
@@ -403,13 +448,13 @@ export default function OnboardingPage() {
           return effectiveSelectedProtocols.has(r.protocolId) || effectiveSelectedProtocols.has(normalizedProtocolId);
         })
         .filter((r) => r.isActive && !r.isComingSoon)
-        .filter((r) => ["aave_v3", "benqi", "spark"].includes(r.protocolId))
+        .filter((r) => ["aave_v3", "benqi", "spark", "euler_v2"].includes(r.protocolId))
         .sort((a, b) => b.currentApy - a.currentApy)
-        .map((r) => r.protocolId as "aave_v3" | "benqi" | "spark");
+        .map((r) => r.protocolId as "aave_v3" | "benqi" | "spark" | "euler_v2");
 
       const deploymentCandidates =
         !needsAllocationStep && topProtocolByApy
-          ? [topProtocolByApy === "aave" ? "aave_v3" : topProtocolByApy] as ("aave_v3" | "benqi" | "spark")[]
+          ? [topProtocolByApy] as ("aave_v3" | "benqi" | "spark" | "euler_v2")[]
           : candidateProtocols;
 
       if (!deploymentCandidates.length) {
@@ -427,6 +472,7 @@ export default function OnboardingPage() {
               AAVE_POOL: CONTRACTS.AAVE_POOL,
               BENQI_POOL: CONTRACTS.BENQI_POOL,
               SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+              EULER_VAULT: CONTRACTS.EULER_VAULT,
               USDC: CONTRACTS.USDC,
             },
             protocolId,
@@ -453,6 +499,7 @@ export default function OnboardingPage() {
           AAVE_POOL: CONTRACTS.AAVE_POOL,
           BENQI_POOL: CONTRACTS.BENQI_POOL,
           SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+          EULER_VAULT: CONTRACTS.EULER_VAULT,
           USDC: CONTRACTS.USDC,
           TREASURY: CONTRACTS.TREASURY,
         },
@@ -723,21 +770,23 @@ export default function OnboardingPage() {
                 </div>
 
                 {/* Protocol rows */}
-                {ALL_PROTOCOLS.map((protocol, idx) => {
+                {MARKET_PROTOCOLS.map((protocol, idx) => {
                   const isSelected = selectedProtocols.has(protocol.id);
                   const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
                   const tvl = rateData?.tvlUsd;
+                  const isEnabled = protocol.isActive;
                   return (
                     <div
                       key={protocol.id}
                       className={cn(
                         "grid grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
                         idx > 0 && "border-t border-[#E8E2DA]",
+                        !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected
                           ? "bg-[#E84142]/[0.03]"
                           : "bg-white opacity-60",
                       )}
-                      onClick={() => toggleProtocol(protocol.id)}
+                      onClick={() => toggleProtocol(protocol.id, isEnabled)}
                     >
                       {/* Protocol info */}
                       <div className="flex items-center gap-3 min-w-0">
@@ -751,6 +800,11 @@ export default function OnboardingPage() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
                             <p className="text-sm font-medium text-[#1A1715] truncate">{protocol.name}</p>
+                            {!isEnabled && (
+                              <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
+                                Soon
+                              </span>
+                            )}
                             {protocol.vaultUrl && (
                               <a
                                 href={protocol.vaultUrl}
@@ -764,7 +818,9 @@ export default function OnboardingPage() {
                               </a>
                             )}
                           </div>
-                          <p className="text-[10px] text-[#8A837C] truncate">{protocol.shortName} · USDC</p>
+                          <p className="text-[10px] text-[#8A837C] truncate">
+                            {protocol.id === "silo_savusd_usdc" ? "sUSDp/USDC" : `${protocol.shortName} · USDC`}
+                          </p>
                         </div>
                       </div>
 
@@ -778,11 +834,13 @@ export default function OnboardingPage() {
                       {/* Toggle */}
                       <div className="flex justify-center w-12">
                         <button
-                          onClick={(e) => { e.stopPropagation(); toggleProtocol(protocol.id); }}
+                          onClick={(e) => { e.stopPropagation(); toggleProtocol(protocol.id, isEnabled); }}
                           className={cn(
                             "flex h-5 w-9 items-center rounded-full p-0.5 transition-colors shrink-0",
+                            !isEnabled && "opacity-40",
                             isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
                           )}
+                          disabled={!isEnabled}
                         >
                           <div
                             className={cn(
@@ -831,6 +889,19 @@ export default function OnboardingPage() {
                       </div>
                     </button>
                   ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-[#E8E2DA] bg-[#F5F0EB] p-3">
+                <div className="flex items-start gap-2">
+                  <div className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#E84142]/10">
+                    <MessageCircle className="h-3.5 w-3.5 text-[#E84142]" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-[#1A1715]">Market Assistant: {assistantHeadline}</p>
+                    <p className="text-[11px] text-[#5C5550]">{assistantSuggestion}</p>
+                    <p className="text-[11px] text-[#8A837C]">{assistantRiskNote}</p>
+                  </div>
                 </div>
               </div>
 

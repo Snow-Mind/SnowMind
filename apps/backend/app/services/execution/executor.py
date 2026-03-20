@@ -78,6 +78,7 @@ class ExecutionService:
                 "AAVE_POOL": settings.AAVE_V3_POOL,
                 "BENQI_POOL": settings.BENQI_QIUSDC,
                 "SPARK_VAULT": settings.SPARK_SPUSDC,
+                "EULER_VAULT": settings.EULER_VAULT,
                 "USDC": settings.USDC_ADDRESS,
                 "REGISTRY": settings.REGISTRY_CONTRACT_ADDRESS,
             },

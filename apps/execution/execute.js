@@ -223,6 +223,7 @@ function resolveContractKey(protocol, contracts) {
     aave: "AAVE_POOL",
     benqi: "BENQI_POOL",
     spark: "SPARK_VAULT",
+    euler_v2: "EULER_VAULT",
   }
   return contracts[map[protocol]] || null
 }
@@ -293,6 +294,17 @@ export async function executeRebalance({
       const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
       calls.push({
         to: contracts.SPARK_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "redeem",
+          args: [shares, smartAccountAddress, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
+      calls.push({
+        to: contracts.EULER_VAULT,
         value: 0n,
         data: encodeFunctionData({
           abi: ERC4626_ABI,
@@ -392,6 +404,16 @@ export async function executeRebalance({
           args: [amount, smartAccountAddress],
         }),
       })
+    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      calls.push({
+        to: contracts.EULER_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
     }
   }
 
@@ -475,6 +497,23 @@ export async function executeWithdrawal({
         abi: ERC4626_ABI,
         functionName: "redeem",
         args: [sparkShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    })
+  }
+
+  const eulerShareBalance = BigInt(balances?.eulerShareBalance || "0")
+  if (
+    contracts.EULER_VAULT &&
+    contracts.EULER_VAULT !== "0x0000000000000000000000000000000000000000" &&
+    eulerShareBalance > 0n
+  ) {
+    calls.push({
+      to: contracts.EULER_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI,
+        functionName: "redeem",
+        args: [eulerShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     })
   }

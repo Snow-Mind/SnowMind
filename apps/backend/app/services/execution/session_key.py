@@ -202,7 +202,7 @@ def store_session_key(
                 "is_active": True,
                 "allowed_protocols": session_key_data.get("allowed_protocols")
                     or session_key_data.get("allowedProtocols")
-                    or ["aave", "benqi", "spark"],
+                    or ["aave_v3", "benqi", "spark", "euler_v2"],
                 "max_amount_per_tx": session_key_data.get("max_amount_per_tx", "0"),
             }
         )
@@ -248,7 +248,7 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
     allowed_protocols = (
         [str(p) for p in raw_allowed]
         if isinstance(raw_allowed, list) and raw_allowed
-        else ["aave", "benqi", "spark"]
+        else ["aave_v3", "benqi", "spark", "euler_v2"]
     )
 
     return {

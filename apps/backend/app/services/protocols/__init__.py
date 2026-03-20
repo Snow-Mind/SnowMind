@@ -29,6 +29,12 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
     except Exception as exc:
         logger.warning("SparkAdapter not loaded (SPARK_SPUSDC missing?): %s", exc)
 
+    try:
+        from .euler_v2 import EulerV2Adapter
+        adapters["euler_v2"] = EulerV2Adapter()
+    except Exception as exc:
+        logger.warning("EulerV2Adapter not loaded (EULER_VAULT missing?): %s", exc)
+
     return adapters
 
 
@@ -40,6 +46,7 @@ RISK_SCORES: dict[str, float] = {
     "aave_v3":  2.0,   # Battle-tested since 2020, $10B+ TVL globally
     "benqi": 3.0,   # Established on Avalanche since 2021
     "spark": 3.0,   # MakerDAO-backed, well-audited (Avalanche < 6 months)
+    "euler_v2": 5.0,  # Higher-yield isolated market with additional collateral/volatility risk
 }
 
 

@@ -256,6 +256,7 @@ async def execute_withdrawal(
 
         benqi_qi_balance = 0
         spark_share_balance = 0
+        euler_share_balance = 0
         try:
             benqi_adapter = get_adapter("benqi")
             benqi_qi_balance = int(await benqi_adapter.get_balance(address))
@@ -266,6 +267,11 @@ async def execute_withdrawal(
             spark_share_balance = int(await spark_adapter.get_balance(address))
         except Exception as exc:
             logger.warning("Failed to read Spark share balance for %s: %s", address, exc)
+        try:
+            euler_adapter = get_adapter("euler_v2")
+            euler_share_balance = int(await euler_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Euler share balance for %s: %s", address, exc)
 
         agent_fee_raw = int(fee_calc.agent_fee * Decimal("1e6"))  # Convert to 6-decimal raw
         withdraw_raw = int(withdraw_amount * Decimal("1e6"))
@@ -280,12 +286,14 @@ async def execute_withdrawal(
                 "AAVE_POOL": settings.AAVE_V3_POOL,
                 "BENQI_POOL": settings.BENQI_QIUSDC,
                 "SPARK_VAULT": settings.SPARK_SPUSDC,
+                "EULER_VAULT": settings.EULER_VAULT,
                 "USDC": settings.USDC_ADDRESS,
                 "TREASURY": settings.TREASURY_ADDRESS,
             },
             "balances": {
                 "benqiQiTokenBalance": str(benqi_qi_balance),
                 "sparkShareBalance": str(spark_share_balance),
+                "eulerShareBalance": str(euler_share_balance),
             },
         }
 

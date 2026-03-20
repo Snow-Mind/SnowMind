@@ -31,7 +31,7 @@ export const CONTRACTS = {
   // Spark spUSDC savings vault on Avalanche mainnet
   SPARK_SPUSDC: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d') as `0x${string}`,
   SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d') as `0x${string}`,
-  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x0000000000000000000000000000000000000000') as `0x${string}`,
+  EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e') as `0x${string}`,
 
   // Native USDC on Avalanche mainnet (Circle-issued)
   USDC:        (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E') as `0x${string}`,
@@ -122,18 +122,33 @@ export const PROTOCOL_CONFIG = {
   },
   euler_v2: {
     id: 'euler_v2' as const,
-    name: 'Euler V2',
-    shortName: 'Euler',
+    name: 'Euler (9Summits)',
+    shortName: 'Euler (9Summits)',
     contractAddress: CONTRACTS.EULER_VAULT,
     riskScore: 5.0,
     color: '#4A6CF6',
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-official.svg',
-    isActive: false,
-    description: 'Coming soon',
+    isActive: true,
+    description: 'High-yield isolated vault; optimizer still enforces utilization and safety checks',
     auditBadge: 'Audited',
     explorerUrl: CONTRACTS.EULER_VAULT ? EXPLORER.address(CONTRACTS.EULER_VAULT) : '',
-    vaultUrl: '',
+    vaultUrl: 'https://app.euler.finance/vault/0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e?network=avalanche',
+  },
+  silo_savusd_usdc: {
+    id: 'silo_savusd_usdc' as const,
+    name: 'Silo (savUSD/USDC)',
+    shortName: 'Silo',
+    contractAddress: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+    riskScore: 6.0,
+    color: '#22C55E',
+    bgColor: 'rgba(34, 197, 94, 0.12)',
+    logoPath: '/protocols/silo-placeholder.svg',
+    isActive: false,
+    description: 'Coming soon',
+    auditBadge: 'Coming Soon',
+    explorerUrl: '',
+    vaultUrl: 'https://app.silo.finance/markets/avalanche/susdp-usdc-162?action=deposit',
   },
 } as const
 
@@ -149,8 +164,8 @@ export const IDLE_CONFIG = {
 
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
-// Only protocols the allocator considers (mainnet beta: 3 active)
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave', 'benqi', 'spark']
+// Protocol IDs used by optimizer/runtime paths (keep aave alias for compatibility)
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'aave', 'benqi', 'spark', 'euler_v2']
 
 // Session key on-chain call policy — function selectors per protocol
 export const SESSION_KEY_SELECTORS = {
@@ -174,6 +189,7 @@ export const SESSION_KEY_SELECTORS = {
     deposit: '0x6e553f65',
     redeem:  '0xba087652',
   },
+  silo_savusd_usdc: {},
 } as const
 
 // Risk presets for per-protocol caps (≥$10K deposits)

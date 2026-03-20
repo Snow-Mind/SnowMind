@@ -1,10 +1,17 @@
-"""Euler V2 adapter — ERC-4626 vault interface (Coming Soon on Avalanche)."""
+"""Euler (9Summits) adapter — ERC-4626 vault interface on Avalanche."""
 
 import time
 from decimal import Decimal
 
 from app.core.config import get_settings
-from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
+from .base import (
+    BaseProtocolAdapter,
+    ProtocolHealth,
+    ProtocolRate,
+    ProtocolStatus,
+    TransactionCalldata,
+    get_shared_async_web3,
+)
 
 # ── ERC-4626 Euler V2 Vault ABI ──────────────────────────────────────────────
 EULER_V2_ABI = [
@@ -65,7 +72,7 @@ MANTISSA = Decimal("1e18")
 
 class EulerV2Adapter(BaseProtocolAdapter):
     protocol_id = "euler_v2"
-    name = "Euler V2"
+    name = "Euler (9Summits)"
     BASE_RISK_SCORE = 5.0  # "Euler v2: 5 (newer, add with caution)"
     is_active = True
 
@@ -89,6 +96,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
             return ProtocolRate(
                 protocol_id=self.protocol_id,
                 apy=Decimal("0"),
+                effective_apy=Decimal("0"),
                 tvl_usd=Decimal("0"),
                 utilization_rate=None,
                 fetched_at=time.time(),
@@ -104,15 +112,37 @@ class EulerV2Adapter(BaseProtocolAdapter):
         return ProtocolRate(
             protocol_id=self.protocol_id,
             apy=apy,
+            effective_apy=apy,
             tvl_usd=tvl,
             utilization_rate=None,
             fetched_at=time.time(),
         )
 
+    async def get_health(self) -> ProtocolHealth:
+        """Basic health probe; keep deposits enabled unless vault is missing."""
+        if not self.vault:
+            return ProtocolHealth(
+                protocol_id=self.protocol_id,
+                status=ProtocolStatus.EXCLUDED,
+                is_deposit_safe=False,
+                is_withdrawal_safe=False,
+                utilization=None,
+                details={"reason": "Vault not configured"},
+            )
+
+        return ProtocolHealth(
+            protocol_id=self.protocol_id,
+            status=ProtocolStatus.HEALTHY,
+            is_deposit_safe=True,
+            is_withdrawal_safe=True,
+            utilization=None,
+            details={},
+        )
+
     # ── Calldata builders ─────────────────────────────────────────────────────
 
     def build_supply_calldata(
-        self, asset: str, amount: int, on_behalf_of: str
+        self, amount: int, on_behalf_of: str
     ) -> TransactionCalldata:
         """ERC-4626: deposit(uint256 assets, address receiver)"""
         if not self.vault:
@@ -124,18 +154,18 @@ class EulerV2Adapter(BaseProtocolAdapter):
         return TransactionCalldata(to=self.vault_address, data=data, value=0)
 
     def build_withdraw_calldata(
-        self, asset: str, amount: int, to: str
+        self, shares_or_amount: int, to: str
     ) -> TransactionCalldata:
         """ERC-4626: redeem(uint256 shares, address receiver, address owner)"""
         if not self.vault:
             raise RuntimeError("Euler V2 vault not configured")
         to_addr = self.w3.to_checksum_address(to)
-        data = self.vault.encode_abi("redeem", args=[amount, to_addr, to_addr])
+        data = self.vault.encode_abi("redeem", args=[shares_or_amount, to_addr, to_addr])
         return TransactionCalldata(to=self.vault_address, data=data, value=0)
 
     # ── Balance ───────────────────────────────────────────────────────────────
 
-    async def get_user_balance(self, user_address: str, asset: str) -> int:
+    async def get_balance(self, user_address: str) -> int:
         """Returns underlying USDC amount by converting shares → assets."""
         if not self.vault:
             return 0
@@ -143,3 +173,11 @@ class EulerV2Adapter(BaseProtocolAdapter):
             self.w3.to_checksum_address(user_address)
         ).call()
         return await self.vault.functions.convertToAssets(shares).call()
+
+    async def get_shares(self, user_address: str) -> int:
+        """Returns the raw ERC-4626 share balance for redemption paths."""
+        if not self.vault:
+            return 0
+        return await self.vault.functions.balanceOf(
+            self.w3.to_checksum_address(user_address)
+        ).call()
