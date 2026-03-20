@@ -67,6 +67,173 @@ class RunOptimizerRequest(BaseModel):
     risk_tolerance: str = "moderate"  # conservative | moderate | aggressive
 
 
+class SimulateRequest(BaseModel):
+    """Request body for the /simulate dry-run endpoint."""
+    total_usdc: Decimal
+    risk_tolerance: str = "moderate"
+    forced_protocol_rates: dict[str, Decimal] | None = None
+
+
+class SimulateResponse(CamelModel):
+    """Detailed simulation output — no auth, no execution, no DB writes."""
+    dry_run: bool = True
+    total_usdc: Decimal
+    risk_tolerance: str
+    proposed_allocations: list[AllocationItem]
+    expected_apy: Decimal
+    risk_score: Decimal
+    rebalance_needed: bool
+    solve_time_ms: float
+    protocol_rates: list[ProtocolRateResponse]
+    reasoning: list[str]
+
+
+# ── POST /simulate — zero-cost dry-run (no auth, no execution, no DB) ────────
+
+@router.post("/simulate", response_model=SimulateResponse)
+@limiter.limit("30/minute")
+async def simulate_optimization(request: Request, req: SimulateRequest):
+    """Run the full optimizer pipeline as a dry-run.
+
+    - Does NOT decrypt any session key
+    - Does NOT build or submit any UserOperation
+    - Does NOT write to database
+    - Does NOT require authentication
+    - Returns EXACTLY what the live rebalancer would decide and why
+    - Reads LIVE on-chain APYs from the actual protocols
+    """
+    settings = get_settings()
+    reasoning: list[str] = []
+
+    if req.total_usdc <= Decimal("0"):
+        raise HTTPException(status_code=400, detail="total_usdc must be positive")
+    if req.total_usdc > Decimal("10000000"):
+        raise HTTPException(
+            status_code=400,
+            detail="total_usdc exceeds simulation cap ($10M)",
+        )
+
+    reasoning.append(f"Simulating ${req.total_usdc} USDC allocation")
+
+    # Map risk tolerance to max exposure
+    exposure_map = {
+        "conservative": Decimal("0.40"),
+        "moderate": Decimal("0.60"),
+        "aggressive": Decimal("1.00"),
+    }
+    max_exposure = exposure_map.get(req.risk_tolerance, Decimal("0.60"))
+    reasoning.append(f"Risk tolerance: {req.risk_tolerance} → max_exposure={max_exposure}")
+
+    # Fetch live rates
+    rates = await _rate_fetcher.fetch_active_rates()
+    if not rates:
+        raise HTTPException(status_code=503, detail="No protocol rates available")
+
+    # Apply forced rates if provided (for testing)
+    if req.forced_protocol_rates:
+        for pid, forced_apy in req.forced_protocol_rates.items():
+            if pid in rates:
+                rates[pid] = rates[pid]._replace(apy=forced_apy, effective_apy=forced_apy)
+                reasoning.append(f"Override: {pid} APY forced to {forced_apy}")
+
+    valid_rates = {
+        pid: r for pid, r in rates.items() if _rate_fetcher.validate_rate(r)
+    }
+    if not valid_rates:
+        raise HTTPException(status_code=503, detail="All rates failed validation")
+
+    # Build protocol inputs
+    protocol_inputs: list[ProtocolInput] = []
+    for pid, rate in valid_rates.items():
+        risk = _risk_scorer.compute_risk_score(
+            pid,
+            utilization_rate=(
+                float(rate.utilization_rate)
+                if rate.utilization_rate is not None
+                else None
+            ),
+            protocol_apy=rate.apy,
+        )
+        protocol_inputs.append(
+            ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
+        )
+        reasoning.append(
+            f"{pid}: APY={rate.apy:.4%}, TVL=${rate.tvl_usd:,.0f}, risk={risk:.1f}"
+        )
+
+    # Run waterfall allocator (no current allocations = fresh deployment)
+    inp = OptimizerInput(
+        total_amount_usd=req.total_usdc,
+        protocols=protocol_inputs,
+        current_allocations={},
+        gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
+    )
+    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
+    result = waterfall_allocate(
+        inp=inp,
+        tvl_by_protocol=tvl_by_protocol,
+        tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
+        max_exposure_pct=max_exposure,
+        base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
+        base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
+    )
+
+    # Build protocol rate response
+    rate_responses: list[ProtocolRateResponse] = []
+    for pid, rate in valid_rates.items():
+        rate_responses.append(
+            ProtocolRateResponse(
+                protocol_id=pid,
+                name=ACTIVE_ADAPTERS.get(pid, ALL_ADAPTERS.get(pid)).name
+                if pid in ACTIVE_ADAPTERS or pid in ALL_ADAPTERS
+                else pid,
+                is_active=pid in ACTIVE_ADAPTERS,
+                is_coming_soon=False,
+                current_apy=rate.apy,
+                tvl_usd=rate.tvl_usd,
+                risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
+                last_updated=rate.fetched_at,
+            )
+        )
+
+    # Build allocation response
+    proposed: list[AllocationItem] = []
+    for pid, amount_usd in result.allocations.items():
+        rate = valid_rates.get(pid)
+        pct = amount_usd / req.total_usdc if req.total_usdc else Decimal("0")
+        proposed.append(
+            AllocationItem(
+                protocol_id=pid,
+                current_pct=Decimal("0"),
+                proposed_pct=pct,
+                proposed_amount_usd=amount_usd,
+                apy=rate.apy if rate else Decimal("0"),
+            )
+        )
+        reasoning.append(
+            f"Allocate ${amount_usd:,.2f} ({pct:.1%}) → {pid}"
+        )
+
+    reasoning.append(f"Expected blended APY: {result.expected_apy:.4%}")
+    reasoning.append(
+        f"Rebalance needed: {result.is_rebalance_needed} "
+        f"(solve time: {result.solve_time_ms:.1f}ms)"
+    )
+
+    return SimulateResponse(
+        dry_run=True,
+        total_usdc=req.total_usdc,
+        risk_tolerance=req.risk_tolerance,
+        proposed_allocations=proposed,
+        expected_apy=result.expected_apy,
+        risk_score=result.risk_score,
+        rebalance_needed=result.is_rebalance_needed,
+        solve_time_ms=result.solve_time_ms,
+        protocol_rates=rate_responses,
+        reasoning=reasoning,
+    )
+
+
 # ── GET /rates — live rates for all protocols (including coming-soon) ────────
 
 @router.get("/rates", response_model=list[ProtocolRateResponse])
@@ -190,7 +357,7 @@ async def run_optimizer_preview(
         tvl_by_protocol=tvl_by_protocol,
         tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
-        base_beat_margin=Decimal(str(settings.BASE_BEAT_MARGIN)),
+        base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
         base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
     )
 

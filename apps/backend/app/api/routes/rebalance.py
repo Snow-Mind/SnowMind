@@ -140,6 +140,7 @@ async def get_rebalance_status(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Return the most recent rebalance result and overall status."""
     account = await _lookup_account(db, address)
@@ -208,6 +209,7 @@ async def get_rebalance_history(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -289,7 +291,7 @@ async def withdraw_all(
 # ── POST /{address}/partial-withdraw — partial withdrawal, no fee ────────────
 
 class PartialWithdrawRequest(CamelModel):
-    amount_usdc: float
+    amount_usdc: str  # String to avoid float — parsed as Decimal downstream
     protocol_id: str
 
 
@@ -311,6 +313,13 @@ async def partial_withdraw(
     addr = account["address"]
     account_id = account["id"]
 
+    try:
+        amount = Decimal(body.amount_usdc)
+        if amount <= Decimal("0"):
+            raise HTTPException(status_code=400, detail="amount_usdc must be positive")
+    except Exception:
+        raise HTTPException(status_code=400, detail="amount_usdc must be a valid decimal string")
+
     from app.services.optimizer.rebalancer import Rebalancer
 
     rebalancer = Rebalancer()
@@ -320,13 +329,13 @@ async def partial_withdraw(
             account_id=account_id,
             smart_account_address=addr,
             protocol_id=body.protocol_id,
-            amount_usdc=body.amount_usdc,
+            amount_usdc=float(amount),  # Rebalancer expects float; convert at boundary
         )
         return {
             "status": "executed",
             "txHash": tx_hash,
             "feeCharged": False,
-            "amountUsdc": body.amount_usdc,
+            "amountUsdc": str(amount),
             "protocolId": body.protocol_id,
         }
     except ValueError as exc:

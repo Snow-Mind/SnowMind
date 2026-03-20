@@ -1,8 +1,10 @@
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, Request
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import require_api_key
@@ -27,6 +29,7 @@ async def health_check(request: Request):
 @router.get("/health/detailed")
 async def health_detailed(request: Request, _key: str = Depends(require_api_key)):
     """Comprehensive system health for ops monitoring."""
+    settings = get_settings()
     now = datetime.now(timezone.utc).isoformat()
 
     # ── Database ─────────────────────────────────────────────────────────────
@@ -39,6 +42,19 @@ async def health_detailed(request: Request, _key: str = Depends(require_api_key)
     except Exception as exc:
         db_status = f"error: {exc}"
         logger.warning("Health check — DB error: %s", exc)
+
+    # ── Execution service ────────────────────────────────────────────────────
+    exec_status = "unknown"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.EXECUTION_SERVICE_URL}/health")
+            if resp.status_code == 200:
+                exec_status = "ok"
+            else:
+                exec_status = f"unhealthy (status={resp.status_code})"
+    except Exception as exc:
+        exec_status = f"unreachable: {exc}"
+        logger.warning("Health check — execution service unreachable: %s", exc)
 
     # ── Scheduler ────────────────────────────────────────────────────────────
     scheduler_info: dict = {"running": False}
@@ -66,6 +82,7 @@ async def health_detailed(request: Request, _key: str = Depends(require_api_key)
         "version": "1.0.0",
         "database": db_status,
         "active_accounts": active_accounts,
+        "execution_service": exec_status,
         "scheduler": scheduler_info,
         "protocols": protocols_info,
     }

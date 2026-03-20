@@ -9,6 +9,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
+from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.allocation import AllocationResponse, PortfolioResponse
 from app.services.protocols import get_adapter, ACTIVE_ADAPTERS
@@ -82,6 +83,7 @@ async def get_portfolio(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Return current portfolio state for a smart account."""
     address = validate_eth_address(address)
@@ -212,6 +214,7 @@ async def get_rebalance_history(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Paginated rebalance log history."""
     address = validate_eth_address(address)

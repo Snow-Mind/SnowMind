@@ -61,7 +61,7 @@ const features = [
   {
     title: "Built for Avalanche.",
     description:
-      "Not a multi-chain afterthought. SnowMind is purpose-built for Avalanche\u2019s lending ecosystem, starting with Benqi, Aave V3, and Euler V2.",
+      "Not a multi-chain afterthought. SnowMind is purpose-built for Avalanche\u2019s lending ecosystem, starting with Aave V3, Benqi, and Spark.",
     icon: Snowflake,
   },
 ];

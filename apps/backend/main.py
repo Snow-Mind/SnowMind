@@ -27,6 +27,7 @@ app = FastAPI(
     description="Autonomous non-custodial AI yield optimizer on Avalanche",
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 # ── slowapi per-endpoint rate limiter ────────────────────────
@@ -45,6 +46,36 @@ app.add_middleware(
 
 # ── Rate-limiting middleware (must be added BEFORE routing) ───
 app.middleware("http")(rate_limit_middleware)
+
+
+# ── Security headers middleware ──────────────────────────────
+@app.middleware("http")
+async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+# ── Request size limit middleware ────────────────────────────
+MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MB
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):  # type: ignore[no-untyped-def]
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large"},
+        )
+    return await call_next(request)
 
 
 # ── Request logging middleware ───────────────────────────────

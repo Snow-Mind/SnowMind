@@ -292,3 +292,153 @@ def test_record_withdrawal_updates_cumulative():
     call_args = mock_db.table.return_value.update.call_args[0][0]
     # 200 + 495 = 695
     assert call_args["cumulative_net_withdrawn"] == "695"
+
+
+# ── 12. Exploit prevention: fee never exceeds withdrawal ────────────────────
+
+def test_fee_never_exceeds_withdrawal_amount():
+    """Even with extreme profit, fee must be < withdraw_amount."""
+    result = calculate_agent_fee(
+        withdraw_amount=D("50"),
+        current_balance=D("50"),
+        net_principal=D("1"),  # Nearly all profit
+        fee_exempt=False,
+    )
+    # profit = 49, proportion = 1.0, attributable = 49, fee = 4.9
+    assert result.agent_fee < result.withdraw_amount
+    assert result.user_receives > D("0")
+
+
+def test_fee_never_negative():
+    """Fee must always be >= 0, even with weird inputs."""
+    result = calculate_agent_fee(
+        withdraw_amount=D("100"),
+        current_balance=D("500"),
+        net_principal=D("1000"),  # Deep loss
+        fee_exempt=False,
+    )
+    assert result.agent_fee >= D("0")
+    assert result.user_receives == result.withdraw_amount
+
+
+# ── 13. Tiny profit / dust amounts ──────────────────────────────────────────
+
+def test_tiny_profit_dust_fee():
+    """0.000001 USDC profit: fee should be 0.000000 (quantized to zero)."""
+    result = calculate_agent_fee(
+        withdraw_amount=D("100.000000"),
+        current_balance=D("100.000001"),
+        net_principal=D("100.000000"),
+        fee_exempt=False,
+    )
+    # profit = 0.000001, proportion = ~1.0, attributable = ~0.000001
+    # fee = 0.000001 * 0.10 = 0.0000001 → quantized to 0.000000
+    assert result.agent_fee == D("0.000000")
+
+
+def test_minimum_meaningful_fee():
+    """Smallest fee that survives quantization is 0.000001."""
+    # Need attributable_profit * 0.10 >= 0.0000005
+    # attributable_profit >= 0.000005
+    # With 100% proportion: accrued_profit >= 0.000005
+    result = calculate_agent_fee(
+        withdraw_amount=D("1"),
+        current_balance=D("1"),
+        net_principal=D("0.999990"),  # profit = 0.000010
+        fee_exempt=False,
+    )
+    # fee = 0.000010 * 0.10 = 0.000001
+    assert result.agent_fee == D("0.000001")
+
+
+# ── 14. Sequential withdrawals: splitting costs more (protocol-favorable) ────
+
+def test_sequential_withdrawals_cost_more_than_single():
+    """
+    Two 50% withdrawals yield MORE total fee than one 100% withdrawal.
+
+    This is mathematically correct because new_net_principal = net_principal - user_receives,
+    and user_receives < withdraw_amount (when there's a fee). This means the principal
+    shrinks less than the withdrawal, inflating apparent profit for subsequent withdrawals.
+
+    This is FAVORABLE for the protocol — users cannot exploit by splitting withdrawals.
+    """
+    # Full withdrawal
+    full = calculate_agent_fee(
+        withdraw_amount=D("1000"),
+        current_balance=D("1000"),
+        net_principal=D("800"),
+        fee_exempt=False,
+    )
+
+    # First 50% withdrawal
+    first = calculate_agent_fee(
+        withdraw_amount=D("500"),
+        current_balance=D("1000"),
+        net_principal=D("800"),
+        fee_exempt=False,
+    )
+
+    # After first withdrawal, balance = 500, net_principal = first.new_net_principal
+    second = calculate_agent_fee(
+        withdraw_amount=D("500"),
+        current_balance=D("500"),
+        net_principal=first.new_net_principal,
+        fee_exempt=False,
+    )
+
+    # Total fees from splitting should be >= full withdrawal fee (protocol-favorable)
+    total_fee = first.agent_fee + second.agent_fee
+    assert total_fee >= full.agent_fee, (
+        f"Split withdrawal fee ({total_fee}) < full withdrawal fee ({full.agent_fee}) — user exploit!"
+    )
+
+
+# ── 15. No float contamination ──────────────────────────────────────────────
+
+def test_all_outputs_are_decimal():
+    """Every numeric field in FeeCalculation must be Decimal, never float or int."""
+    result = calculate_agent_fee(
+        withdraw_amount=D("500"),
+        current_balance=D("1000"),
+        net_principal=D("900"),
+        fee_exempt=False,
+    )
+    for field_name in [
+        "withdraw_amount", "current_balance", "net_principal",
+        "accrued_profit", "attributable_profit", "agent_fee",
+        "user_receives", "new_net_principal", "fee_rate",
+    ]:
+        value = getattr(result, field_name)
+        assert isinstance(value, Decimal), (
+            f"{field_name} is {type(value).__name__}, expected Decimal"
+        )
+
+
+# ── 16. Extreme values ──────────────────────────────────────────────────────
+
+def test_whale_withdrawal():
+    """$10M withdrawal with $1M profit — ensures no overflow or precision loss."""
+    result = calculate_agent_fee(
+        withdraw_amount=D("10000000"),
+        current_balance=D("10000000"),
+        net_principal=D("9000000"),
+        fee_exempt=False,
+    )
+    # profit = 1M, fee = 100K
+    assert result.agent_fee == D("100000.000000")
+    assert result.user_receives == D("9900000.000000")
+
+
+def test_penny_withdrawal():
+    """$0.01 USDC withdrawal (dust threshold)."""
+    result = calculate_agent_fee(
+        withdraw_amount=D("0.01"),
+        current_balance=D("100"),
+        net_principal=D("99"),
+        fee_exempt=False,
+    )
+    # profit = 1, proportion = 0.0001, attributable = 0.0001
+    # fee = 0.0001 * 0.10 = 0.00001 → quantized to 0.000010
+    assert result.agent_fee >= D("0")
+    assert result.user_receives > D("0")

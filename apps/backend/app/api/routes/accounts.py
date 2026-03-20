@@ -62,6 +62,23 @@ async def _do_register(
     """Shared implementation for both registration endpoints."""
     address = validate_eth_address(req.resolved_address())
     owner_address = validate_eth_address(req.resolved_owner())
+
+    # Guard: prevent overwriting an existing account's owner
+    existing = (
+        db.table("accounts")
+        .select("owner_address")
+        .eq("address", address)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        existing_owner = existing.data[0].get("owner_address", "").lower()
+        if existing_owner and existing_owner != owner_address.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Account already registered with a different owner",
+            )
+
     # Upsert: if account already exists, just return it
     result = (
         db.table("accounts")
@@ -145,6 +162,7 @@ async def get_account(
     request: Request,
     address: str,
     db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
 ):
     """Get account info including current session-key status."""
     address = validate_eth_address(address)

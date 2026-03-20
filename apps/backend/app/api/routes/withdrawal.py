@@ -8,9 +8,10 @@ Agent fee (10% of profit) is charged proportionally on EVERY withdrawal.
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from supabase import Client
 
 from app.core.config import get_settings
@@ -31,6 +32,11 @@ logger = logging.getLogger("snowmind.api.withdrawal")
 
 router = APIRouter()
 
+# Minimum withdrawal: 0.01 USDC (below this is dust)
+_MIN_WITHDRAWAL_USDC = Decimal("0.01")
+# Maximum withdrawal: $10M (sanity guard)
+_MAX_WITHDRAWAL_USDC = Decimal("10000000")
+
 
 # ── Request / Response Models ────────────────────────────────────────────────
 
@@ -40,6 +46,22 @@ class WithdrawalPreviewRequest(BaseModel):
     withdraw_amount: str = Field(..., alias="withdrawAmount", description="USDC amount to withdraw (6 decimal string)")
     is_full_withdrawal: bool = Field(False, alias="isFullWithdrawal")
     model_config = {"populate_by_name": True}
+
+    @field_validator("withdraw_amount")
+    @classmethod
+    def validate_withdraw_amount(cls, v: str) -> str:
+        try:
+            amt = Decimal(v)
+        except Exception:
+            raise ValueError("withdraw_amount must be a valid decimal string")
+        if amt < _MIN_WITHDRAWAL_USDC:
+            raise ValueError(f"withdraw_amount below dust threshold (${_MIN_WITHDRAWAL_USDC})")
+        if amt > _MAX_WITHDRAWAL_USDC:
+            raise ValueError(f"withdraw_amount exceeds maximum (${_MAX_WITHDRAWAL_USDC})")
+        # Validate USDC precision (max 6 decimal places)
+        if amt != amt.quantize(Decimal("0.000001")):
+            raise ValueError("withdraw_amount exceeds USDC precision (max 6 decimals)")
+        return v
 
 
 class WithdrawalPreviewResponse(BaseModel):
@@ -62,6 +84,22 @@ class WithdrawalExecuteRequest(BaseModel):
     withdraw_amount: str = Field(..., alias="withdrawAmount")
     is_full_withdrawal: bool = Field(False, alias="isFullWithdrawal")
     model_config = {"populate_by_name": True}
+
+    @field_validator("withdraw_amount")
+    @classmethod
+    def validate_withdraw_amount(cls, v: str) -> str:
+        try:
+            amt = Decimal(v)
+        except Exception:
+            raise ValueError("withdraw_amount must be a valid decimal string")
+        if amt < _MIN_WITHDRAWAL_USDC:
+            raise ValueError(f"withdraw_amount below dust threshold (${_MIN_WITHDRAWAL_USDC})")
+        if amt > _MAX_WITHDRAWAL_USDC:
+            raise ValueError(f"withdraw_amount exceeds maximum (${_MAX_WITHDRAWAL_USDC})")
+        # Validate USDC precision (max 6 decimal places)
+        if amt != amt.quantize(Decimal("0.000001")):
+            raise ValueError("withdraw_amount exceeds USDC precision (max 6 decimals)")
+        return v
 
 
 class WithdrawalExecuteResponse(BaseModel):
@@ -223,6 +261,29 @@ async def execute_withdrawal(
     address = validate_eth_address(req.smart_account_address)
     account = await _get_account(db, address)
 
+    # ── Concurrent withdrawal lock ──────────────────────────────────────
+    # Prevent double-submit: one in-flight withdrawal per account at a time.
+    lock_key = f"withdrawal_lock:{account['id']}"
+    try:
+        lock_result = (
+            db.table("rebalance_logs")
+            .select("id, status")
+            .eq("account_id", account["id"])
+            .eq("from_protocol", "withdrawal")
+            .eq("status", "pending")
+            .limit(1)
+            .execute()
+        )
+        if lock_result.data:
+            raise HTTPException(
+                status_code=409,
+                detail="A withdrawal is already in progress for this account. Please wait.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Lock check failed for %s: %s — proceeding", address, exc)
+
     # Read on-chain balance
     current_balance = await _get_on_chain_balance(address)
     if current_balance <= Decimal("0"):
@@ -245,8 +306,6 @@ async def execute_withdrawal(
 
     # Build and submit withdrawal UserOp via Execution Service
     try:
-        from uuid import UUID
-
         session_key = get_active_session_key(db, UUID(account["id"]))
         if not session_key:
             raise HTTPException(
