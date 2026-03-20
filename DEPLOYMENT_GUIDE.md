@@ -252,8 +252,6 @@ NEXT_PUBLIC_PRIVY_APP_ID=your_privy_app_id
 
 # ── Smart Accounts (ZeroDev) ─────────────────────────────────
 NEXT_PUBLIC_ZERODEV_PROJECT_ID=your_zerodev_project_id
-NEXT_PUBLIC_BUNDLER_URL=https://rpc.zerodev.app/api/v2/bundler/YOUR_PROJECT_ID
-NEXT_PUBLIC_PAYMASTER_URL=https://rpc.zerodev.app/api/v2/paymaster/YOUR_PROJECT_ID
 
 # ── Blockchain (Avalanche Mainnet) ───────────────────────────
 NEXT_PUBLIC_AVALANCHE_RPC_URL=https://api.avax.network/ext/bc/C/rpc
@@ -261,7 +259,7 @@ NEXT_PUBLIC_CHAIN_ID=43114
 
 # ── Backend API ──────────────────────────────────────────────
 NEXT_PUBLIC_BACKEND_URL=https://api.snowmind.xyz
-NEXT_PUBLIC_API_KEY=your_api_key_matching_backend
+NEXT_PUBLIC_BACKEND_API_KEY=your_api_key_matching_backend
 
 # ── Contract Addresses (Avalanche Mainnet) ───────────────────
 NEXT_PUBLIC_USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
@@ -565,10 +563,11 @@ Then, from the Gnosis Safe, execute `acceptOwnership()` on the registry.
 1. Go to [https://dashboard.zerodev.app/](https://dashboard.zerodev.app/)
 2. Create a new project or update your existing one to support **Avalanche mainnet** (chain ID 43114)
 3. Copy the Project ID → `ZERODEV_PROJECT_ID` (both backend and frontend)
-4. Get your bundler and paymaster URLs:
-   - `NEXT_PUBLIC_BUNDLER_URL=https://rpc.zerodev.app/api/v2/bundler/YOUR_PROJECT_ID`
-   - `NEXT_PUBLIC_PAYMASTER_URL=https://rpc.zerodev.app/api/v2/paymaster/YOUR_PROJECT_ID`
-5. Ensure your paymaster policy covers mainnet operations (gas sponsorship)
+4. Ensure your ZeroDev project has bundler/paymaster enabled for Avalanche mainnet.
+5. Ensure your paymaster policy covers mainnet operations (gas sponsorship).
+
+Note: current frontend/backend code paths use `ZERODEV_PROJECT_ID` (and Pimlico API key on backend).
+Dedicated frontend `NEXT_PUBLIC_BUNDLER_URL` / `NEXT_PUBLIC_PAYMASTER_URL` vars are not required by the current implementation.
 
 ### Step 6: Deploy Backend to Railway
 
@@ -704,6 +703,35 @@ Before going live, verify each item:
 - [ ] DEPLOYER_PRIVATE_KEY is empty in production
 - [ ] All secrets are unique between environments
 - [ ] CORS only allows production domains
+
+### Launch Gate: Required Non-Empty Env Vars
+
+All variables below must be set and non-empty before launch.
+
+- [ ] Backend: `SUPABASE_URL`
+- [ ] Backend: `SUPABASE_SERVICE_KEY`
+- [ ] Backend: `PIMLICO_API_KEY`
+- [ ] Backend: `ZERODEV_PROJECT_ID`
+- [ ] Backend: `REGISTRY_CONTRACT_ADDRESS`
+- [ ] Backend: `TREASURY_ADDRESS`
+- [ ] Backend: `JWT_SECRET`
+- [ ] Backend: `BACKEND_API_KEY`
+- [ ] Backend: `INTERNAL_SERVICE_KEY`
+- [ ] Backend: `PRIVY_APP_ID`
+- [ ] Backend: `PRIVY_APP_SECRET`
+- [ ] Frontend: `NEXT_PUBLIC_PRIVY_APP_ID`
+- [ ] Frontend: `NEXT_PUBLIC_ZERODEV_PROJECT_ID`
+- [ ] Frontend: `NEXT_PUBLIC_BACKEND_URL`
+- [ ] Frontend: `NEXT_PUBLIC_BACKEND_API_KEY`
+- [ ] Frontend: `NEXT_PUBLIC_CHAIN_ID=43114`
+- [ ] Frontend: `NEXT_PUBLIC_REGISTRY_ADDRESS`
+- [ ] Frontend: `NEXT_PUBLIC_TREASURY_ADDRESS`
+- [ ] Execution Service: `INTERNAL_SERVICE_KEY` (must exactly match backend)
+
+Optional but strongly recommended for production security:
+
+- [ ] Backend: `KMS_KEY_ID` configured
+- [ ] Backend: `SESSION_KEY_ENCRYPTION_KEY` left empty in production
 
 ### End-to-End Flow
 - [ ] Smart account deploys successfully on mainnet
