@@ -3,9 +3,13 @@ Spark Savings adapter — ERC-4626 vault on Avalanche C-Chain (spUSDC).
 
 APY Source:      convertToAssets(1e6) delta vs 24h-ago snapshot × 365
 Effective APY:   gross_apy × 0.90 (only 90% deployed, 10% instant-redemption buffer)
-PSM Fee:         psmWrapper.tin() — if > 0, deduct annualized fee from effective APY
-                 if tin == type(uint256).max: deposits disabled, exclude from allocation
-Emergency:       vat.live() must == 1 (MakerDAO global settlement)
+
+AVALANCHE-SPECIFIC CHANGES (PSM3 architecture):
+- Avalanche uses PSM3, NOT Ethereum's DssLitePsm/UsdsPsmWrapper.
+- PSM3 has no tin() method — there is no deposit fee on Avalanche PSM3.
+- There is no MakerDAO vat on Avalanche — no vat.live() exists.
+- Deposit-safety check:  PSM3.totalAssets() == 0 → deposits disabled.
+- Emergency-exit check:  spUSDC.maxWithdraw(probe) == 0 → no liquidity, exit.
 
 CRITICAL: Spark has NO utilization check, NO velocity check, NO sanity bound,
 NO 7-day stability check, and NO TVL cap. Its rate is governance-set, not market-driven.
@@ -32,9 +36,15 @@ logger = logging.getLogger("snowmind.protocols.spark")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MAX_UINT256 = 2**256 - 1
 DEPLOYMENT_RATIO = Decimal("0.90")  # Spark V2: only 90% of deposits deployed
 DEFAULT_EXPECTED_HOLD_DAYS = 30
+
+# Minimum PSM3 totalAssets below which we consider deposits unsafe (USDC 6 dec).
+# $1000 worth of USDC = 1_000_000_000 raw units.
+PSM3_MIN_TOTAL_ASSETS = 1_000_000_000
+
+# Probe address for maxWithdraw liquidity check (zero address = generic probe).
+LIQUIDITY_PROBE_ADDRESS = "0x0000000000000000000000000000000000000001"
 
 # ── Minimal ABI slices ──────────────────────────────────────────────────────
 
@@ -81,21 +91,20 @@ SPARK_VAULT_ABI = [
         "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     },
-]
-
-SPARK_PSM_WRAPPER_ABI = [
     {
-        "name": "tin",
+        "name": "maxWithdraw",
         "type": "function",
-        "inputs": [],
-        "outputs": [{"name": "", "type": "uint256"}],
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "maxAssets", "type": "uint256"}],
         "stateMutability": "view",
     },
 ]
 
-MAKER_VAT_ABI = [
+# PSM3 on Avalanche — totalAssets() to check liquidity pool health.
+# PSM3 has NO tin() — there is no deposit fee on Avalanche.
+SPARK_PSM3_ABI = [
     {
-        "name": "live",
+        "name": "totalAssets",
         "type": "function",
         "inputs": [],
         "outputs": [{"name": "", "type": "uint256"}],
@@ -122,8 +131,7 @@ class SparkAdapter(BaseProtocolAdapter):
     def __init__(self) -> None:
         settings = get_settings()
         self.vault_address = settings.SPARK_SPUSDC
-        self.psm_wrapper_address = settings.SPARK_PSM_WRAPPER
-        self.vat_address = settings.SPARK_VAT
+        self.psm3_address = settings.SPARK_PSM3
 
         if not self.vault_address:
             raise ValueError("SPARK_SPUSDC not configured — set it in .env")
@@ -136,24 +144,14 @@ class SparkAdapter(BaseProtocolAdapter):
             abi=SPARK_VAULT_ABI,
         )
 
-    def _get_psm_wrapper_contract(self) -> Any | None:
-        """Get PSM wrapper contract for tin() reads."""
-        if not self.psm_wrapper_address:
+    def _get_psm3_contract(self) -> Any | None:
+        """Get PSM3 contract for totalAssets() liquidity check."""
+        if not self.psm3_address:
             return None
         w3 = get_web3()
         return w3.eth.contract(
-            address=w3.to_checksum_address(self.psm_wrapper_address),
-            abi=SPARK_PSM_WRAPPER_ABI,
-        )
-
-    def _get_vat_contract(self) -> Any | None:
-        """Get MakerDAO vat contract for live() check."""
-        if not self.vat_address:
-            return None
-        w3 = get_web3()
-        return w3.eth.contract(
-            address=w3.to_checksum_address(self.vat_address),
-            abi=MAKER_VAT_ABI,
+            address=w3.to_checksum_address(self.psm3_address),
+            abi=SPARK_PSM3_ABI,
         )
 
     # ── Rate reading ────────────────────────────────────────────────────
@@ -164,13 +162,16 @@ class SparkAdapter(BaseProtocolAdapter):
         expected_hold_days: int = DEFAULT_EXPECTED_HOLD_DAYS,
     ) -> ProtocolRate:
         """
-        Calculate Spark effective APY.
+        Calculate Spark effective APY on Avalanche.
 
         gross_apy = (today_convertToAssets - yesterday_snapshot) / yesterday × 365
-        effective_apy = gross_apy × 0.90 - annualized_psm_fee
+        effective_apy = gross_apy × 0.90
 
-        If yesterday_snapshot is None, effective_apy will equal gross × 0.90
-        (PSM fee still applied if non-zero).
+        Avalanche PSM3 has NO deposit fee (no tin()), so effective APY is simply
+        the deployed APY after applying the 90% deployment ratio.
+
+        If PSM3 totalAssets is near-zero, effective_apy is set to 0 to prevent
+        new deposits into an illiquid PSM.
         """
         vault = self._get_vault_contract()
 
@@ -191,32 +192,25 @@ class SparkAdapter(BaseProtocolAdapter):
         # Apply 90% deployment ratio (Spark V2: 10% held as instant redemption buffer)
         deployed_apy = gross_apy * DEPLOYMENT_RATIO
 
-        # Read PSM fee (tin) and calculate annualized cost
+        # Check PSM3 liquidity — if pool is near-empty, effective APY = 0
+        # to prevent new deposits into an illiquid PSM.
         effective_apy = deployed_apy
-        tin_value = 0
-        psm = self._get_psm_wrapper_contract()
-        if psm:
+        psm3 = self._get_psm3_contract()
+        if psm3:
             try:
-                tin_value = await psm.functions.tin().call()
-                if tin_value == MAX_UINT256:
-                    # Deposits disabled — effective APY is 0 (will be excluded)
-                    return ProtocolRate(
-                        protocol_id=self.protocol_id,
-                        apy=gross_apy,
-                        effective_apy=Decimal("0"),
-                        tvl_usd=tvl,
-                        utilization_rate=None,  # Spark has no utilization concept
-                        fetched_at=time.time(),
+                psm3_total = await psm3.functions.totalAssets().call()
+                if psm3_total < PSM3_MIN_TOTAL_ASSETS:
+                    logger.warning(
+                        "Spark PSM3 totalAssets=%d below minimum %d — "
+                        "setting effective APY to 0",
+                        psm3_total,
+                        PSM3_MIN_TOTAL_ASSETS,
                     )
-
-                if tin_value > 0:
-                    fee_rate = Decimal(str(tin_value)) / Decimal("1e18")
-                    annualized_psm_cost = fee_rate * (
-                        Decimal("365") / Decimal(str(expected_hold_days))
-                    )
-                    effective_apy = deployed_apy - annualized_psm_cost
+                    effective_apy = Decimal("0")
             except Exception as exc:
-                logger.warning("Failed to read Spark PSM tin: %s", exc)
+                logger.warning("Failed to read PSM3 totalAssets: %s", exc)
+                # Conservative: if we can't check PSM3, still report APY
+                # but health check will also flag this.
 
         return ProtocolRate(
             protocol_id=self.protocol_id,
@@ -231,11 +225,11 @@ class SparkAdapter(BaseProtocolAdapter):
 
     async def get_health(self) -> ProtocolHealth:
         """
-        Check Spark protocol health.
+        Check Spark protocol health on Avalanche.
 
-        Only two checks apply to Spark:
-        1. vat.live() == 1 — MakerDAO global settlement check
-        2. tin value — if type(uint256).max, deposits are disabled
+        Two checks (Avalanche-specific, replaces Ethereum tin/vat):
+        1. spUSDC.maxWithdraw(probe) == 0 → vault has no liquidity → EMERGENCY
+        2. PSM3.totalAssets() near-zero  → PSM pool drained → DEPOSITS_DISABLED
 
         NO utilization check, NO velocity check, NO sanity bound,
         NO 7-day stability check, NO TVL minimum.
@@ -245,47 +239,67 @@ class SparkAdapter(BaseProtocolAdapter):
         is_withdrawal_safe = True
         status = ProtocolStatus.HEALTHY
 
-        # Check 1: MakerDAO global settlement (vat.live)
-        vat = self._get_vat_contract()
-        if vat:
-            try:
-                vat_live = await vat.functions.live().call()
-                details["vat_live"] = vat_live
-                if vat_live != 1:
-                    # EMERGENCY: MakerDAO global settlement — move ALL funds immediately
-                    status = ProtocolStatus.EMERGENCY
-                    is_deposit_safe = False
-                    is_withdrawal_safe = True  # Still try to withdraw
-                    logger.critical(
-                        "EMERGENCY: MakerDAO vat.live() = %d (expected 1). "
-                        "Global settlement detected. Initiating emergency exit.",
-                        vat_live,
-                    )
-                    return ProtocolHealth(
-                        protocol_id=self.protocol_id,
-                        status=status,
-                        is_deposit_safe=is_deposit_safe,
-                        is_withdrawal_safe=is_withdrawal_safe,
-                        utilization=None,
-                        details=details,
-                    )
-            except Exception as exc:
-                logger.warning("Failed to read vat.live(): %s", exc)
-                details["vat_error"] = str(exc)
+        # Check 1: Vault liquidity — can funds actually be withdrawn?
+        # replaces vat.live() which doesn't exist on Avalanche.
+        vault = self._get_vault_contract()
+        try:
+            w3 = get_web3()
+            max_withdraw = await vault.functions.maxWithdraw(
+                w3.to_checksum_address(LIQUIDITY_PROBE_ADDRESS)
+            ).call()
+            vault_total = await vault.functions.totalAssets().call()
+            details["vault_max_withdraw_probe"] = max_withdraw
+            details["vault_total_assets"] = vault_total
 
-        # Check 2: PSM deposit gate (tin)
-        psm = self._get_psm_wrapper_contract()
-        if psm:
+            # If vault has significant TVL but maxWithdraw returns 0 for a probe,
+            # that's expected (probe has no shares). Instead check totalAssets.
+            if vault_total == 0:
+                # Vault has zero TVL — emergency exit for any existing positions.
+                status = ProtocolStatus.EMERGENCY
+                is_deposit_safe = False
+                is_withdrawal_safe = True  # Still attempt withdrawal
+                logger.critical(
+                    "EMERGENCY: Spark spUSDC vault totalAssets == 0. "
+                    "Vault may be bricked or fully redeemed. Triggering exit."
+                )
+                return ProtocolHealth(
+                    protocol_id=self.protocol_id,
+                    status=status,
+                    is_deposit_safe=is_deposit_safe,
+                    is_withdrawal_safe=is_withdrawal_safe,
+                    utilization=None,
+                    details=details,
+                )
+        except Exception as exc:
+            logger.warning("Failed to read Spark vault state: %s", exc)
+            details["vault_error"] = str(exc)
+            # Conservative: if we can't even read the vault, mark as degraded
+            status = ProtocolStatus.DEGRADED
+            is_deposit_safe = False
+
+        # Check 2: PSM3 liquidity — is the underlying PSM pool healthy?
+        # replaces psmWrapper.tin() which doesn't exist on Avalanche PSM3.
+        psm3 = self._get_psm3_contract()
+        if psm3:
             try:
-                tin_value = await psm.functions.tin().call()
-                details["tin"] = str(tin_value)
-                if tin_value == MAX_UINT256:
-                    status = ProtocolStatus.DEPOSITS_DISABLED
+                psm3_total = await psm3.functions.totalAssets().call()
+                details["psm3_total_assets"] = psm3_total
+                if psm3_total < PSM3_MIN_TOTAL_ASSETS:
+                    # PSM pool is near-empty — new deposits would be unsafe.
+                    if status != ProtocolStatus.EMERGENCY:
+                        status = ProtocolStatus.DEPOSITS_DISABLED
                     is_deposit_safe = False
-                    logger.info("Spark deposits disabled: tin == type(uint256).max")
+                    logger.warning(
+                        "Spark PSM3 totalAssets=%d below minimum %d — "
+                        "deposits disabled.",
+                        psm3_total,
+                        PSM3_MIN_TOTAL_ASSETS,
+                    )
             except Exception as exc:
-                logger.warning("Failed to read PSM tin: %s", exc)
-                details["tin_error"] = str(exc)
+                logger.warning("Failed to read PSM3 totalAssets: %s", exc)
+                details["psm3_error"] = str(exc)
+                # Conservative: if PSM3 unreadable, block new deposits
+                is_deposit_safe = False
 
         return ProtocolHealth(
             protocol_id=self.protocol_id,

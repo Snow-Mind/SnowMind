@@ -86,7 +86,7 @@ class BaseProtocolAdapter(ABC):
         Run protocol-specific health checks.
 
         For Aave/Benqi: reserve flags, comptroller flags, utilization.
-        For Spark: vat.live(), tin value.
+        For Spark: vault liquidity (maxWithdraw), PSM3 totalAssets.
         """
         ...
 

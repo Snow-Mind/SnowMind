@@ -61,8 +61,7 @@ class Settings(BaseSettings):
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
     # ── Spark-specific addresses ─────────────────────────────
-    SPARK_PSM_WRAPPER: str = ""  # PSM wrapper for tin() reads — set via env
-    SPARK_VAT: str = ""  # MakerDAO vat for live() check — set via env
+    SPARK_PSM3: str = ""  # PSM3 on Avalanche — for totalAssets() liquidity check
 
     # ── Benqi-specific addresses ─────────────────────────────
     BENQI_COMPTROLLER: str = ""  # Comptroller for pause flag checks — set via env
