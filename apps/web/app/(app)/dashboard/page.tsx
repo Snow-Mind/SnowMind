@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  TrendingUp,
   AlertCircle,
   RefreshCw,
   BarChart3,
@@ -89,7 +88,6 @@ export default function DashboardPage() {
   } = usePortfolio(address);
 
   const {
-    data: rebalanceData,
     isLoading: rebalanceLoading,
   } = useRebalanceStatus(address);
 

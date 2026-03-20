@@ -1,25 +1,43 @@
-"""Aave V3 protocol adapter — Avalanche mainnet."""
+"""
+Aave V3 protocol adapter — Avalanche C-Chain mainnet.
 
+APY Source: getReserveData(USDC).currentLiquidityRate (RAY = 1e27 → annualized)
+Health:     Reserve config bitmap — is_active, is_frozen, is_paused flags
+Utilization: 1 - (usdc.balanceOf(aToken) / aToken.totalSupply())
+"""
+
+import asyncio
 import logging
 import time
 from decimal import Decimal
-
-import httpx
-from web3.contract import AsyncContract
+from typing import Any
 
 from app.core.config import get_settings
-from .base import BaseProtocolAdapter, ProtocolRate, TransactionCalldata, get_shared_async_web3
+from app.core.rpc import get_web3
+from .base import (
+    BaseProtocolAdapter,
+    ProtocolHealth,
+    ProtocolRate,
+    ProtocolStatus,
+    TransactionCalldata,
+)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("snowmind.protocols.aave")
 
-# ── Mainnet addresses ───────────────────────────────────────────────
-_AAVE_V3_POOL_MAINNET = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-_USDC_MAINNET = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+# ── Constants ────────────────────────────────────────────────────────────────
 
-# DefiLlama pool UUID for Aave V3 USDC on Avalanche
-_DEFILLAMA_AAVE_POOL = "c4b05318-88af-4536-a834-f5fc8940d2d3"
+RAY = Decimal("1e27")
+SECONDS_PER_YEAR = Decimal("31536000")  # 365 × 86400
 
-# ── Minimal ABI slices ──────────────────────────────────────────────
+# Reserve configuration bitmap bit positions (Aave V3)
+# See: https://github.com/aave/aave-v3-core/blob/master/contracts/protocol/libraries/configuration/ReserveConfiguration.sol
+LTV_MASK = (1 << 16) - 1
+IS_ACTIVE_BIT = 56
+IS_FROZEN_BIT = 57
+IS_PAUSED_BIT = 60
+
+# ── Minimal ABI slices ──────────────────────────────────────────────────────
+
 AAVE_POOL_ABI = [
     {
         "name": "getReserveData",
@@ -74,7 +92,7 @@ AAVE_POOL_ABI = [
     },
 ]
 
-_ERC20_BALANCE_ABI = [
+ERC20_ABI = [
     {
         "name": "balanceOf",
         "type": "function",
@@ -92,149 +110,207 @@ _ERC20_BALANCE_ABI = [
 ]
 
 
+def _parse_reserve_config(config_data: int) -> dict[str, bool]:
+    """Parse the Aave V3 reserve configuration bitmap into boolean flags."""
+    return {
+        "is_active": bool((config_data >> IS_ACTIVE_BIT) & 1),
+        "is_frozen": bool((config_data >> IS_FROZEN_BIT) & 1),
+        "is_paused": bool((config_data >> IS_PAUSED_BIT) & 1),
+    }
+
+
+def ray_to_apy(current_liquidity_rate: int) -> Decimal:
+    """
+    Convert Aave V3 currentLiquidityRate (RAY) to annual percentage yield.
+
+    Aave uses per-second compounding:
+    APY = (1 + rate / SECONDS_PER_YEAR) ^ SECONDS_PER_YEAR - 1
+    """
+    deposit_apr = Decimal(str(current_liquidity_rate)) / RAY
+    apy = (1 + deposit_apr / SECONDS_PER_YEAR) ** SECONDS_PER_YEAR - 1
+    return apy
+
+
 class AaveV3Adapter(BaseProtocolAdapter):
+    """Aave V3 lending pool adapter for USDC on Avalanche C-Chain."""
+
     protocol_id = "aave_v3"
     name = "Aave V3"
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.w3 = get_shared_async_web3()
         self.pool_address = settings.AAVE_V3_POOL
         self.usdc_address = settings.USDC_ADDRESS
-        self.pool: AsyncContract = self.w3.eth.contract(
-            address=self.w3.to_checksum_address(self.pool_address),
+
+    def _get_pool_contract(self) -> Any:
+        """Get pool contract using current active RPC provider."""
+        w3 = get_web3()
+        return w3.eth.contract(
+            address=w3.to_checksum_address(self.pool_address),
             abi=AAVE_POOL_ABI,
         )
 
-    # ── Rate reading ────────────────────────────────────────────────
+    def _get_erc20_contract(self, address: str) -> Any:
+        """Get an ERC20 contract instance."""
+        w3 = get_web3()
+        return w3.eth.contract(
+            address=w3.to_checksum_address(address),
+            abi=ERC20_ABI,
+        )
+
+    async def _get_reserve_data(self) -> tuple:
+        """Fetch reserve data for USDC from the Aave V3 Pool."""
+        w3 = get_web3()
+        pool = self._get_pool_contract()
+        return await pool.functions.getReserveData(
+            w3.to_checksum_address(self.usdc_address)
+        ).call()
+
+    # ── Rate reading ────────────────────────────────────────────────────
 
     async def get_rate(self) -> ProtocolRate:
-        """Read live currentLiquidityRate from the Aave V3 Pool contract.
-        
-        Falls back to DefiLlama mainnet rate when on-chain call fails (e.g. Fuji testnet).
         """
-        try:
-            reserve_data = await self.pool.functions.getReserveData(
-                self.w3.to_checksum_address(self.usdc_address)
-            ).call()
+        Read live currentLiquidityRate from the Aave V3 Pool contract.
 
-            RAY = Decimal("1e27")
-            SECONDS_PER_YEAR = Decimal("31557600")
+        On-chain data is authoritative. DefiLlama is NOT used as a fallback
+        for rate reads — it's only a soft cross-validation signal.
+        """
+        reserve_data = await self._get_reserve_data()
 
-            liquidity_rate = Decimal(str(reserve_data[2])) / RAY
-            apy = (1 + liquidity_rate / SECONDS_PER_YEAR) ** SECONDS_PER_YEAR - 1
+        current_liquidity_rate = reserve_data[2]
+        apy = ray_to_apy(current_liquidity_rate)
 
-            atoken_address = reserve_data[8]
+        atoken_address = reserve_data[8]
 
-            return ProtocolRate(
-                protocol_id=self.protocol_id,
-                apy=apy,
-                tvl_usd=await self._get_tvl(atoken_address),
-                utilization_rate=None,
-                fetched_at=time.time(),
-            )
-        except Exception as exc:
-            logger.debug(
-                "Aave V3 on-chain read failed: %s — falling back to DefiLlama", exc,
-            )
-            return await self._fetch_defillama_rate()
-
-    async def _fetch_defillama_rate(self) -> ProtocolRate:
-        """Fetch live Aave V3 Avalanche USDC rate from DefiLlama yield API."""
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # Use /pools endpoint which is more reliable than /chart
-                resp = await client.get("https://yields.llama.fi/pools")
-                resp.raise_for_status()
-                data = resp.json()
-
-            pools = data.get("data") or []
-            # Find Aave V3 USDC on Avalanche
-            aave_pool = next(
-                (p for p in pools
-                 if p.get("pool") == _DEFILLAMA_AAVE_POOL
-                 or (p.get("project") == "aave-v3"
-                     and p.get("chain") == "Avalanche"
-                     and "USDC" in (p.get("symbol") or ""))),
-                None,
-            )
-            if not aave_pool:
-                raise ValueError("Aave V3 USDC pool not found on DefiLlama")
-
-            apy_pct = aave_pool.get("apy", aave_pool.get("apyBase", 0))
-            apy = Decimal(str(apy_pct)) / Decimal("100")
-            tvl = Decimal(str(aave_pool.get("tvlUsd", 0)))
-
-            logger.info("Aave V3 rate from DefiLlama: %.2f%%", float(apy * 100))
-            return ProtocolRate(
-                protocol_id=self.protocol_id,
-                apy=apy,
-                tvl_usd=tvl,
-                utilization_rate=None,
-                fetched_at=time.time(),
-            )
-        except Exception as exc:
-            logger.debug("DefiLlama fallback also failed: %s — returning 0 APY", exc)
-            return ProtocolRate(
-                protocol_id=self.protocol_id,
-                apy=Decimal("0"),
-                tvl_usd=Decimal("0"),
-                utilization_rate=None,
-                fetched_at=time.time(),
-            )
-
-    async def _get_tvl(self, atoken_address: str) -> Decimal:
-        atoken = self.w3.eth.contract(
-            address=self.w3.to_checksum_address(atoken_address),
-            abi=_ERC20_BALANCE_ABI,
-        )
+        # TVL = totalSupply of aToken (aTokens are 1:1 with underlying)
+        atoken = self._get_erc20_contract(atoken_address)
         total_supply = await atoken.functions.totalSupply().call()
-        return Decimal(str(total_supply)) / Decimal("1e6")  # USDC 6 decimals
+        tvl = Decimal(str(total_supply)) / Decimal("1e6")  # USDC 6 decimals
 
-    # ── Calldata builders ───────────────────────────────────────────
+        # Utilization = 1 - (USDC cash in aToken / aToken totalSupply)
+        w3 = get_web3()
+        usdc_contract = self._get_erc20_contract(self.usdc_address)
+        usdc_cash = await usdc_contract.functions.balanceOf(
+            w3.to_checksum_address(atoken_address)
+        ).call()
+
+        utilization = Decimal("0")
+        if total_supply > 0:
+            utilization = Decimal("1") - (
+                Decimal(str(usdc_cash)) / Decimal(str(total_supply))
+            )
+
+        return ProtocolRate(
+            protocol_id=self.protocol_id,
+            apy=apy,
+            effective_apy=apy,  # Aave: effective = raw (no adjustments)
+            tvl_usd=tvl,
+            utilization_rate=utilization,
+            fetched_at=time.time(),
+        )
+
+    # ── Health checks ───────────────────────────────────────────────────
+
+    async def get_health(self) -> ProtocolHealth:
+        """
+        Check Aave V3 reserve health.
+
+        Reads the reserve configuration bitmap for:
+        - is_active: reserve is accepting deposits/withdrawals
+        - is_frozen: reserve is NOT accepting new deposits (withdrawals OK)
+        - is_paused: reserve is fully paused
+        """
+        reserve_data = await self._get_reserve_data()
+        config_raw = reserve_data[0]
+        flags = _parse_reserve_config(config_raw)
+
+        is_active = flags["is_active"]
+        is_frozen = flags["is_frozen"]
+        is_paused = flags["is_paused"]
+
+        # Determine deposit/withdrawal safety
+        is_deposit_safe = is_active and not is_frozen and not is_paused
+        is_withdrawal_safe = is_active and not is_paused
+
+        # Determine overall status
+        if is_paused or not is_active:
+            status = ProtocolStatus.DEPOSITS_DISABLED
+        elif is_frozen:
+            status = ProtocolStatus.DEPOSITS_DISABLED
+        else:
+            status = ProtocolStatus.HEALTHY
+
+        # Check utilization
+        rate = await self.get_rate()
+        if rate.utilization_rate is not None and rate.utilization_rate > Decimal("0.90"):
+            status = ProtocolStatus.HIGH_UTILIZATION
+            is_deposit_safe = False  # Exclude from new deposits, withdrawals still OK
+
+        return ProtocolHealth(
+            protocol_id=self.protocol_id,
+            status=status,
+            is_deposit_safe=is_deposit_safe,
+            is_withdrawal_safe=is_withdrawal_safe,
+            utilization=rate.utilization_rate,
+            details={
+                "is_active": is_active,
+                "is_frozen": is_frozen,
+                "is_paused": is_paused,
+                "tvl_usd": str(rate.tvl_usd),
+            },
+        )
+
+    # ── Balance reading ─────────────────────────────────────────────────
+
+    async def get_balance(self, user_address: str) -> int:
+        """Returns the user's aToken balance (= underlying USDC, 6 decimals)."""
+        reserve_data = await self._get_reserve_data()
+        atoken_address = reserve_data[8]
+        w3 = get_web3()
+        atoken = self._get_erc20_contract(atoken_address)
+        return await atoken.functions.balanceOf(
+            w3.to_checksum_address(user_address)
+        ).call()
+
+    async def get_shares(self, user_address: str) -> int:
+        """Aave aTokens are 1:1 with underlying, so shares = balance."""
+        return await self.get_balance(user_address)
+
+    # ── Calldata builders ───────────────────────────────────────────────
 
     def build_supply_calldata(
-        self, asset: str, amount: int, on_behalf_of: str
+        self, amount: int, on_behalf_of: str
     ) -> TransactionCalldata:
-        data = self.pool.encode_abi(
+        """Build Aave V3 supply(asset, amount, onBehalfOf, referralCode=0) calldata."""
+        w3 = get_web3()
+        pool = self._get_pool_contract()
+        data = pool.encode_abi(
             "supply",
             args=[
-                self.w3.to_checksum_address(asset),
+                w3.to_checksum_address(self.usdc_address),
                 amount,
-                self.w3.to_checksum_address(on_behalf_of),
+                w3.to_checksum_address(on_behalf_of),
                 0,  # referralCode
             ],
         )
         return TransactionCalldata(to=self.pool_address, data=data, value=0)
 
     def build_withdraw_calldata(
-        self, asset: str, amount: int, to: str
+        self, shares_or_amount: int, to: str
     ) -> TransactionCalldata:
-        data = self.pool.encode_abi(
+        """
+        Build Aave V3 withdraw(asset, amount, to) calldata.
+
+        For full withdrawal, pass amount = 2**256 - 1 (MaxUint256).
+        """
+        w3 = get_web3()
+        pool = self._get_pool_contract()
+        data = pool.encode_abi(
             "withdraw",
             args=[
-                self.w3.to_checksum_address(asset),
-                amount,  # use 2**256-1 for full withdrawal
-                self.w3.to_checksum_address(to),
+                w3.to_checksum_address(self.usdc_address),
+                shares_or_amount,  # use 2**256 - 1 for full withdrawal
+                w3.to_checksum_address(to),
             ],
         )
         return TransactionCalldata(to=self.pool_address, data=data, value=0)
-
-    # ── Balance ─────────────────────────────────────────────────────
-
-    async def get_user_balance(self, user_address: str, asset: str) -> int:
-        try:
-            reserve_data = await self.pool.functions.getReserveData(
-                self.w3.to_checksum_address(self.usdc_address)
-            ).call()
-        except Exception:
-            return 0
-        atoken_address = reserve_data[8]
-
-        atoken = self.w3.eth.contract(
-            address=self.w3.to_checksum_address(atoken_address),
-            abi=_ERC20_BALANCE_ABI,
-        )
-        return await atoken.functions.balanceOf(
-            self.w3.to_checksum_address(user_address)
-        ).call()

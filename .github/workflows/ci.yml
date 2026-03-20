@@ -44,9 +44,9 @@ jobs:
         env:
           NEXT_PUBLIC_PRIVY_APP_ID: "stub-privy-id"
           NEXT_PUBLIC_ZERODEV_PROJECT_ID: "stub-zerodev-id"
-          NEXT_PUBLIC_AVALANCHE_RPC_URL: "https://api.avax-test.network/ext/bc/C/rpc"
+          NEXT_PUBLIC_AVALANCHE_RPC_URL: "https://api.avax.network/ext/bc/C/rpc"
           NEXT_PUBLIC_BACKEND_URL: "https://stub-backend.railway.app"
-          NEXT_PUBLIC_CHAIN_ID: "43113"
+          NEXT_PUBLIC_CHAIN_ID: "43114"
 
   test-backend:
     name: Test Backend

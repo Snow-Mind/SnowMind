@@ -30,9 +30,11 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
 import { api } from "@/lib/api-client";
-import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG, CHAIN } from "@/lib/constants";
+import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG, CHAIN, ACTIVE_PROTOCOLS, type ProtocolId } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
+import { AllocationSliders } from "@/components/dashboard/AllocationSliders";
+import { YieldProjection } from "@/components/dashboard/YieldProjection";
 import {
   createSmartAccount,
   approveAllProtocols,
@@ -41,6 +43,9 @@ import {
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
+
+type ActiveProtocolId = "aave" | "benqi" | "spark";
+const ALLOCATION_PROTOCOLS: ActiveProtocolId[] = ["aave", "benqi", "spark"];
 
 const DIVERSIFICATION_OPTIONS: {
   value: DiversificationPreference;
@@ -118,6 +123,13 @@ const PHASE_LABELS: Record<ActivationPhase, string> = {
 
 // Multi-step form: 1) Account  2) Strategy  3) Deposit  4) Activate
 type FormStep = "account" | "strategy" | "deposit" | "activate";
+const ALLOCATION_THRESHOLD_USDC = 10_000;
+
+function normalizeProtocolId(protocolId: string): ProtocolId | null {
+  if (protocolId === "aave_v3") return "aave";
+  if (ACTIVE_PROTOCOLS.includes(protocolId as ProtocolId)) return protocolId as ProtocolId;
+  return null;
+}
 
 // All protocols available for user selection
 const ALL_PROTOCOLS = Object.values(PROTOCOL_CONFIG);
@@ -136,12 +148,12 @@ export default function OnboardingPage() {
 
   // Multi-step form state
   const isAccountReady = smartAccount.setupStep === "ready" && !!smartAccountAddress;
-  const [formStep, setFormStep] = useState<FormStep>(isAccountReady ? "strategy" : "account");
+  const [formStep, setFormStep] = useState<FormStep>(isAccountReady ? "deposit" : "account");
 
   // Keep formStep in sync with account readiness
   useEffect(() => {
     if (isAccountReady && formStep === "account") {
-      setFormStep("strategy");
+      setFormStep("deposit");
     }
   }, [isAccountReady, formStep]);
 
@@ -149,6 +161,11 @@ export default function OnboardingPage() {
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
     () => new Set(ALL_PROTOCOLS.map((p) => p.id)),
   );
+  const [allocationCaps, setAllocationCaps] = useState<Record<ActiveProtocolId, number>>({
+    aave: 50,
+    benqi: 40,
+    spark: 100,
+  });
 
   // Diversification preference — defaults to balanced
   const [diversificationPref, setDiversificationPref] =
@@ -182,7 +199,7 @@ export default function OnboardingPage() {
   const eoaBalanceNum = parseFloat(eoaBalance);
   const parsedAmount = parseFloat(depositAmount);
   const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 100 && parsedAmount <= eoaBalanceNum;
-  const hasWalletFunds = eoaBalanceNum >= 100;
+  const needsAllocationStep = isValidAmount && parsedAmount >= ALLOCATION_THRESHOLD_USDC;
 
   // Best APY from selected protocols (for now, show Benqi APY as highest)
   const bestApy = (() => {
@@ -194,6 +211,59 @@ export default function OnboardingPage() {
 
   const selectedCount = selectedProtocols.size;
   const yearlyEarning = !isNaN(parsedAmount) && parsedAmount > 0 ? parsedAmount * (bestApy / 100) : 0;
+
+  const normalizedRateRows = (protocolRates ?? [])
+    .map((row) => {
+      const normalizedProtocolId = normalizeProtocolId(row.protocolId);
+      if (!normalizedProtocolId) return null;
+      return {
+        ...row,
+        normalizedProtocolId,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
+    .filter((row) => ACTIVE_PROTOCOLS.includes(row.normalizedProtocolId));
+
+  const activeRateRows = normalizedRateRows.filter((row) => row.isActive && !row.isComingSoon);
+  const topProtocolByApy = activeRateRows
+    .slice()
+    .sort((a, b) => b.currentApy - a.currentApy)[0]?.normalizedProtocolId;
+
+  const allocationRatios: Record<ActiveProtocolId, number> = {
+    aave: allocationCaps.aave / 100,
+    benqi: allocationCaps.benqi / 100,
+    spark: allocationCaps.spark / 100,
+  };
+
+  const projectionRows = ALLOCATION_PROTOCOLS.map((pid) => {
+    const rateRow = normalizedRateRows.find((row) => row.normalizedProtocolId === pid);
+    const allocationUsd = parsedAmount > 0 ? parsedAmount * allocationRatios[pid] : 0;
+    return {
+      protocolId: pid,
+      effectiveApy: rateRow?.currentApy ?? 0,
+      allocation: allocationUsd,
+    };
+  }).filter((row) => row.allocation > 0 || row.effectiveApy > 0);
+
+  const projectedCustomApy = projectionRows.reduce((sum, row) => {
+    if (!parsedAmount || parsedAmount <= 0) return 0;
+    return sum + (row.allocation / parsedAmount) * row.effectiveApy;
+  }, 0);
+  const topProtocolApy = topProtocolByApy
+    ? normalizedRateRows.find((row) => row.normalizedProtocolId === topProtocolByApy)?.currentApy ?? 0
+    : 0;
+  const yearlyOpportunityCost =
+    needsAllocationStep && parsedAmount > 0
+      ? Math.max(0, (topProtocolApy - projectedCustomApy) * parsedAmount)
+      : 0;
+
+  const sliderCaps: Record<ProtocolId, number> = {
+    aave: allocationCaps.aave,
+    benqi: allocationCaps.benqi,
+    spark: allocationCaps.spark,
+    aave_v3: allocationCaps.aave,
+    euler_v2: 0,
+  };
 
   // Poll USDC balance of user's EOA wallet
   useEffect(() => {
@@ -239,6 +309,11 @@ export default function OnboardingPage() {
     if (activateGuardRef.current) return;
     activateGuardRef.current = true;
     setActivating(true);
+
+    const effectiveSelectedProtocols =
+      !needsAllocationStep && topProtocolByApy
+        ? new Set<string>([topProtocolByApy, topProtocolByApy === "aave" ? "aave_v3" : topProtocolByApy])
+        : selectedProtocols;
 
     const amountWei = parseUnits(parsedAmount.toFixed(6), 6);
 
@@ -310,11 +385,10 @@ export default function OnboardingPage() {
       // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
       // and sets max USDC approvals so the optimizer can deposit into any protocol.
       setActivationPhase("approving-protocols");
-      const approvalResult = await approveAllProtocols(kernelClient, {
+      await approveAllProtocols(kernelClient, {
         USDC: CONTRACTS.USDC,
         AAVE_POOL: CONTRACTS.AAVE_POOL,
         BENQI_POOL: CONTRACTS.BENQI_POOL,
-        EULER_VAULT: CONTRACTS.EULER_VAULT,
         SPARK_VAULT: CONTRACTS.SPARK_VAULT,
       });
       toast.success("Smart account deployed on-chain!");
@@ -323,27 +397,35 @@ export default function OnboardingPage() {
       // even if backend session-key automation takes time or fails validation.
       const liveRates = protocolRates ?? await api.getCurrentRates();
       const candidateProtocols = liveRates
-        .filter((r) => selectedProtocols.has(r.protocolId))
+        .filter((r) => {
+          const normalizedProtocolId = normalizeProtocolId(r.protocolId);
+          if (!normalizedProtocolId) return false;
+          return effectiveSelectedProtocols.has(r.protocolId) || effectiveSelectedProtocols.has(normalizedProtocolId);
+        })
         .filter((r) => r.isActive && !r.isComingSoon)
-        .filter((r) => ["aave_v3", "benqi", "euler_v2", "spark"].includes(r.protocolId))
+        .filter((r) => ["aave_v3", "benqi", "spark"].includes(r.protocolId))
         .sort((a, b) => b.currentApy - a.currentApy)
-        .map((r) => r.protocolId as "aave_v3" | "benqi" | "euler_v2" | "spark");
+        .map((r) => r.protocolId as "aave_v3" | "benqi" | "spark");
 
-      if (!candidateProtocols.length) {
+      const deploymentCandidates =
+        !needsAllocationStep && topProtocolByApy
+          ? [topProtocolByApy === "aave" ? "aave_v3" : topProtocolByApy] as ("aave_v3" | "benqi" | "spark")[]
+          : candidateProtocols;
+
+      if (!deploymentCandidates.length) {
         throw new Error("No active protocol available for initial deployment")
       }
 
       let deployedProtocol: string | null = null;
       let lastDeployError: string | null = null;
-      for (const protocolId of candidateProtocols) {
+      for (const protocolId of deploymentCandidates) {
         try {
-          const deployResult = await deployInitialToProtocol(
+          await deployInitialToProtocol(
             kernelClient,
             derivedSmartAccountAddress,
             {
               AAVE_POOL: CONTRACTS.AAVE_POOL,
               BENQI_POOL: CONTRACTS.BENQI_POOL,
-              EULER_VAULT: CONTRACTS.EULER_VAULT,
               SPARK_VAULT: CONTRACTS.SPARK_VAULT,
               USDC: CONTRACTS.USDC,
             },
@@ -370,14 +452,13 @@ export default function OnboardingPage() {
         {
           AAVE_POOL: CONTRACTS.AAVE_POOL,
           BENQI_POOL: CONTRACTS.BENQI_POOL,
-          EULER_VAULT: CONTRACTS.EULER_VAULT,
           SPARK_VAULT: CONTRACTS.SPARK_VAULT,
           USDC: CONTRACTS.USDC,
           TREASURY: CONTRACTS.TREASURY,
         },
         {
           maxAmountUSDC: 10_000,
-          durationDays: 30,
+          durationDays: 7,
           maxOpsPerDay: 20,
           userEOA: wallet.address as `0x${string}`,
         },
@@ -393,7 +474,7 @@ export default function OnboardingPage() {
           serializedPermission: sessionKeyResult.serializedPermission,
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
           expiresAt: sessionKeyResult.expiresAt,
-          allowedProtocols: Array.from(selectedProtocols),
+          allowedProtocols: Array.from(effectiveSelectedProtocols),
         },
       });
 
@@ -431,8 +512,8 @@ export default function OnboardingPage() {
   // Step config for the progress bar
   const steps: { id: FormStep; label: string }[] = [
     { id: "account", label: "Account" },
-    { id: "strategy", label: "Strategy" },
     { id: "deposit", label: "Deposit" },
+    ...(needsAllocationStep ? [{ id: "strategy" as const, label: "Allocation" }] : []),
     { id: "activate", label: "Activate" },
   ];
 
@@ -589,7 +670,7 @@ export default function OnboardingPage() {
                   </div>
 
                   <button
-                    onClick={() => setFormStep("strategy")}
+                    onClick={() => setFormStep("deposit")}
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031]"
                   >
                     Continue
@@ -601,7 +682,7 @@ export default function OnboardingPage() {
           )}
 
           {/* ─── Step 2: Strategy ─── */}
-          {formStep === "strategy" && !activated && (
+          {formStep === "strategy" && !activated && needsAllocationStep && (
             <motion.div
               key="step-strategy"
               initial={{ opacity: 0, x: 20 }}
@@ -619,8 +700,12 @@ export default function OnboardingPage() {
               </div>
 
               <p className="text-xs text-[#8A837C]">
-                Select which lending protocols your agent can allocate funds to.
+                Deposits at or above $10,000 can tune allocation caps. Your optimizer still enforces protocol safety checks.
               </p>
+
+              <div className="rounded-lg border border-[#E8E2DA] bg-[#F5F0EB] px-3 py-2.5 text-[11px] text-[#5C5550]">
+                Fee: Free (beta)
+              </div>
 
               {/* Best APY summary */}
               <div className="flex items-center justify-between rounded-lg bg-[#F5F0EB] px-3 py-2.5">
@@ -749,6 +834,32 @@ export default function OnboardingPage() {
                 </div>
               </div>
 
+              <div className="space-y-3 rounded-xl border border-[#E8E2DA] bg-[#1A1715] p-4">
+                <AllocationSliders
+                  totalBalance={parsedAmount > 0 ? parsedAmount : 0}
+                  currentCaps={sliderCaps}
+                  onCapsChange={(caps) =>
+                    setAllocationCaps({
+                      aave: caps.aave,
+                      benqi: caps.benqi,
+                      spark: caps.spark,
+                    })
+                  }
+                />
+                <YieldProjection
+                  totalBalance={parsedAmount > 0 ? parsedAmount : 0}
+                  protocolApys={projectionRows}
+                  isFeeExempt
+                  isLoading={!protocolRates}
+                />
+              </div>
+
+              {yearlyOpportunityCost > 0.01 && topProtocolByApy && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                  You&apos;re leaving about ${yearlyOpportunityCost.toFixed(2)}/yr versus routing fully to the current top APY protocol.
+                </div>
+              )}
+
               <div className="flex gap-3">
                 <button
                   onClick={() => setFormStep("account")}
@@ -757,7 +868,7 @@ export default function OnboardingPage() {
                   Back
                 </button>
                 <button
-                  onClick={() => setFormStep("deposit")}
+                  onClick={() => setFormStep("activate")}
                   disabled={selectedCount === 0}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                 >
@@ -790,6 +901,10 @@ export default function OnboardingPage() {
                 Choose how much USDC to deposit. It will be transferred from your wallet
                 and deployed to earn yield automatically.
               </p>
+
+              <div className="rounded-lg border border-[#E8E2DA] bg-[#F5F0EB] px-3 py-2.5 text-[11px] text-[#5C5550]">
+                Deposits under $10,000 skip allocation setup and auto-route to the highest APY market.
+              </div>
 
               <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
                 <span className="text-sm font-medium text-[#5C5550]">$</span>
@@ -825,13 +940,13 @@ export default function OnboardingPage() {
 
               <div className="flex gap-3">
                 <button
-                  onClick={() => setFormStep("strategy")}
+                  onClick={() => setFormStep("account")}
                   className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
                 >
                   Back
                 </button>
                 <button
-                  onClick={() => setFormStep("activate")}
+                  onClick={() => setFormStep(needsAllocationStep ? "strategy" : "activate")}
                   disabled={!isValidAmount}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                 >
@@ -943,6 +1058,10 @@ export default function OnboardingPage() {
                         <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">{bestApy.toFixed(2)}%</p>
                       </div>
                       <div>
+                        <p className="text-[10px] text-[#8A837C]">Fee</p>
+                        <p className="mt-0.5 text-xs font-semibold text-[#059669]">Free (beta)</p>
+                      </div>
+                      <div>
                         <p className="text-[10px] text-[#8A837C]">You&apos;ll earn /per year</p>
                         <p className="mt-0.5 font-mono text-sm font-semibold text-[#059669]">${yearlyEarning.toFixed(2)} USDC</p>
                       </div>
@@ -953,9 +1072,15 @@ export default function OnboardingPage() {
                     </div>
                   </div>
 
+                  {!needsAllocationStep && topProtocolByApy && (
+                    <div className="rounded-lg border border-[#E8E2DA] bg-[#F5F0EB] px-3 py-2.5 text-xs text-[#5C5550]">
+                      Auto-route enabled: this deposit will start in the highest APY market ({topProtocolByApy.toUpperCase()}).
+                    </div>
+                  )}
+
                   <div className="flex gap-3">
                     <button
-                      onClick={() => setFormStep("deposit")}
+                      onClick={() => setFormStep(needsAllocationStep ? "strategy" : "deposit")}
                       className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
                     >
                       Back

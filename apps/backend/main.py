@@ -116,9 +116,8 @@ async def on_startup() -> None:
     if settings.SUPABASE_URL:
         get_supabase()
     logger.info(
-        "%s v1.0.0 started (testnet=%s, debug=%s)",
+        "%s v1.0.0 started (chain=43114 mainnet, debug=%s)",
         settings.APP_NAME,
-        settings.IS_TESTNET,
         settings.DEBUG,
     )
 
@@ -165,7 +164,7 @@ def _validate_environment() -> None:
     if settings.SUPABASE_URL and not settings.SUPABASE_URL.startswith("http"):
         errors.append("SUPABASE_URL must start with http:// or https://")
 
-    # Required secrets: warn if empty (not fatal for testnet dev)
+    # Required secrets: warn if empty
     for var_name in ("JWT_SECRET", "BACKEND_API_KEY", "PRIVY_APP_ID"):
         if not getattr(settings, var_name, ""):
             logger.warning("Environment variable %s is not set", var_name)

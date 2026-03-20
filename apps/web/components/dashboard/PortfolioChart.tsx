@@ -1,6 +1,6 @@
 "use client";
 
-import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import type { Portfolio } from "@snowmind/shared-types";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatUsd } from "@/lib/format";

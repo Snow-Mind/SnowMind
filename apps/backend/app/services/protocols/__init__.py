@@ -1,62 +1,52 @@
-"""Protocol adapter registry."""
+"""Protocol adapter registry — Mainnet beta: Aave V3, Benqi, Spark only."""
 
 import logging
 
 from .base import BaseProtocolAdapter
-from .aave import AaveV3Adapter
-from .euler_v2 import EulerV2Adapter
 
-logger = logging.getLogger("snowmind")
-
-# ── Build adapter map (skip adapters whose contracts aren't configured) ──────
+logger = logging.getLogger("snowmind.protocols")
 
 
 def _build_adapters() -> dict[str, BaseProtocolAdapter]:
+    """Build adapter map. Skip adapters whose contracts aren't configured."""
     adapters: dict[str, BaseProtocolAdapter] = {}
 
-    # Always available — Aave V3 Pool has a default in config
-    adapters["aave_v3"] = AaveV3Adapter()
+    try:
+        from .aave import AaveV3Adapter
+        adapters["aave_v3"] = AaveV3Adapter()
+    except Exception as exc:
+        logger.warning("AaveV3Adapter not loaded: %s", exc)
 
-    # Benqi requires BENQI_POOL to be set
     try:
         from .benqi import BenqiAdapter
         adapters["benqi"] = BenqiAdapter()
-    except (ValueError, Exception) as exc:
-        logger.warning("BenqiAdapter not loaded (BENQI_POOL missing?): %s", exc)
+    except Exception as exc:
+        logger.warning("BenqiAdapter not loaded (BENQI_QIUSDC missing?): %s", exc)
 
-    # Euler V2 — ERC-4626 vault (inactive for beta)
-    adapters["euler_v2"] = EulerV2Adapter()
-
-    # Spark Savings — ERC-4626 vault
     try:
         from .spark import SparkAdapter
         adapters["spark"] = SparkAdapter()
-    except (ValueError, Exception) as exc:
-        logger.warning("SparkAdapter not loaded (SPARK_VAULT missing?): %s", exc)
+    except Exception as exc:
+        logger.warning("SparkAdapter not loaded (SPARK_SPUSDC missing?): %s", exc)
 
     return adapters
 
 
 ALL_ADAPTERS: dict[str, BaseProtocolAdapter] = _build_adapters()
+ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = ALL_ADAPTERS
 
-# Protocols that participate in waterfall allocation (mainnet beta: 3 active)
-ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = {
-    k: v
-    for k, v in ALL_ADAPTERS.items()
-    if k in ("aave_v3", "benqi", "spark")
-}
-
-# Static risk scores — document Section 4.3
+# Risk scores per architecture spec
 RISK_SCORES: dict[str, float] = {
-    "aave_v3":  2.0,   # "Aave: 2 (battle-tested, billions in TVL)"
-    "benqi":    3.0,   # "Benqi: 3 (well-established on Avalanche since 2021)"
-    "euler_v2": 5.0,   # "Euler v2: 5 (newer, add with caution)"
-    "spark":    3.0,   # Spark: 3 (MakerDAO-backed, well-audited)
-    "fluid":    5.5,   # "Fluid: 5.5 (newest, add cautiously)"
+    "aave_v3":  2.0,   # Battle-tested since 2020, $10B+ TVL globally
+    "benqi": 3.0,   # Established on Avalanche since 2021
+    "spark": 3.0,   # MakerDAO-backed, well-audited (Avalanche < 6 months)
 }
 
 
 def get_adapter(protocol_id: str) -> BaseProtocolAdapter:
+    """Get adapter by protocol ID. Raises if not found."""
+    if protocol_id == "aave":
+        protocol_id = "aave_v3"
     adapter = ALL_ADAPTERS.get(protocol_id)
     if not adapter:
         raise ValueError(f"Unknown protocol: {protocol_id}")

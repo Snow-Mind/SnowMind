@@ -1,3 +1,10 @@
+"""
+SnowMind Backend Configuration — Single Source of Truth.
+
+All contract addresses, thresholds, and operational parameters live here.
+Import `settings` from this module everywhere. Never hardcode addresses inline.
+"""
+
 import json
 from functools import lru_cache
 
@@ -30,73 +37,121 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_KEY: str = ""
 
-    # ── Blockchain ───────────────────────────────────────────
-    AVALANCHE_RPC_URL: str = "https://api.avax.network/ext/bc/C/rpc"
-    AVALANCHE_CHAIN_ID: int = 43114  # Mainnet; override to 43113 for Fuji dev
+    # ── Blockchain — RPC (3-tier fallback) ───────────────────
+    AVALANCHE_RPC_URL: str = "https://api.avax.network/ext/bc/C/rpc"  # emergency/public fallback
+    INFURA_RPC_URL: str = ""  # Primary: "https://avalanche-mainnet.infura.io/v3/<KEY>"
+    ALCHEMY_RPC_URL: str = ""  # Fallback: "https://avax-mainnet.g.alchemy.com/v2/<KEY>"
+    AVALANCHE_CHAIN_ID: int = 43114
+
+    # ── Bundler + Smart Account infra ────────────────────────
     PIMLICO_API_KEY: str = ""
+    ALCHEMY_AA_API_KEY: str = ""  # Fallback bundler
     ZERODEV_PROJECT_ID: str = ""
 
-    # Deployed contracts (Avalanche mainnet)
-    REGISTRY_CONTRACT_ADDRESS: str = ""  # Redeploy on mainnet → set via env
+    # ── Deployed contracts (Avalanche C-Chain mainnet) ────────
+    # Only SnowMindRegistry is deployed by us. All protocol contracts are live.
+    REGISTRY_CONTRACT_ADDRESS: str = ""  # Set via env after deployment
     AAVE_V3_POOL: str = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-    BENQI_POOL: str = "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C"
-    EULER_VAULT: str = "0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e"  # Euler V2 USDC vault on Avalanche
-    SPARK_VAULT: str = "0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d"  # Spark spUSDC savings vault on Avalanche
-    USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC
+    BENQI_QIUSDC: str = "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C"
+    SPARK_SPUSDC: str = "0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d"
+    USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC (6 decimals)
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
-    # ── Deployer (testnet only — unused on mainnet) ─────
-    DEPLOYER_PRIVATE_KEY: str = ""
+    # ── Spark-specific addresses ─────────────────────────────
+    SPARK_PSM_WRAPPER: str = ""  # PSM wrapper for tin() reads — set via env
+    SPARK_VAT: str = ""  # MakerDAO vat for live() check — set via env
+
+    # ── Benqi-specific addresses ─────────────────────────────
+    BENQI_COMPTROLLER: str = ""  # Comptroller for pause flag checks — set via env
 
     # ── Auth / Privy ──────────────────────────────────────────
-    PRIVY_APP_ID: str = ""      # From privy.io dashboard
-    PRIVY_APP_SECRET: str = ""  # For server-side Privy API calls
+    PRIVY_APP_ID: str = ""       # From privy.io dashboard
+    PRIVY_APP_SECRET: str = ""   # For server-side Privy API calls
 
     # ── Security ─────────────────────────────────────────────
-    SESSION_KEY_ENCRYPTION_KEY: str = ""  # 32 bytes, hex-encoded
+    # KMS key ID for session key encryption (AES-256-GCM envelope encryption).
+    # The actual encryption key NEVER lives in env vars — it stays in KMS.
+    KMS_KEY_ID: str = ""  # AWS KMS key ID or Supabase Vault key reference
+    SESSION_KEY_ENCRYPTION_KEY: str = ""  # Local fallback only; production should use KMS_KEY_ID
     JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     BACKEND_API_KEY: str = ""  # Frontend → backend auth (fallback)
 
-    # ── Execution Service (Node.js sidecar) ──────────────────
+    # Legacy local deploy key path (not used in production runtime)
+    DEPLOYER_PRIVATE_KEY: str = ""
+
+    # ── Execution Service (Node.js) ───────────────────────────
+    # Canonical target is the dedicated apps/execution service.
+    # Legacy apps/backend/execution_service should be treated as compatibility-only.
     EXECUTION_SERVICE_URL: str = "http://localhost:3001"
     INTERNAL_SERVICE_KEY: str = ""  # Shared secret for backend ↔ executor auth
 
-    # ── Optimizer ────────────────────────────────────────────
-    REBALANCE_CHECK_INTERVAL: int = 1800  # 30 min
-    MAX_PROTOCOL_ALLOCATION: float = 0.60
-    MIN_REBALANCE_THRESHOLD: float = 0.05
-    MIN_BALANCE_USD: float = 5000.0
-    MAX_APY_SANITY_BOUND: float = 0.25  # 25% — reject anything above
-    TWAP_WINDOW_MINUTES: int = 15
-    MIN_REBALANCE_INTERVAL_HOURS: int = 6
+    # ── Scheduler ────────────────────────────────────────────
+    REBALANCE_CHECK_INTERVAL: int = 1800  # 30 minutes (seconds)
+    MIN_REBALANCE_INTERVAL_HOURS: int = 6  # Time gate: skip if < 6h ago
+    SCHEDULER_LOCK_TTL_MINUTES: int = 35  # Lock expires after 35 min
 
-    # ── Waterfall Allocator ────────────────────────────────
-    TVL_CAP_PCT: float = 0.15              # Max 15% of any protocol's TVL
-    MAX_SINGLE_EXPOSURE_PCT: float = 0.40  # Default max per-protocol exposure
-    BASE_BEAT_MARGIN: float = 0.005        # 50 bps above base layer to justify move
-    GAS_COST_ESTIMATE_USD: float = 0.008   # Realistic Avalanche rebalance gas
-    BASE_LAYER_PROTOCOL_ID: str = "spark"  # Safe-harbor base layer (Spark spUSDC for mainnet)
-    MIN_PROTOCOL_TVL_USD: float = 100000.0   # Skip protocols with TVL below $100K
+    # ── Optimizer Thresholds ─────────────────────────────────
+    # All thresholds from ARCHITECTURE.md — change in ONE place only.
+    TVL_CAP_PCT: float = 0.15            # Max 15% of Aave/Benqi pool TVL (Spark: no cap)
+    BEAT_MARGIN: float = 0.001           # 0.1% — skip rebalance if improvement below this
+    MIN_BALANCE_USD: float = 10.0        # Skip rebalance if total balance < $10 (dust)
+    MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (Aave/Benqi only)
+    VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)
+    UTILIZATION_THRESHOLD: float = 0.90  # 90% — exclude from new deposits
+    EXPLOIT_APY_MULTIPLIER: float = 2.0  # 2x yesterday avg + high utilization = exploit
+    STABILITY_SWING_THRESHOLD: float = 0.50  # 50% relative swing in 7 days → skip
+    MIN_PROTOCOL_TVL_USD: float = 100000.0   # $100K minimum TVL for Aave/Benqi
+    CIRCUIT_BREAKER_THRESHOLD: int = 3   # Consecutive RPC failures before excluding
+    GAS_COST_ESTIMATE_USD: float = 0.008  # Realistic Avalanche UserOp gas cost
+    TWAP_SNAPSHOT_COUNT: int = 3         # Number of snapshots for TWAP calculation
+    TWAP_WINDOW_MINUTES: int = 15         # Backward-compatible oracle TWAP window
+    SPARK_DEPLOYMENT_RATIO: float = 0.90  # Spark deploys only 90% (10% instant-redemption buffer)
+
+    # Backward-compatible allocator knob used by legacy routes.
+    # Current architecture is APY-ranked allocation (no fixed base layer).
+    BASE_LAYER_PROTOCOL_ID: str = "aave_v3"
 
     # ── Guarded Launch ─────────────────────────────────────
     MAX_TOTAL_PLATFORM_DEPOSIT_USD: float = 50000.0  # $50K beta cap
 
     # ── Fees ──────────────────────────────────────────────
-    PROFIT_FEE_PCT: float = 0.10           # 10% of profit on withdrawal
-    TREASURY_ADDRESS: str = ""             # SnowMind fee collection address
+    AGENT_FEE_RATE: float = 0.10        # 10% of profit on withdrawal
+    PROFIT_FEE_PCT: float = 0.10         # Deprecated alias for legacy paths
+    TREASURY_ADDRESS: str = ""           # Gnosis Safe multisig for fee collection
 
     # ── Cross-validation / Oracle ────────────────────────────
     DEFILLAMA_BASE_URL: str = "https://yields.llama.fi"
-    RATE_DIVERGENCE_THRESHOLD: float = 0.02  # 2% — halt if diverges
+    RATE_DIVERGENCE_THRESHOLD: float = 0.02  # 2% — soft warning only (never block)
+
+    # ── Monitoring ───────────────────────────────────────────
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+    SENTRY_DSN: str = ""
+    PAYMASTER_LOW_BALANCE_AVAX: float = 10.0  # Alert when < 10 AVAX remaining
 
     # ── Runtime flags ────────────────────────────────────────
+    # Reserved for backward compatibility; production is mainnet-only.
     IS_TESTNET: bool = False
 
     @property
     def pimlico_rpc_url(self) -> str:
-        chain = "avalanche-fuji" if self.IS_TESTNET else "avalanche"
-        return f"https://api.pimlico.io/v2/{chain}/rpc?apikey={self.PIMLICO_API_KEY}"
+        return f"https://api.pimlico.io/v2/avalanche/rpc?apikey={self.PIMLICO_API_KEY}"
+
+    @property
+    def alchemy_aa_rpc_url(self) -> str:
+        """Alchemy Account Abstraction API — fallback bundler."""
+        return f"https://avax-mainnet.g.alchemy.com/v2/{self.ALCHEMY_AA_API_KEY}"
+
+    @property
+    def BENQI_POOL(self) -> str:
+        """Deprecated alias for BENQI_QIUSDC used by legacy code paths."""
+        return self.BENQI_QIUSDC
+
+    @property
+    def SPARK_VAULT(self) -> str:
+        """Deprecated alias for SPARK_SPUSDC used by legacy code paths."""
+        return self.SPARK_SPUSDC
 
     model_config = SettingsConfigDict(
         env_file=".env",

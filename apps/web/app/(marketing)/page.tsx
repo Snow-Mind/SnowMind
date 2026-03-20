@@ -10,7 +10,6 @@ import {
   Shield,
   TrendingUp,
   Eye,
-  ChevronDown,
   Lock,
   ShieldCheck,
   Snowflake,

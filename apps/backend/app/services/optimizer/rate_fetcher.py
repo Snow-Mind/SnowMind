@@ -1,4 +1,14 @@
-"""On-chain APY rate fetcher with TWAP smoothing."""
+"""
+On-chain APY rate fetcher with TWAP smoothing and DB persistence.
+
+TWAP (Time-Weighted Average Price) is used for all allocation decisions:
+  - Buffer: 3 most recent snapshots (taken every 30 minutes)
+  - Cold-start guard: Until 3 snapshots accumulated, use spot rate but flag it
+  - Persistence: Snapshots saved to DB (survives restarts)
+  - Spark: Uses convertToAssets(1e6) daily snapshot delta for APY
+
+DefiLlama is used ONLY as a soft cross-validation signal, NOT as a rate source.
+"""
 
 import asyncio
 import logging
@@ -6,39 +16,27 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
-
-import httpx
+from typing import Any
 
 from app.core.config import get_settings
-from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS
+from app.core.database import get_supabase
+from app.services.protocols import ALL_ADAPTERS
 from app.services.protocols.base import ProtocolRate
 
-logger = logging.getLogger("snowmind")
-
-
-# DefiLlama pool IDs for mainnet Avalanche USDC vaults.
-# Used on testnet so the optimizer makes decisions based on real mainnet APYs
-# while still depositing into mock contracts.
-MAINNET_POOL_IDS: dict[str, str] = {
-    "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",   # Aave V3 Avalanche USDC
-    "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",   # Benqi Avalanche USDC
-    "euler_v2": "e1db168e-7c9d-4285-9d3f-ba83a9ecf105",  # Euler V2 Avalanche USDC
-    "spark":   "e96cbd55-a0a0-446a-89ba-ada6e2991d50",   # Spark Savings Avalanche USDC
-}
+logger = logging.getLogger("snowmind.rate_fetcher")
 
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────
 
 @dataclass
-class _CircuitBreaker:
+class CircuitBreaker:
     """Track consecutive failures per protocol to exclude flaky adapters."""
 
-    MAX_FAILURES: int = 3
     _failures: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
     def record_failure(self, protocol_id: str) -> None:
         self._failures[protocol_id] += 1
-        if self._failures[protocol_id] >= self.MAX_FAILURES:
+        if self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD:
             logger.error(
                 "Circuit OPEN for %s (%d consecutive failures)",
                 protocol_id,
@@ -49,54 +47,144 @@ class _CircuitBreaker:
         self._failures[protocol_id] = 0
 
     def is_open(self, protocol_id: str) -> bool:
-        return self._failures[protocol_id] >= self.MAX_FAILURES
+        return self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD
+
+    def get_failure_count(self, protocol_id: str) -> int:
+        return self._failures[protocol_id]
 
 
-circuit_breaker = _CircuitBreaker()
+circuit_breaker = CircuitBreaker()
 
 
-# ── TWAP ring buffer ─────────────────────────────────────────────────────────
+# ── TWAP Buffer with DB persistence ─────────────────────────────────────────
 
 @dataclass
-class _TWAPBuffer:
-    """Store recent rate samples for time-weighted averaging."""
+class TWAPSnapshot:
+    """A single TWAP snapshot."""
+    protocol_id: str
+    apy: Decimal
+    effective_apy: Decimal
+    tvl_usd: Decimal
+    utilization_rate: Decimal | None
+    fetched_at: float
 
-    _samples: dict[str, list[tuple[float, ProtocolRate]]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
-    window_seconds: float = 900.0  # 15 min default
+
+class TWAPBuffer:
+    """
+    Store recent rate samples for time-weighted averaging.
+
+    Snapshots are persisted to Supabase so TWAP survives restarts.
+    The buffer keeps the N most recent snapshots per protocol (default: 3).
+    """
+
+    def __init__(self, max_snapshots: int = 3) -> None:
+        self.max_snapshots = max_snapshots
+        self._samples: dict[str, list[TWAPSnapshot]] = defaultdict(list)
+        self._loaded_from_db = False
 
     def add(self, rate: ProtocolRate) -> None:
-        now = time.time()
+        """Add a new snapshot and persist to DB."""
+        snapshot = TWAPSnapshot(
+            protocol_id=rate.protocol_id,
+            apy=rate.apy,
+            effective_apy=rate.effective_apy,
+            tvl_usd=rate.tvl_usd,
+            utilization_rate=rate.utilization_rate,
+            fetched_at=rate.fetched_at,
+        )
         buf = self._samples[rate.protocol_id]
-        buf.append((now, rate))
-        # Evict stale samples
-        cutoff = now - self.window_seconds
-        self._samples[rate.protocol_id] = [
-            (t, r) for t, r in buf if t >= cutoff
-        ]
+        buf.append(snapshot)
+        # Keep only the most recent N snapshots
+        if len(buf) > self.max_snapshots:
+            self._samples[rate.protocol_id] = buf[-self.max_snapshots:]
 
-    def get_twap(self, protocol_id: str) -> ProtocolRate | None:
+        # Persist to DB
+        self._persist_snapshot(snapshot)
+
+    def get_twap_effective_apy(self, protocol_id: str) -> Decimal | None:
+        """
+        Get the TWAP of effective APY for a protocol.
+
+        Returns None if no samples available.
+        """
         buf = self._samples.get(protocol_id, [])
         if not buf:
             return None
-        # Simple average of APYs in the window
-        total_apy = sum((r.apy for _, r in buf), Decimal(0))
-        avg_apy = total_apy / len(buf)
-        latest = buf[-1][1]
-        return ProtocolRate(
-            protocol_id=protocol_id,
-            apy=avg_apy,
-            tvl_usd=latest.tvl_usd,
-            utilization_rate=latest.utilization_rate,
-            fetched_at=latest.fetched_at,
-        )
+        total = sum((s.effective_apy for s in buf), Decimal(0))
+        return total / len(buf)
+
+    def get_latest(self, protocol_id: str) -> TWAPSnapshot | None:
+        """Get the most recent snapshot for a protocol."""
+        buf = self._samples.get(protocol_id, [])
+        return buf[-1] if buf else None
+
+    def has_cold_start(self, protocol_id: str) -> bool:
+        """True if fewer than max_snapshots have been collected."""
+        return len(self._samples.get(protocol_id, [])) < self.max_snapshots
 
     def sample_count(self, protocol_id: str) -> int:
         return len(self._samples.get(protocol_id, []))
 
+    def load_from_db(self) -> None:
+        """Load persisted TWAP snapshots from DB on startup."""
+        if self._loaded_from_db:
+            return
+        try:
+            db = get_supabase()
+            for pid in ALL_ADAPTERS:
+                result = (
+                    db.table("twap_snapshots")
+                    .select("*")
+                    .eq("protocol_id", pid)
+                    .order("fetched_at", desc=True)
+                    .limit(self.max_snapshots)
+                    .execute()
+                )
+                if result.data:
+                    # Reverse to chronological order
+                    for row in reversed(result.data):
+                        self._samples[pid].append(TWAPSnapshot(
+                            protocol_id=row["protocol_id"],
+                            apy=Decimal(str(row["apy"])),
+                            effective_apy=Decimal(str(row["effective_apy"])),
+                            tvl_usd=Decimal(str(row["tvl_usd"])),
+                            utilization_rate=(
+                                Decimal(str(row["utilization_rate"]))
+                                if row.get("utilization_rate") is not None
+                                else None
+                            ),
+                            fetched_at=float(row["fetched_at"]),
+                        ))
+                    logger.info(
+                        "Loaded %d TWAP snapshots for %s from DB",
+                        len(result.data),
+                        pid,
+                    )
+            self._loaded_from_db = True
+        except Exception as exc:
+            logger.warning("Failed to load TWAP snapshots from DB: %s", exc)
 
-twap_buffer = _TWAPBuffer()
+    def _persist_snapshot(self, snapshot: TWAPSnapshot) -> None:
+        """Persist a snapshot to DB."""
+        try:
+            db = get_supabase()
+            db.table("twap_snapshots").insert({
+                "protocol_id": snapshot.protocol_id,
+                "apy": str(snapshot.apy),
+                "effective_apy": str(snapshot.effective_apy),
+                "tvl_usd": str(snapshot.tvl_usd),
+                "utilization_rate": str(snapshot.utilization_rate) if snapshot.utilization_rate is not None else None,
+                "fetched_at": snapshot.fetched_at,
+            }).execute()
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist TWAP snapshot for %s: %s",
+                snapshot.protocol_id,
+                exc,
+            )
+
+
+twap_buffer = TWAPBuffer(max_snapshots=get_settings().TWAP_SNAPSHOT_COUNT)
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -104,82 +192,29 @@ twap_buffer = _TWAPBuffer()
 class RateFetcher:
     """Fetch live protocol rates with circuit-breaking and TWAP smoothing."""
 
-    # Cache mainnet APYs for 5 minutes (DefiLlama updates ~every 10 min)
-    _mainnet_cache: dict[str, Decimal] = {}
-    _mainnet_cache_ts: float = 0.0
-    MAINNET_CACHE_TTL = 300.0
-
     def __init__(self) -> None:
         self.settings = get_settings()
-
-    async def _fetch_mainnet_apys(self) -> dict[str, Decimal]:
-        """Fetch real mainnet APYs from DefiLlama for testnet decision-making."""
-        now = time.time()
-        if self._mainnet_cache and (now - self._mainnet_cache_ts) < self.MAINNET_CACHE_TTL:
-            return self._mainnet_cache
-
-        try:
-            pool_ids = set(MAINNET_POOL_IDS.values())
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                results: dict[str, Decimal] = {}
-                for pid, pool_id in MAINNET_POOL_IDS.items():
-                    try:
-                        resp = await client.get(f"https://yields.llama.fi/chart/{pool_id}")
-                        resp.raise_for_status()
-                        data = resp.json()
-                        points = data.get("data") or []
-                        if points:
-                            latest_apy = points[-1].get("apy", points[-1].get("apyBase", 0))
-                            results[pid] = Decimal(str(latest_apy)) / Decimal("100")
-                    except Exception as e:
-                        logger.warning("DefiLlama mainnet fetch failed for %s: %s", pid, e)
-
-                if results:
-                    RateFetcher._mainnet_cache = results
-                    RateFetcher._mainnet_cache_ts = now
-                    logger.info(
-                        "Mainnet APYs from DefiLlama: %s",
-                        {k: f"{float(v)*100:.2f}%" for k, v in results.items()},
-                    )
-                return results
-        except Exception as e:
-            logger.warning("DefiLlama mainnet APY fetch failed: %s", e)
-            return self._mainnet_cache  # Return stale cache on failure
-
-    async def _overlay_mainnet_apys(
-        self, results: dict[str, ProtocolRate]
-    ) -> dict[str, ProtocolRate]:
-        """On testnet, replace mock APYs with real mainnet APYs from DefiLlama."""
-        if not self.settings.IS_TESTNET:
-            return results
-
-        mainnet_apys = await self._fetch_mainnet_apys()
-        if not mainnet_apys:
-            return results
-
-        for pid, rate in results.items():
-            if pid in mainnet_apys:
-                logger.info(
-                    "Testnet APY overlay: %s mock=%.2f%% → mainnet=%.2f%%",
-                    pid, float(rate.apy * 100), float(mainnet_apys[pid] * 100),
-                )
-                results[pid] = ProtocolRate(
-                    protocol_id=pid,
-                    apy=mainnet_apys[pid],
-                    tvl_usd=rate.tvl_usd,
-                    utilization_rate=rate.utilization_rate,
-                    fetched_at=rate.fetched_at,
-                )
-        return results
+        # Ensure DB snapshots are loaded on first use
+        twap_buffer.load_from_db()
 
     async def fetch_all_rates(self) -> dict[str, ProtocolRate]:
-        """Fetch from ALL adapters concurrently (including coming-soon for UI)."""
-        tasks = {}
+        """
+        Fetch from ALL active adapters concurrently.
+
+        For Spark: passes yesterday's convertToAssets snapshot to the adapter.
+        """
+        tasks: dict[str, Any] = {}
         for pid, adapter in ALL_ADAPTERS.items():
             if circuit_breaker.is_open(pid):
                 logger.warning("Skipping %s — circuit breaker open", pid)
                 continue
-            tasks[pid] = adapter.get_rate()
+
+            if pid == "spark":
+                # Spark needs yesterday's convertToAssets snapshot for APY calculation
+                yesterday_snapshot = self._get_spark_yesterday_snapshot()
+                tasks[pid] = adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
+            else:
+                tasks[pid] = adapter.get_rate()
 
         completed = await asyncio.gather(
             *tasks.values(), return_exceptions=True
@@ -194,69 +229,89 @@ class RateFetcher:
                 results[pid] = result
                 circuit_breaker.record_success(pid)
                 twap_buffer.add(result)
-
-        # On testnet, overlay real mainnet APYs for realistic optimizer decisions
-        results = await self._overlay_mainnet_apys(results)
 
         return results
 
     async def fetch_active_rates(self) -> dict[str, ProtocolRate]:
-        """Fetch from ACTIVE adapters only (for waterfall input).
+        """Backward-compatible alias retained for legacy scheduler/routes."""
+        return await self.fetch_all_rates()
 
-        Filters out protocols with TVL below MIN_PROTOCOL_TVL_USD to avoid
-        illiquid or highly-utilized pools.
-        """
-        tasks = {}
-        for pid, adapter in ACTIVE_ADAPTERS.items():
-            if circuit_breaker.is_open(pid):
-                continue
-            tasks[pid] = adapter.get_rate()
-
-        completed = await asyncio.gather(
-            *tasks.values(), return_exceptions=True
-        )
-
-        min_tvl = Decimal(str(self.settings.MIN_PROTOCOL_TVL_USD))
-        results: dict[str, ProtocolRate] = {}
-        for pid, result in zip(tasks.keys(), completed):
-            if isinstance(result, Exception):
-                logger.warning("Rate fetch failed for %s: %s", pid, result)
-                circuit_breaker.record_failure(pid)
-            else:
-                circuit_breaker.record_success(pid)
-                twap_buffer.add(result)
-                # Skip protocols with TVL below minimum (illiquid / high utilization)
-                if result.tvl_usd > Decimal("0") and result.tvl_usd < min_tvl:
-                    logger.warning(
-                        "Skipping %s — TVL $%.0f below minimum $%.0f",
-                        pid, float(result.tvl_usd), float(min_tvl),
-                    )
-                    continue
-                results[pid] = result
-
-        # On testnet, overlay real mainnet APYs for realistic optimizer decisions
-        results = await self._overlay_mainnet_apys(results)
-
-        return results
-
-    def get_twap_rates(self) -> dict[str, ProtocolRate]:
-        """Return TWAP-smoothed rates for all protocols with samples."""
-        rates: dict[str, ProtocolRate] = {}
-        for pid in ACTIVE_ADAPTERS:
-            twap = twap_buffer.get_twap(pid)
-            if twap:
+    def get_twap_effective_apys(self) -> dict[str, Decimal]:
+        """Return TWAP-smoothed effective APYs for all protocols with samples."""
+        rates: dict[str, Decimal] = {}
+        for pid in ALL_ADAPTERS:
+            twap = twap_buffer.get_twap_effective_apy(pid)
+            if twap is not None:
                 rates[pid] = twap
         return rates
 
-    def validate_rate(self, rate: ProtocolRate) -> bool:
-        """Reject rates above the sanity bound (25 % APY)."""
-        max_apy = Decimal(str(self.settings.MAX_APY_SANITY_BOUND))
-        if rate.apy > max_apy:
-            logger.warning(
-                "Rate anomaly: %s APY=%s > bound %s",
-                rate.protocol_id,
-                rate.apy,
-                max_apy,
+    def get_latest_rates(self) -> dict[str, TWAPSnapshot]:
+        """Return the most recent snapshot for each protocol."""
+        latest: dict[str, TWAPSnapshot] = {}
+        for pid in ALL_ADAPTERS:
+            snap = twap_buffer.get_latest(pid)
+            if snap:
+                latest[pid] = snap
+        return latest
+
+    def get_cold_start_protocols(self) -> list[str]:
+        """Return list of protocols still in cold-start (< 3 snapshots)."""
+        return [
+            pid for pid in ALL_ADAPTERS
+            if twap_buffer.has_cold_start(pid) and not circuit_breaker.is_open(pid)
+        ]
+
+    def get_circuit_breaker_failures(self) -> dict[str, int]:
+        """Return failure counts for all protocols (used by health checker)."""
+        return {
+            pid: circuit_breaker.get_failure_count(pid)
+            for pid in ALL_ADAPTERS
+        }
+
+    def _get_spark_yesterday_snapshot(self) -> Decimal | None:
+        """
+        Get yesterday's Spark convertToAssets(1e6) value from DB.
+
+        Used for Spark APY calculation: gross_apy = (today - yesterday) / yesterday × 365
+        """
+        try:
+            db = get_supabase()
+            import datetime
+            yesterday = (
+                datetime.datetime.now(datetime.timezone.utc)
+                - datetime.timedelta(days=1)
+            ).isoformat()
+            result = (
+                db.table("spark_convert_snapshots")
+                .select("convert_to_assets_value")
+                .lte("snapshot_at", yesterday)
+                .order("snapshot_at", desc=True)
+                .limit(1)
+                .execute()
             )
-            return False
-        return True
+            if result.data:
+                return Decimal(str(result.data[0]["convert_to_assets_value"]))
+            return None
+        except Exception as exc:
+            logger.warning("Failed to get Spark yesterday snapshot: %s", exc)
+            return None
+
+    async def save_spark_daily_snapshot(self) -> None:
+        """
+        Save daily Spark convertToAssets(1e6) snapshot for APY calculation.
+
+        Should be called once per day by the scheduler.
+        """
+        try:
+            spark_adapter = ALL_ADAPTERS.get("spark")
+            if not spark_adapter:
+                return
+
+            value = await spark_adapter.get_convert_to_assets_value()
+            db = get_supabase()
+            db.table("spark_convert_snapshots").insert({
+                "convert_to_assets_value": str(value),
+            }).execute()
+            logger.info("Saved Spark convertToAssets snapshot: %d", value)
+        except Exception as exc:
+            logger.warning("Failed to save Spark daily snapshot: %s", exc)

@@ -14,7 +14,7 @@ import {
 import { EXPLORER, PROTOCOL_CONFIG, CONTRACTS, type ProtocolId } from "@/lib/constants";
 import { formatUsd } from "@/lib/format";
 import { toast } from "sonner";
-import type { Portfolio, ProtocolAllocation } from "@snowmind/shared-types";
+import type { Portfolio } from "@snowmind/shared-types";
 import type { SessionKeyStatusResponse } from "@snowmind/shared-types";
 
 interface FundTransparencyProps {

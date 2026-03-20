@@ -34,7 +34,7 @@ class TWAPOracle:
     def __init__(self, db: Client, window_minutes: int | None = None) -> None:
         self._db = db
         settings = get_settings()
-        self.window = window_minutes or settings.TWAP_WINDOW_MINUTES
+        self.window = window_minutes or getattr(settings, "TWAP_WINDOW_MINUTES", 15)
 
     # ── Core TWAP ────────────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ class TWAPOracle:
 
         rows = (
             self._db.table("rate_snapshots")
-            .select("apy, snapshot_at")
+            .select("apy, snapshot_at, fetched_at")
             .eq("protocol_id", protocol_id)
             .gte("snapshot_at", cutoff)
             .order("snapshot_at", desc=False)
@@ -61,7 +61,13 @@ class TWAPOracle:
 
         snapshots: list[tuple[float, Decimal]] = []
         for r in (rows.data or []):
-            ts = datetime.fromisoformat(r["snapshot_at"]).timestamp()
+            ts_raw = r.get("snapshot_at") or r.get("fetched_at")
+            if ts_raw is None:
+                continue
+            if isinstance(ts_raw, (int, float)):
+                ts = float(ts_raw)
+            else:
+                ts = datetime.fromisoformat(str(ts_raw)).timestamp()
             snapshots.append((ts, Decimal(str(r["apy"]))))
 
         if len(snapshots) < 2:

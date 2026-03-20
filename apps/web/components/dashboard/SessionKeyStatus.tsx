@@ -20,12 +20,10 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSessionKey } from "@/hooks/useSessionKey";
 import { toast } from "sonner";
 
-function daysUntil(isoDate: string): number {
+function hoursUntil(isoDate: string): number {
   return Math.max(
     0,
-    Math.floor(
-      (new Date(isoDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-    )
+    Math.floor((new Date(isoDate).getTime() - Date.now()) / (1000 * 60 * 60))
   );
 }
 
@@ -61,8 +59,9 @@ export default function SessionKeyStatus() {
   const authorized = getAuthorizedActions();
 
   const isActive = sk?.isActive ?? false;
-  const daysLeft = sk?.expiresAt ? daysUntil(sk.expiresAt) : 0;
-  const isExpiringSoon = daysLeft <= 5;
+  const hoursLeft = sk?.expiresAt ? hoursUntil(sk.expiresAt) : 0;
+  const daysLeft = Math.floor(hoursLeft / 24);
+  const isExpiringSoon = hoursLeft <= 48;
 
   async function handleRevoke() {
     if (!smartAccountAddress) return;
@@ -202,7 +201,7 @@ export default function SessionKeyStatus() {
             {isExpiringSoon && (
               <AlertTriangle className="mr-1 inline h-3 w-3 text-amber-400" />
             )}
-            {daysLeft} days left
+            {hoursLeft < 48 ? `${hoursLeft}h left` : `${daysLeft} days left`}
           </span>
         </div>
         <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA]/60 bg-[#EDE8E3]/30 px-3 py-2.5">
@@ -217,7 +216,7 @@ export default function SessionKeyStatus() {
       <div className="mt-5 flex gap-2">
         <button className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#E84142]/10 px-3 py-2 text-xs font-medium text-[#E84142] transition-colors hover:bg-[#E84142]/20">
           <RefreshCw className="h-3 w-3" />
-          Renew Key
+          {isExpiringSoon ? "Renew in <48h" : "Renew Key"}
         </button>
         {!showRevokeConfirm ? (
           <button

@@ -14,7 +14,7 @@ import {
 } from "viem";
 
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
-import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER, CHAIN, IS_TESTNET } from "@/lib/constants";
+import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER, CHAIN } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
 
@@ -51,7 +51,7 @@ function friendlyError(err: unknown): string {
   if (msg.includes("zd_getUserOperationGasPrice") || msg.includes("does not exist"))
     return "Gas estimation failed — please try again.";
   if (msg.includes("chainId"))
-    return `Please switch MetaMask to Avalanche ${IS_TESTNET ? 'Fuji' : 'C-Chain'}.`;
+    return "Please switch MetaMask to Avalanche C-Chain.";
   if (msg.includes("insufficient"))
     return "Insufficient USDC balance.";
   // Truncate long messages (raw calldata)

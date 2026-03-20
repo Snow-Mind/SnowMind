@@ -28,7 +28,7 @@ What actually happened.
 
 - **Browser**: (e.g., Chrome 120)
 - **Wallet**: (e.g., MetaMask, Privy email)
-- **Network**: Fuji Testnet / Mainnet
+- **Network**: Avalanche Mainnet (43114)
 - **Smart Account Address**: (if applicable)
 
 ## Screenshots / Logs

@@ -13,16 +13,16 @@ import {
   maxUint256,
   parseUnits,
 } from "viem"
-import { avalancheFuji, avalanche } from "viem/chains"
+import { avalanche } from "viem/chains"
 
-const CHAIN_ID      = Number(process.env.AVALANCHE_CHAIN_ID || 43114)
-const CHAIN         = CHAIN_ID === 43114 ? avalanche : avalancheFuji
+const CHAIN_ID      = 43114
+const CHAIN         = avalanche
 const ENTRYPOINT    = getEntryPoint("0.7")
 const ZERODEV_ID    = process.env.ZERODEV_PROJECT_ID
 const BUNDLER_URL   = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 const PAYMASTER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 
-const EXPLORER_BASE = CHAIN_ID === 43114 ? 'https://snowtrace.io' : 'https://testnet.snowtrace.io'
+const EXPLORER_BASE = 'https://snowtrace.io'
 
 const AAVE_ABI = [
   { name: "supply",   type: "function", stateMutability: "nonpayable",
@@ -49,7 +49,7 @@ const BENQI_ABI = [
     outputs: [{ name: "", type: "uint256" }] },
 ]
 
-// ERC-4626 vault ABI — used by Euler V2 and Spark vaults
+// ERC-4626 vault ABI — used by Spark vault
 const ERC4626_ABI = [
   { name: "deposit", type: "function", stateMutability: "nonpayable",
     inputs: [
@@ -70,6 +70,12 @@ const ERC20_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable",
     inputs: [
       { name: "spender", type: "address" },
+      { name: "amount",  type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }] },
+  { name: "transfer", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
       { name: "amount",  type: "uint256" },
     ],
     outputs: [{ name: "", type: "bool" }] },
@@ -175,6 +181,7 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
 
   return {
     client,
+    permissionAccount,
     permissionAccountAddress: permissionAccount.address,
   }
 }
@@ -182,11 +189,25 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
 function resolveContractKey(protocol, contracts) {
   const map = {
     aave_v3:  "AAVE_POOL",
+    aave:     "AAVE_POOL",
     benqi:    "BENQI_POOL",
-    euler_v2: "EULER_VAULT",
     spark:    "SPARK_VAULT",
   }
   return contracts[map[protocol]] || null
+}
+
+async function resolveKernelOwner(permissionAccount) {
+  if (typeof permissionAccount.getOwner === "function") {
+    const owner = await permissionAccount.getOwner()
+    if (owner) return owner
+  }
+  if (typeof permissionAccount.getOwners === "function") {
+    const owners = await permissionAccount.getOwners()
+    if (Array.isArray(owners) && owners.length > 0) {
+      return owners[0]
+    }
+  }
+  throw new Error("Unable to resolve smart-account owner from on-chain kernel account")
 }
 
 export async function executeRebalance({
@@ -194,7 +215,7 @@ export async function executeRebalance({
   smartAccountAddress,
   withdrawals,   // [{ protocol: "benqi", amountUSDC: 3000, qiTokenAmount: "12345678" }]
   deposits,      // [{ protocol: "aave_v3", amountUSDC: 3000 }]
-  contracts,     // { AAVE_POOL, BENQI_POOL, EULER_VAULT, SPARK_VAULT, USDC, REGISTRY }
+  contracts,     // { AAVE_POOL, BENQI_POOL, SPARK_VAULT, USDC, REGISTRY }
   feeTransfer,   // optional: { to: "0xTreasury", amountUSDC: 50 }
   userTransfer,  // optional: { to: "0xUserEOA", amountUSDC: 9950 }
 }) {
@@ -202,18 +223,24 @@ export async function executeRebalance({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
-  const { client: kernelClient, permissionAccountAddress } = await getKernelClient(serializedPermission, { withPaymaster: true })
+  const {
+    client: kernelClient,
+    permissionAccountAddress,
+    permissionAccount,
+  } = await getKernelClient(serializedPermission, { withPaymaster: true })
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
     throw new Error(
       `Session key/account mismatch: permissionAccount=${permissionAccountAddress} sender=${smartAccountAddress}`,
     )
   }
+
+  const onchainOwner = await resolveKernelOwner(permissionAccount)
   const calls = []
 
   // ── WITHDRAWALS FIRST — ensure funds available before deposits ─────────────
   for (const { protocol, amountUSDC, qiTokenAmount } of withdrawals) {
-    if (protocol === "aave_v3") {
+    if (protocol === "aave_v3" || protocol === "aave") {
       calls.push({
         to: contracts.AAVE_POOL,
         value: 0n,
@@ -234,17 +261,6 @@ export async function executeRebalance({
         data: encodeFunctionData({
           abi: BENQI_ABI, functionName: "redeem",
           args: [BigInt(qiTokenAmount)],
-        }),
-      })
-    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
-      // ERC-4626: redeem(shares, receiver, owner) — use MAX for full exit
-      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
-      calls.push({
-        to: contracts.EULER_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI, functionName: "redeem",
-          args: [shares, smartAccountAddress, smartAccountAddress],
         }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
@@ -273,13 +289,18 @@ export async function executeRebalance({
   }
 
   // ── USER TRANSFER — send remaining funds to user's EOA (atomic with withdrawal) ──
-  if (userTransfer && userTransfer.to && userTransfer.amountUSDC > 0) {
+  if (userTransfer && userTransfer.amountUSDC > 0) {
+    if (userTransfer.to && userTransfer.to.toLowerCase() !== onchainOwner.toLowerCase()) {
+      throw new Error(
+        `User transfer destination mismatch: provided=${userTransfer.to} onchainOwner=${onchainOwner}`,
+      )
+    }
     calls.push({
       to: contracts.USDC,
       value: 0n,
       data: encodeFunctionData({
         abi: ERC20_ABI, functionName: "transfer",
-        args: [userTransfer.to, parseUnits(String(userTransfer.amountUSDC), 6)],
+        args: [onchainOwner, parseUnits(String(userTransfer.amountUSDC), 6)],
       }),
     })
   }
@@ -321,7 +342,7 @@ export async function executeRebalance({
   // ── DEPOSITS SECOND ────────────────────────────────────────────────────────
   for (const { protocol, amountUSDC } of deposits) {
     const amount = parseUnits(String(amountUSDC), 6)
-    if (protocol === "aave_v3") {
+    if (protocol === "aave_v3" || protocol === "aave") {
       calls.push({
         to: contracts.AAVE_POOL,
         value: 0n,
@@ -337,16 +358,6 @@ export async function executeRebalance({
         data: encodeFunctionData({
           abi: BENQI_ABI, functionName: "mint",
           args: [amount],
-        }),
-      })
-    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
-      // ERC-4626: deposit(assets, receiver)
-      calls.push({
-        to: contracts.EULER_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI, functionName: "deposit",
-          args: [amount, smartAccountAddress],
         }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
@@ -375,6 +386,130 @@ export async function executeRebalance({
       const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
       const txHash = await noPaymasterClient.sendTransaction({ calls })
       return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
+    }
+    throw new Error(formatExecutionError(err))
+  }
+}
+
+export async function executeWithdrawal({
+  serializedPermission,
+  smartAccountAddress,
+  agentFeeAmount,      // raw 6-decimal integer string
+  isFullWithdrawal,
+  contracts,           // { AAVE_POOL, BENQI_POOL, SPARK_VAULT, USDC, TREASURY }
+  balances,            // { benqiQiTokenBalance, sparkShareBalance }
+  withdrawAmount,      // raw 6-decimal integer string (partial path)
+}) {
+  if (!ZERODEV_ID) {
+    throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
+  }
+
+  const {
+    client: kernelClient,
+    permissionAccountAddress,
+    permissionAccount,
+  } = await getKernelClient(serializedPermission, { withPaymaster: true })
+
+  if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+    throw new Error(
+      `Session key/account mismatch: permissionAccount=${permissionAccountAddress} sender=${smartAccountAddress}`,
+    )
+  }
+
+  const onchainOwner = await resolveKernelOwner(permissionAccount)
+  const calls = []
+
+  // 1) Redeem from Aave first (MAX withdraw all USDC to smart account)
+  calls.push({
+    to: contracts.AAVE_POOL,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: AAVE_ABI,
+      functionName: "withdraw",
+      args: [contracts.USDC, maxUint256, smartAccountAddress],
+    }),
+  })
+
+  // 2) Redeem Benqi by qiToken shares (exact), if non-zero
+  const benqiQiTokenBalance = BigInt(balances?.benqiQiTokenBalance || "0")
+  if (benqiQiTokenBalance > 0n) {
+    calls.push({
+      to: contracts.BENQI_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: BENQI_ABI,
+        functionName: "redeem",
+        args: [benqiQiTokenBalance],
+      }),
+    })
+  }
+
+  // 3) Redeem Spark shares (ERC-4626), if configured and non-zero
+  const sparkShareBalance = BigInt(balances?.sparkShareBalance || "0")
+  if (contracts.SPARK_VAULT && contracts.SPARK_VAULT !== "0x0000000000000000000000000000000000000000" && sparkShareBalance > 0n) {
+    calls.push({
+      to: contracts.SPARK_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI,
+        functionName: "redeem",
+        args: [sparkShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    })
+  }
+
+  // 4) Agent fee transfer to treasury (if any)
+  const feeAmountRaw = BigInt(agentFeeAmount || "0")
+  if (feeAmountRaw > 0n) {
+    if (!contracts.TREASURY || contracts.TREASURY === "0x0000000000000000000000000000000000000000") {
+      throw new Error("Treasury address is required when agentFeeAmount > 0")
+    }
+    calls.push({
+      to: contracts.USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "transfer",
+        args: [contracts.TREASURY, feeAmountRaw],
+      }),
+    })
+  }
+
+  // 5) Final user transfer — always to on-chain owner.
+  // Full withdrawals sweep all remaining USDC. Partial withdrawals transfer exact requested amount.
+  const transferAmount = isFullWithdrawal ? maxUint256 : BigInt(withdrawAmount || "0")
+  if (!isFullWithdrawal && transferAmount <= 0n) {
+    throw new Error("withdrawAmount must be > 0 for partial withdrawals")
+  }
+
+  calls.push({
+    to: contracts.USDC,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "transfer",
+      args: [onchainOwner, transferAmount],
+    }),
+  })
+
+  try {
+    const txHash = await kernelClient.sendTransaction({ calls })
+    return {
+      txHash,
+      explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+      owner: onchainOwner,
+      callCount: calls.length,
+    }
+  } catch (err) {
+    if (isLikelyPaymasterError(err)) {
+      const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+      const txHash = await noPaymasterClient.sendTransaction({ calls })
+      return {
+        txHash,
+        explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+        owner: onchainOwner,
+        callCount: calls.length,
+      }
     }
     throw new Error(formatExecutionError(err))
   }

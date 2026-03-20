@@ -14,8 +14,6 @@ import {
   X,
   Loader2,
   CheckCircle2,
-  ArrowDown,
-  Lock,
 } from "lucide-react";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { ChainGuard } from "@/components/ChainGuard";
@@ -39,13 +37,14 @@ import {
 
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
-import { createSmartAccount, BENQI_ABI, AAVE_POOL_ABI, ERC4626_VAULT_ABI, emergencyWithdrawAll } from "@/lib/zerodev";
+import { createSmartAccount, BENQI_ABI, emergencyWithdrawAll } from "@/lib/zerodev";
 
 function TopBar({
   smartAccountAddress,
   eoaAddress,
   isAgentActive,
   onDeposit,
+  onEmergencyWithdraw,
   onAgentDetails,
   onDisconnect,
 }: {
@@ -53,6 +52,7 @@ function TopBar({
   eoaAddress: string | null;
   isAgentActive: boolean;
   onDeposit: () => void;
+  onEmergencyWithdraw: () => void;
   onAgentDetails: () => void;
   onDisconnect: () => void;
 }) {
@@ -80,6 +80,16 @@ function TopBar({
           >
             <ArrowDownToLine className="h-3.5 w-3.5" />
             Deposit
+          </button>
+        )}
+
+        {isAgentActive && (
+          <button
+            onClick={onEmergencyWithdraw}
+            className="flex items-center gap-1.5 rounded-lg border border-[#DC2626]/30 bg-[#DC2626]/10 px-3 py-1.5 text-xs font-medium text-[#DC2626] transition-all hover:bg-[#DC2626]/15"
+          >
+            <ArrowUpFromLine className="h-3.5 w-3.5" />
+            Emergency Withdraw
           </button>
         )}
 
@@ -148,7 +158,7 @@ export default function AppLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { authenticated, ready, login, logout, activeWallet, eoaAddress, isLoading: authLoading } = useAuth();
+  const { authenticated, ready, logout, activeWallet, eoaAddress } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(smartAccount.address ?? undefined);
   const { data: sessionKey, isLoading: sessionKeyLoading } = useSessionKey(smartAccount.address ?? undefined);
@@ -181,9 +191,6 @@ export default function AppLayout({
   // Agent is "active" when it has an active session key (backend can auto-rebalance)
   // OR the store flag is set (immediate after activation, before query refetch)
   // OR funds exist (deployed to protocols OR idle USDC waiting for optimizer)
-  const hasProtocolAllocations = portfolio?.allocations?.some(
-    (a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0,
-  ) ?? false;
   const hasFunds = portfolio?.allocations?.some(
     (a) => Number(a.amountUsdc) > 0,
   ) ?? false;
@@ -272,6 +279,7 @@ export default function AppLayout({
           eoaAddress={eoaAddress}
           isAgentActive={isAgentActive}
           onDeposit={() => setShowDeposit(true)}
+          onEmergencyWithdraw={() => setShowAgentDetails(true)}
           onAgentDetails={() => setShowAgentDetails(true)}
           onDisconnect={handleDisconnect}
         />
@@ -485,10 +493,9 @@ async function readAllProtocolBalances(
   smartAddr: `0x${string}`,
 ) {
   // Read all balances in parallel
-  const [idleBalance, qiBalance, eulerShares, sparkShares] = await Promise.all([
+  const [idleBalance, qiBalance, sparkShares] = await Promise.all([
     publicClient.readContract({ address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
-    publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.SPARK_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
   ]);
 
@@ -498,14 +505,6 @@ async function readAllProtocolBalances(
     try {
       const exchangeRate = await publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: EXCHANGE_RATE_ABI, functionName: "exchangeRateStored" });
       benqiUsdc = Number((qiBalance as bigint) * (exchangeRate as bigint)) / 1e18 / 1e12;
-    } catch { /* fallback: 0 */ }
-  }
-
-  let eulerUsdc = 0;
-  if ((eulerShares as bigint) > 0n) {
-    try {
-      const assets = await publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: ERC4626_CONVERT_ABI, functionName: "convertToAssets", args: [eulerShares as bigint] });
-      eulerUsdc = Number(formatUnits(assets as bigint, 6));
     } catch { /* fallback: 0 */ }
   }
 
@@ -525,20 +524,19 @@ async function readAllProtocolBalances(
   const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
 
   return {
-    totalUsdc: idleUsdc + benqiUsdc + eulerUsdc + sparkUsdc,
+    totalUsdc: idleUsdc + benqiUsdc + sparkUsdc,
     idleUsdc,
     benqiUsdc,
-    eulerUsdc,
     sparkUsdc,
     // Raw values for on-chain redeem calls
     qiBalance: qiBalance as bigint,
-    eulerShares: eulerShares as bigint,
     sparkShares: sparkShares as bigint,
   };
 }
 
 type WithdrawStep = "idle" | "redeeming" | "transferring" | "deactivating" | "done";
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeactivate: () => Promise<void> }) {
   const [amount, setAmount] = useState("");
   const [step, setStep] = useState<WithdrawStep>("idle");
@@ -583,14 +581,13 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
           smartAccountAddress as `0x${string}`,
           CONTRACTS,
           balances.qiBalance,
-          balances.eulerShares,
           balances.sparkShares,
         );
       }
@@ -745,7 +742,6 @@ function AgentDetailsModal({
 }) {
   const { data: portfolio } = usePortfolio(smartAccountAddress);
   const { wallets } = useWallets();
-  const queryClient = useQueryClient();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const [withdrawStep, setWithdrawStep] = useState<"idle" | "processing" | "deactivating">("idle");
 
@@ -770,14 +766,13 @@ function AgentDetailsModal({
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Step 1: Redeem from ALL protocols in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.eulerShares > 0n || balances.sparkShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
           smartAccountAddress as `0x${string}`,
           CONTRACTS,
           balances.qiBalance,
-          balances.eulerShares,
           balances.sparkShares,
         );
       }
@@ -794,7 +789,6 @@ function AgentDetailsModal({
         });
       }
 
-      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
 
       // Step 3: Deactivate agent
       setWithdrawStep("deactivating");

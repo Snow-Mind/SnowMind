@@ -157,16 +157,6 @@ class RateValidator:
 
         divergence = abs(on_chain_apy - defillama_apy) / defillama_apy
         if divergence > self.DEFILLAMA_DIVERGENCE_THRESHOLD:
-            if self._settings.IS_TESTNET:
-                logger.warning(
-                    "DefiLlama divergence on %s in testnet: on-chain=%.2f%% DefiLlama=%.2f%% "
-                    "divergence=%.1f%% — continuing (testnet mode)",
-                    protocol_id,
-                    float(on_chain_apy * 100),
-                    float(defillama_apy * 100),
-                    float(divergence * 100),
-                )
-                return True
             logger.error(
                 "DefiLlama divergence on %s: on-chain=%.2f%% DefiLlama=%.2f%% "
                 "divergence=%.1f%% — HALTING",

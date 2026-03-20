@@ -57,11 +57,6 @@ class SnowMindScheduler:
             self._snapshot_daily_apy, "cron",
             hour=2, minute=0, id="apy_snapshot",
         )
-        if self.settings.IS_TESTNET and self.settings.DEPLOYER_PRIVATE_KEY:
-            self._scheduler.add_job(
-                self._accrue_benqi_interest, "interval",
-                minutes=5, id="benqi_accrue",
-            )
         self._scheduler.start()
         logger.info(
             "Scheduler started [instance=%s, interval=%ds]",
@@ -248,38 +243,6 @@ class SnowMindScheduler:
             },
             on_conflict="protocol_id",
         ).execute()
-
-    # ── Benqi interest accrual (testnet only) ────────────────────────────────
-
-    async def _accrue_benqi_interest(self) -> None:
-        if not self.settings.IS_TESTNET or not self.settings.DEPLOYER_PRIVATE_KEY:
-            return
-        from app.services.protocols.base import get_shared_async_web3
-        from eth_account import Account
-
-        w3 = get_shared_async_web3()
-        deployer = Account.from_key(self.settings.DEPLOYER_PRIVATE_KEY)
-        abi = [
-            {
-                "name": "accrueInterest", "type": "function",
-                "inputs": [], "outputs": [], "stateMutability": "nonpayable",
-            }
-        ]
-        contract = w3.eth.contract(
-            address=w3.to_checksum_address(self.settings.BENQI_POOL), abi=abi,
-        )
-        try:
-            tx = await contract.functions.accrueInterest().build_transaction({
-                "from": deployer.address,
-                "nonce": await w3.eth.get_transaction_count(deployer.address),
-                "gasPrice": await w3.eth.gas_price,
-                "gas": 100_000,
-            })
-            signed = deployer.sign_transaction(tx)
-            await w3.eth.send_raw_transaction(signed.raw_transaction)
-            logger.debug("Benqi interest accrued")
-        except Exception as e:
-            logger.warning("Benqi accrue failed (non-critical): %s", e)
 
     # ── Daily APY snapshots ─────────────────────────────────────────────────
 

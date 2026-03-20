@@ -11,9 +11,7 @@ remappings = [
 ]
 
 [rpc_endpoints]
-fuji = "https://api.avax-test.network/ext/bc/C/rpc"
 avalanche = "https://api.avax.network/ext/bc/C/rpc"
 
 [etherscan]
-fuji = { key = "${SNOWTRACE_API_KEY}", url = "https://api-testnet.snowtrace.io/api" }
 avalanche = { key = "${SNOWTRACE_API_KEY}", url = "https://api.snowtrace.io/api" }

@@ -97,7 +97,7 @@ export const BENQI_ABI = [
   },
 ] as const
 
-// ERC-4626 vault ABI — shared by Euler V2 and Spark
+// ERC-4626 vault ABI — used by Spark
 export const ERC4626_VAULT_ABI = [
   {
     name: "deposit", type: "function", stateMutability: "nonpayable",
@@ -118,6 +118,12 @@ export const ERC4626_VAULT_ABI = [
   },
 ] as const
 
+type CallPolicyPermission = NonNullable<Parameters<typeof toCallPolicy>[0]["permissions"]>[number]
+type WalletClientLike = Parameters<typeof signerToEcdsaValidator>[1]["signer"]
+type KernelAccountLike = Awaited<ReturnType<typeof createKernelAccount>>
+type KernelClientLike = ReturnType<typeof createKernelAccountClient>
+type PermissionPluginLike = Awaited<ReturnType<typeof toPermissionValidator>>
+
 // ── getPublicClient ───────────────────────────────────────────────────────────
 
 function getPublicClient(): PublicClient {
@@ -129,8 +135,7 @@ function getPublicClient(): PublicClient {
 
 // ── 1. Create smart account (sudo — user is the owner) ───────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function createSmartAccount(walletClient: any) {
+export async function createSmartAccount(walletClient: WalletClientLike) {
   const publicClient = getPublicClient()
 
   // Sudo validator: user's wallet is the owner (full control)
@@ -175,15 +180,13 @@ export async function createSmartAccount(walletClient: any) {
 // ── 2. Approve all protocols in ONE batched UserOp ───────────────────────────
 
 export async function approveAllProtocols(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  kernelClient: any,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; EULER_VAULT: `0x${string}`; SPARK_VAULT: `0x${string}` }
+  kernelClient: KernelClientLike,
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}` }
 ): Promise<{ txHash: string; explorerUrl: string }> {
 
   const approvalCalls = [
     contracts.AAVE_POOL,
     contracts.BENQI_POOL,
-    contracts.EULER_VAULT,
     contracts.SPARK_VAULT,
   ]
     .filter(addr => addr !== '0x0000000000000000000000000000000000000000')
@@ -208,14 +211,11 @@ export async function approveAllProtocols(
 // Returns serialized string — NOT a private key. Backend stores and uses this.
 
 export async function grantAndSerializeSessionKey(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  kernelAccount: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  kernelClient: any,
+  kernelAccount: KernelAccountLike,
+  _kernelClient: KernelClientLike,
   contracts: {
     AAVE_POOL:    `0x${string}`
     BENQI_POOL:   `0x${string}`
-    EULER_VAULT:  `0x${string}`
     SPARK_VAULT:  `0x${string}`
     USDC:         `0x${string}`
     TREASURY:     `0x${string}`
@@ -245,11 +245,40 @@ export async function grantAndSerializeSessionKey(
   // ── Call Policy: ABI-based, type-safe (not raw hex selectors) ─────────────
   // Build permissions array — Spark entries added conditionally
   const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as `0x${string}`
-  const hasSparkVault = contracts.SPARK_VAULT !== ZERO_ADDR
 
-  const callPolicy = toCallPolicy({
-    policyVersion: CallPolicyVersion.V0_0_4,
-    permissions: [
+  const treasuryTransferPermissions: CallPolicyPermission[] =
+    contracts.TREASURY !== ZERO_ADDR
+      ? [
+          {
+            target: contracts.USDC,
+            valueLimit: 0n,
+            abi: ERC20_TRANSFER_ABI,
+            functionName: "transfer",
+            args: [
+              { condition: ParamCondition.EQUAL, value: contracts.TREASURY },
+              { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+            ],
+          },
+        ]
+      : []
+
+  const userTransferPermissions: CallPolicyPermission[] =
+    config.userEOA !== ZERO_ADDR
+      ? [
+          {
+            target: contracts.USDC,
+            valueLimit: 0n,
+            abi: ERC20_TRANSFER_ABI,
+            functionName: "transfer",
+            args: [
+              { condition: ParamCondition.EQUAL, value: config.userEOA },
+              null,
+            ],
+          },
+        ]
+      : []
+
+  const permissions: CallPolicyPermission[] = [
 
       // USDC approve — allow session key to set approvals for protocol contracts
       {
@@ -278,18 +307,18 @@ export async function grantAndSerializeSessionKey(
         abi: ERC20_ABI,
         functionName: "approve",
         args: [
-          { condition: ParamCondition.EQUAL, value: contracts.EULER_VAULT },
+          { condition: ParamCondition.EQUAL, value: contracts.SPARK_VAULT },
           null,
         ],
       },
-      // Spark USDC approve (uses Euler vault as fallback target when unconfigured — never reached)
+      // Spark USDC approve
       {
         target: contracts.USDC,
         valueLimit: 0n,
         abi: ERC20_ABI,
         functionName: "approve",
         args: [
-          { condition: ParamCondition.EQUAL, value: hasSparkVault ? contracts.SPARK_VAULT : contracts.EULER_VAULT },
+          { condition: ParamCondition.EQUAL, value: contracts.SPARK_VAULT },
           null,
         ],
       },
@@ -341,30 +370,9 @@ export async function grantAndSerializeSessionKey(
         args: [null],   // qiToken amounts differ from USDC, no cap here
       },
 
-      // EULER V2 — deposit (ERC-4626)
+      // SPARK — deposit (ERC-4626)
       {
-        target: contracts.EULER_VAULT,
-        valueLimit: 0n,
-        abi: ERC4626_VAULT_ABI,
-        functionName: "deposit",
-        args: [
-          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
-          null,   // receiver — any
-        ],
-      },
-
-      // EULER V2 — redeem (ERC-4626)
-      {
-        target: contracts.EULER_VAULT,
-        valueLimit: 0n,
-        abi: ERC4626_VAULT_ABI,
-        functionName: "redeem",
-        args: [null, null, null],   // shares, receiver, owner — any
-      },
-
-      // SPARK — deposit (ERC-4626, same interface as Euler)
-      {
-        target: hasSparkVault ? contracts.SPARK_VAULT : contracts.EULER_VAULT,
+        target: contracts.SPARK_VAULT,
         valueLimit: 0n,
         abi: ERC4626_VAULT_ABI,
         functionName: "deposit",
@@ -376,39 +384,24 @@ export async function grantAndSerializeSessionKey(
 
       // SPARK — redeem (ERC-4626)
       {
-        target: hasSparkVault ? contracts.SPARK_VAULT : contracts.EULER_VAULT,
+        target: contracts.SPARK_VAULT,
         valueLimit: 0n,
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
         args: [null, null, null],
       },
+    // USDC.transfer — fee collection to SnowMind treasury ONLY
+    // On-chain enforced: recipient MUST be treasury, amount capped at maxAmount
+    ...treasuryTransferPermissions,
 
-      // USDC.transfer — fee collection to SnowMind treasury ONLY
-      // On-chain enforced: recipient MUST be treasury, amount capped at maxAmount
-      ...(contracts.TREASURY !== ZERO_ADDR ? [{
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_TRANSFER_ABI,
-        functionName: "transfer" as const,
-        args: [
-          { condition: ParamCondition.EQUAL as const, value: contracts.TREASURY },
-          { condition: ParamCondition.LESS_THAN_OR_EQUAL as const, value: maxAmount },
-        ] as const,
-      }] : []),
+    // USDC.transfer — withdrawal to user's own EOA (uncapped, it's their money)
+    // Two separate entries because ZeroDev doesn't support OR-conditions on args
+    ...userTransferPermissions,
+  ]
 
-      // USDC.transfer — withdrawal to user's own EOA (uncapped, it's their money)
-      // Two separate entries because ZeroDev doesn't support OR-conditions on args
-      ...(config.userEOA !== ZERO_ADDR ? [{
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_TRANSFER_ABI,
-        functionName: "transfer" as const,
-        args: [
-          { condition: ParamCondition.EQUAL as const, value: config.userEOA },
-          null,   // amount — uncapped for user's own withdrawal
-        ] as const,
-      }] : []),
-    ],
+  const callPolicy = toCallPolicy({
+    policyVersion: CallPolicyVersion.V0_0_4,
+    permissions,
   })
 
   // Gas policy: total gas cap prevents runaway spending
@@ -492,17 +485,15 @@ export async function grantAndSerializeSessionKey(
 // ── 4. Immediate initial deployment (sudo path) ─────────────────────────────
 
 export async function deployInitialToProtocol(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  kernelClient: any,
+  kernelClient: KernelClientLike,
   smartAccountAddress: `0x${string}`,
   contracts: {
     AAVE_POOL: `0x${string}`
     BENQI_POOL: `0x${string}`
-    EULER_VAULT: `0x${string}`
     SPARK_VAULT: `0x${string}`
     USDC: `0x${string}`
   },
-  protocolId: "aave_v3" | "benqi" | "euler_v2" | "spark",
+  protocolId: "aave_v3" | "benqi" | "spark",
   amountUsdc: number,
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const amount = parseUnits(amountUsdc.toFixed(6), 6)
@@ -513,7 +504,6 @@ export async function deployInitialToProtocol(
   const spender =
     protocolId === "aave_v3" ? contracts.AAVE_POOL
       : protocolId === "benqi" ? contracts.BENQI_POOL
-      : protocolId === "euler_v2" ? contracts.EULER_VAULT
       : contracts.SPARK_VAULT
 
   calls.push({
@@ -546,16 +536,6 @@ export async function deployInitialToProtocol(
         args: [amount],
       }),
     })
-  } else if (protocolId === "euler_v2") {
-    calls.push({
-      to: contracts.EULER_VAULT,
-      value: 0n,
-      data: encodeFunctionData({
-        abi: ERC4626_VAULT_ABI,
-        functionName: "deposit",
-        args: [amount, smartAccountAddress],
-      }),
-    })
   } else {
     calls.push({
       to: contracts.SPARK_VAULT,
@@ -575,10 +555,8 @@ export async function deployInitialToProtocol(
 // ── 5. Revoke session key (user-initiated) ───────────────────────────────────
 
 export async function revokeSessionKey(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  kernelClient: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  permissionPlugin: any
+  kernelClient: KernelClientLike,
+  permissionPlugin: PermissionPluginLike
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const txHash = await kernelClient.uninstallPlugin({ plugin: permissionPlugin })
   return { txHash, explorerUrl: EXPLORER.tx(txHash) }
@@ -587,12 +565,10 @@ export async function revokeSessionKey(
 // ── 6. Emergency: withdraw all from specific protocol (user-signed, no session key)
 
 export async function emergencyWithdrawAll(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  kernelClient: any,
+  kernelClient: KernelClientLike,
   smartAccountAddress: `0x${string}`,
-  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; EULER_VAULT: `0x${string}`; SPARK_VAULT: `0x${string}`; USDC: `0x${string}` },
+  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; USDC: `0x${string}` },
   benqiQiTokenBalance: bigint,   // fetch this from on-chain before calling
-  eulerShareBalance: bigint,     // ERC-4626 shares
   sparkShareBalance: bigint,     // ERC-4626 shares
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const calls = [
@@ -614,16 +590,6 @@ export async function emergencyWithdrawAll(
         abi: BENQI_ABI,
         functionName: "redeem",
         args: [benqiQiTokenBalance],
-      }),
-    }] : []),
-    // Redeem all from Euler V2 (ERC-4626)
-    ...(eulerShareBalance > 0n ? [{
-      to: contracts.EULER_VAULT,
-      value: 0n,
-      data: encodeFunctionData({
-        abi: ERC4626_VAULT_ABI,
-        functionName: "redeem",
-        args: [eulerShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     }] : []),
     // Redeem all from Spark (ERC-4626)

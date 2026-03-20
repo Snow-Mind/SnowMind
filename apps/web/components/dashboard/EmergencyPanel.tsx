@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { createPublicClient, http, encodeFunctionData } from "viem";
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
-import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL, CHAIN, IS_TESTNET } from "@/lib/constants";
+import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL, CHAIN } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
 import { createSmartAccount, BENQI_ABI, ERC4626_VAULT_ABI } from "@/lib/zerodev";
@@ -52,7 +52,7 @@ function friendlyWithdrawError(err: unknown): string {
   if (msg.includes("zd_getUserOperationGasPrice") || msg.includes("does not exist"))
     return "Gas estimation failed — please try again.";
   if (msg.includes("chainId"))
-    return `Please switch MetaMask to Avalanche ${IS_TESTNET ? 'Fuji' : 'C-Chain'}.`;
+    return "Please switch MetaMask to Avalanche C-Chain.";
   if (msg.length > 120) return msg.slice(0, 100) + "…";
   return msg;
 }

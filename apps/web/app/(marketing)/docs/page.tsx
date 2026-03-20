@@ -119,15 +119,15 @@ const FAQ = [
   },
   {
     q: "What are session keys?",
-    a: "Session keys are temporary, scoped permissions that allow our backend to execute specific operations on your behalf. They're encrypted (AES-256-GCM) at rest, limited to approved contracts/functions, and auto-expire after 30 days.",
+    a: "Session keys are temporary, scoped permissions that allow our backend to execute specific operations on your behalf. They're encrypted (AES-256-GCM) at rest, limited to approved contracts/functions, and auto-expire after 7 days.",
   },
   {
     q: "Which protocols does SnowMind support?",
-    a: "Currently: Aave V3 and Benqi on Avalanche. Euler V2 support is coming soon. We carefully vet each protocol for security, TVL, and audit history before integration.",
+    a: "Currently: Aave V3, Benqi, and Spark on Avalanche mainnet. We carefully vet each protocol for security, TVL, and audit history before integration.",
   },
   {
     q: "What are the fees?",
-    a: "SnowMind charges a 10% performance fee on profits only — calculated at withdrawal as (current_balance − net_principal) × 10%. No deposit fee, no management fee. Gas costs for rebalancing are sponsored via Pimlico paymaster.",
+    a: "SnowMind charges a 10% agent fee on profits only — calculated at withdrawal as (current_balance − net_principal) × 10%. No deposit fee, no management fee. Gas costs for rebalancing are sponsored via Pimlico paymaster.",
   },
 ] as const;
 

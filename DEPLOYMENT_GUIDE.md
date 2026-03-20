@@ -21,25 +21,25 @@
 
 ## 1. How SnowMind Works (Plain English)
 
-SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3 and Benqi) to earn the highest safe yield.
+SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3, Benqi, and Spark) to earn the highest safe yield.
 
 ### The Flow
 
 1. **User connects wallet** → Privy handles authentication (social login or wallet).
 2. **Smart account is created** → ZeroDev deploys an ERC-4337 smart account for the user on Avalanche. The user's EOA (MetaMask/embedded wallet) is the owner.
-3. **User deposits USDC** → Transfers native USDC into their smart account and approves a **session key** (valid 30 days) that allows SnowMind's backend to move funds between whitelisted protocols on their behalf.
+3. **User deposits USDC** → Transfers native USDC into their smart account and approves a **session key** (valid 7 days) that allows SnowMind's backend to move funds between whitelisted protocols on their behalf.
 4. **The Waterfall Allocator runs every 30 minutes** → It checks current APYs, picks the best protocol, and decides if a rebalance is worth the gas cost.
 5. **If a rebalance is needed** → The backend calls the Node.js execution service, which uses the session key to submit a UserOperation (ERC-4337) via Pimlico's bundler. Funds move from one protocol to another in a single transaction.
 6. **User withdraws anytime** → Emergency withdrawal pulls all funds back to the smart account. A 10% fee is charged only on profits (yield earned), not on principal.
 
 ### The Waterfall Allocator
 
-Instead of a complex mathematical optimizer, SnowMind uses a simple **waterfall** strategy:
+Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked waterfall** strategy:
 
-- **Aave V3 is the "base layer"** — the safe default where funds park.
-- **Benqi is the "candidate"** — it gets funds only if its APY beats Aave V3 by at least 50 basis points (0.5%).
-- If Benqi's rate is only slightly higher, funds stay in Aave V3 (not worth the gas to move).
-- TVL caps prevent putting more than 15% of any protocol's total liquidity, and exposure caps limit 40% of a user's deposit in any single protocol.
+- All healthy protocols are ranked by effective TWAP APY each cycle.
+- Aave V3 and Benqi apply TVL caps (max 15% of protocol TVL).
+- Spark has no system TVL cap and acts as overflow when it ranks below lending protocols.
+- User exposure caps still limit concentration at the account level.
 
 **Example:**
 - Aave V3 APY: 3.0%, Benqi APY: 4.2% → Benqi beats Aave by 1.2% > 0.5% margin → Funds go to Benqi.
@@ -50,16 +50,15 @@ Instead of a complex mathematical optimizer, SnowMind uses a simple **waterfall*
 - **Rate validation**: Cross-checks on-chain rates against DefiLlama. If they diverge by >2%, the circuit breaker halts that protocol.
 - **TWAP smoothing**: Uses 15-minute time-weighted average prices, not instantaneous rates (prevents manipulation).
 - **30-day APY averaging**: Rebalance decisions use 30-day moving averages when available.
-- **Max move cap**: No single rebalance can move more than 30% of total funds.
 - **Minimum interval**: At least 6 hours between rebalances.
 - **Gas gate**: Rebalance only happens if the expected yield improvement exceeds gas cost.
 - **Platform deposit cap**: $50K total across all users during guarded beta launch.
-- **Session key expiry**: 30-day session keys (renewable), not permanent access.
+- **Session key expiry**: 7-day session keys (renewable), not permanent access.
 
 ### Fee Model
 
 - **No deposit fee** — users deposit and withdraw freely.
-- **10% performance fee on profits only** — if you deposit $10,000 and withdraw $10,500, the fee is 10% of $500 = $50. You receive $10,450. The fee is transferred atomically to the SnowMind treasury (Gnosis Safe) in the same transaction as the withdrawal.
+- **10% agent fee on profits only** — if you deposit $10,000 and withdraw $10,500, the fee is 10% of $500 = $50. You receive $10,450. The fee is transferred atomically to the SnowMind treasury (Gnosis Safe) in the same transaction as the withdrawal.
 - **No fee if no profit** — if you withdraw at a loss (unlikely with stablecoin lending), there's zero fee.
 - **Fee formula**: `fee = (current_balance - total_deposited) * 0.10` — simple and transparent.
 - **On-chain enforced**: Session key has a scoped `USDC.transfer()` permission that can ONLY send to the treasury address. Even a stolen session key cannot send funds anywhere else.
@@ -123,11 +122,20 @@ Instead of a complex mathematical optimizer, SnowMind uses a simple **waterfall*
 |-----------|-----------|---------|
 | Frontend | Next.js 14, Viem, Privy | User interface, wallet connection, deposit/withdraw |
 | Backend | FastAPI (Python) | Rate fetching, waterfall allocation, rebalance orchestration |
-| Execution Service | Node.js, ZeroDev SDK | Signs and submits UserOperations to Pimlico bundler |
+| Execution Service | Node.js, ZeroDev SDK | Dedicated apps/execution service that verifies signed backend requests, blocks replay, and submits UserOperations |
 | Database | Supabase (PostgreSQL) | Accounts, allocations, logs, rate history |
 | Bundler | Pimlico | Bundles ERC-4337 UserOps and submits to Avalanche |
 | Smart Accounts | ZeroDev (Kernel v3) | ERC-4337 smart accounts with session key support |
 | Auth | Privy | Social login + embedded wallets |
+
+### Internal Execution Request Security
+
+- Backend to execution calls are HMAC-SHA256 signed using INTERNAL_SERVICE_KEY.
+- Signature input: method, path, timestamp, nonce, and canonical JSON body.
+- Execution service rejects missing/invalid signatures.
+- Replay protection:
+  - Timestamp freshness window enforced via INTERNAL_REQUEST_TTL_SECONDS.
+  - Nonce cache blocks duplicate nonces inside the TTL window.
 
 ---
 
@@ -141,14 +149,12 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **Aave V3 Pool** | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` | Avalanche C-Chain |
 | **Benqi qiUSDCn** | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` | Avalanche C-Chain |
 | **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Avalanche C-Chain |
-| **SnowMindRegistry** | *Deploy with Foundry (see Step 1 in Section 6)* | Avalanche C-Chain |
-| **Euler V2 Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
+| **SnowMindRegistry** | `0x849Ca487D5DeD85c93fc3600338a419B100833a8` | Avalanche C-Chain |
 | **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
 
 ### Explorer
 
 - Mainnet: `https://snowtrace.io`
-- Testnet: `https://testnet.snowtrace.io`
 
 ---
 
@@ -163,12 +169,11 @@ Set these in your Railway project's environment variables:
 APP_NAME=SnowMind API
 API_V1_PREFIX=/api/v1
 DEBUG=false
-IS_TESTNET=false
 
 # ── CORS ─────────────────────────────────────────────────────
 ALLOWED_ORIGINS=["https://www.snowmind.xyz","https://app.snowmind.xyz"]
 
-# ── Supabase (PRODUCTION project — not testnet!) ─────────────
+# ── Supabase (PRODUCTION project) ───────────────────────────
 SUPABASE_URL=https://YOUR_PROD_PROJECT.supabase.co
 SUPABASE_SERVICE_KEY=eyJ...your_production_service_role_key...
 
@@ -181,15 +186,16 @@ ZERODEV_PROJECT_ID=your_zerodev_project_id
 # ── Contract Addresses (Avalanche Mainnet) ───────────────────
 REGISTRY_CONTRACT_ADDRESS=0x_YOUR_DEPLOYED_REGISTRY_ADDRESS
 AAVE_V3_POOL=0x794a61358D6845594F94dc1DB02A252b5b4814aD
-BENQI_POOL=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
-EULER_VAULT=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
-SPARK_VAULT=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
+BENQI_QIUSDC=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
+SPARK_SPUSDC=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
 USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 ENTRYPOINT_V07=0x0000000071727De22E5E9d8BAf0edAc6f37da032
 
 # ── Security ─────────────────────────────────────────────────
-# Generate: python -c "import os; print(os.urandom(32).hex())"
-SESSION_KEY_ENCRYPTION_KEY=your_32_byte_hex_key
+# Production: use KMS envelope encryption (master key never in env)
+KMS_KEY_ID=your_kms_key_id
+# Local fallback only; keep empty in production
+SESSION_KEY_ENCRYPTION_KEY=
 JWT_SECRET=your_jwt_secret
 JWT_ALGORITHM=HS256
 BACKEND_API_KEY=your_api_key_for_frontend
@@ -198,9 +204,11 @@ BACKEND_API_KEY=your_api_key_for_frontend
 PRIVY_APP_ID=your_privy_app_id
 PRIVY_APP_SECRET=your_privy_app_secret
 
-# ── Execution Service ────────────────────────────────────────
-EXECUTION_SERVICE_URL=http://localhost:3001
+# ── Execution Service (dedicated apps/execution deployment) ──
+# In production this should be the internal URL of the dedicated execution service.
+EXECUTION_SERVICE_URL=http://execution:3001
 INTERNAL_SERVICE_KEY=your_shared_secret_between_backend_and_executor
+INTERNAL_REQUEST_TTL_SECONDS=300
 
 # ── Optimizer Tuning ─────────────────────────────────────────
 REBALANCE_CHECK_INTERVAL=1800
@@ -216,7 +224,7 @@ TVL_CAP_PCT=0.15
 MAX_SINGLE_EXPOSURE_PCT=0.40
 BASE_BEAT_MARGIN=0.005
 GAS_COST_ESTIMATE_USD=0.008
-BASE_LAYER_PROTOCOL_ID=spark
+BASE_LAYER_PROTOCOL_ID=aave_v3
 MIN_PROTOCOL_TVL_USD=100000.0
 
 # ── Guarded Launch ───────────────────────────────────────────
@@ -230,7 +238,7 @@ TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
 DEFILLAMA_BASE_URL=https://yields.llama.fi
 RATE_DIVERGENCE_THRESHOLD=0.02
 
-# ── Deployer (leave empty on mainnet — testnet-only) ─────────
+# ── Deployer (optional local deployment helper) ───────────────
 DEPLOYER_PRIVATE_KEY=
 ```
 
@@ -260,12 +268,11 @@ NEXT_PUBLIC_USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 NEXT_PUBLIC_REGISTRY_ADDRESS=0x_YOUR_DEPLOYED_REGISTRY_ADDRESS
 NEXT_PUBLIC_AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 NEXT_PUBLIC_BENQI_POOL_ADDRESS=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
-NEXT_PUBLIC_EULER_VAULT_ADDRESS=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
 NEXT_PUBLIC_SPARK_VAULT_ADDRESS=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
 NEXT_PUBLIC_TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
 ```
 
-**Important**: `NEXT_PUBLIC_CHAIN_ID=43114` is the master switch. When set to `43114`, the entire frontend uses Avalanche mainnet (chain, explorer, Pimlico URLs, etc.). Set it to `43113` to switch back to Fuji testnet.
+**Important**: `NEXT_PUBLIC_CHAIN_ID` must be set to `43114` in production.
 
 ### 4C. Execution Service (runs alongside backend on Railway)
 
@@ -280,7 +287,7 @@ INTERNAL_SERVICE_KEY=your_shared_secret_matching_backend
 
 ## 5. Supabase Migrations
 
-Create a **fresh Supabase project** for production. Do NOT reuse the testnet project (it has test data).
+Create a **fresh Supabase project** for production.
 
 Run these 5 migrations **in order** in the Supabase SQL Editor (Dashboard → SQL Editor → New query):
 
@@ -364,7 +371,7 @@ CREATE TABLE IF NOT EXISTS protocol_health (
   updated_at        TIMESTAMPTZ DEFAULT now()
 );
 
-INSERT INTO protocol_health (protocol_id) VALUES ('aave_v3'), ('benqi'), ('euler_v2')
+INSERT INTO protocol_health (protocol_id) VALUES ('aave_v3'), ('benqi')
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS session_key_audit (
@@ -519,10 +526,12 @@ Owner:            0x97950A98980a2Fc61ea7eb043bb7666845f77071
 
 **Then transfer ownership to your Gnosis Safe multisig:**
 ```bash
-cast send <REGISTRY_ADDRESS> "transferOwnership(address)" <GNOSIS_SAFE_ADDRESS> \
+cast send <REGISTRY_ADDRESS> "proposeOwnership(address)" <GNOSIS_SAFE_ADDRESS> \
   --rpc-url https://api.avax.network/ext/bc/C/rpc \
   --private-key $DEPLOYER_PRIVATE_KEY
 ```
+
+Then, from the Gnosis Safe, execute `acceptOwnership()` on the registry.
 
 **Verify on Snowtrace:**
 - Visit `https://snowtrace.io/address/<REGISTRY_ADDRESS>#code`
@@ -539,7 +548,7 @@ cast send <REGISTRY_ADDRESS> "transferOwnership(address)" <GNOSIS_SAFE_ADDRESS> 
 ### Step 3: Create Production Supabase Project
 
 1. Go to [https://supabase.com/dashboard](https://supabase.com/dashboard)
-2. Create a **new project** (do NOT reuse testnet project)
+2. Create a **new project**
 3. Copy the **Project URL** → `SUPABASE_URL`
 4. Copy the **Service Role Key** (Settings → API → service_role) → `SUPABASE_SERVICE_KEY`
 5. Open the **SQL Editor** and run all 5 migrations from Section 5 above, **in order**
@@ -547,11 +556,9 @@ cast send <REGISTRY_ADDRESS> "transferOwnership(address)" <GNOSIS_SAFE_ADDRESS> 
 ### Step 4: Configure Pimlico for Mainnet
 
 1. Go to [https://dashboard.pimlico.io/](https://dashboard.pimlico.io/)
-2. Ensure your API key supports **Avalanche** (chain ID 43114), not just Avalanche Fuji
-3. If you have a Fuji-only key, create a new one or upgrade the existing key
+2. Ensure your API key supports **Avalanche** (chain ID 43114)
 4. The backend automatically constructs the Pimlico URL:
    - Mainnet: `https://api.pimlico.io/v2/avalanche/rpc?apikey=YOUR_KEY`
-   - Testnet: `https://api.pimlico.io/v2/avalanche-fuji/rpc?apikey=YOUR_KEY`
 
 ### Step 5: Configure ZeroDev for Mainnet
 
@@ -585,7 +592,7 @@ Run through the full flow with a small amount ($10-50 of real USDC):
 
 1. Visit the frontend → connect wallet → create smart account
 2. Deposit a small amount of USDC
-3. Approve session key (30-day duration)
+3. Approve session key (7-day duration)
 4. Wait for scheduler to run (or trigger manual rebalance via API)
 5. Check dashboard — allocations should appear
 6. Try emergency withdrawal — verify fee breakdown is shown
@@ -670,7 +677,7 @@ AVALANCHE_RPC_URL=https://api.avax.network/ext/bc/C/rpc \
 Before going live, verify each item:
 
 ### Infrastructure
-- [ ] Fresh Supabase production project created (no testnet data)
+- [ ] Fresh Supabase production project created
 - [ ] All 5 migrations run successfully in order
 - [ ] Railway backend deployed with all env vars set
 - [ ] Vercel frontend deployed with all env vars set
@@ -682,7 +689,7 @@ Before going live, verify each item:
 - [ ] Registry address set in env vars (both backend and frontend)
 - [ ] Gnosis Safe multisig created → set as TREASURY_ADDRESS
 - [ ] Registry ownership transferred to multisig
-- [ ] Pimlico API key works on Avalanche mainnet (not just Fuji)
+- [ ] Pimlico API key works on Avalanche mainnet
 - [ ] ZeroDev project configured for Avalanche mainnet
 
 ### Protocol Adapters
@@ -692,9 +699,8 @@ Before going live, verify each item:
 - [ ] Rate validator cross-checks pass against DefiLlama
 
 ### Security
-- [ ] Session keys use 30-day duration (not 100 years)
+- [ ] Session keys use 7-day duration (not 100 years)
 - [ ] Platform deposit cap enforced ($50K)
-- [ ] IS_TESTNET=false in production env
 - [ ] DEPLOYER_PRIVATE_KEY is empty in production
 - [ ] All secrets are unique between environments
 - [ ] CORS only allows production domains
@@ -702,34 +708,22 @@ Before going live, verify each item:
 ### End-to-End Flow
 - [ ] Smart account deploys successfully on mainnet
 - [ ] USDC deposit + approve works
-- [ ] Session key creation works (30-day expiry)
+- [ ] Session key creation works (7-day expiry)
 - [ ] Scheduler runs and produces rebalance decisions
 - [ ] Rebalance execution submits UserOp on mainnet
-- [ ] Explorer links point to snowtrace.io (not testnet)
+- [ ] Explorer links point to snowtrace.io
 - [ ] Emergency withdrawal works with fee breakdown
 - [ ] Platform capacity endpoint returns correct numbers
 
 ### Unit Tests
 - [ ] All existing unit tests pass (`pytest tests/unit/ -v`)
-- [ ] Waterfall allocator tests pass with spark as base layer
+- [ ] Waterfall allocator tests pass with APY-ranked allocation rules
 
 ---
 
-## Quick Reference: What Changed from Testnet
+## Mainnet Readiness Notes
 
-| Aspect | Testnet (Before) | Mainnet (Now) |
-|--------|------------------|---------------|
-| Chain ID | 43113 (Fuji) | 43114 (Mainnet) |
-| RPC | api.avax-test.network | api.avax.network |
-| USDC | Testnet USDC (faucet) | Native USDC (real money) |
-| Aave Pool | Fuji mock | `0x794a...814aD` (real) |
-| Benqi Pool | Mock contract | `0xB715...AE9C` (real) |
-| Explorer | testnet.snowtrace.io | snowtrace.io |
-| Session key | 100 years (dev) | 30 days (production) |
-| Pimlico URL | avalanche-fuji | avalanche |
-| Active protocols | aave_v3, benqi, euler_v2, spark | aave_v3, benqi, euler_v2, spark |
-| Deposit cap | None | $50,000 total (guarded beta) |
-| Fee | None active | 10% on profits at withdrawal |
-| Faucet | FujiTestFaucet component | Deleted |
-| Base layer | spark | spark |
-| Optimizer | MILP (PuLP) | Waterfall allocator |
+- Production chain: Avalanche C-Chain only (`43114`)
+- Active protocols: `aave_v3`, `benqi`, `spark`
+- Registry ownership transfer is two-step (`proposeOwnership` then Safe `acceptOwnership`)
+- Fee language and user-facing disclosures should use "agent fee"

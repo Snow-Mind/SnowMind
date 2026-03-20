@@ -1,6 +1,6 @@
 # SnowMind — Autonomous Yield Optimizer on Avalanche
 
-> Deposit USDC. Our AI agent allocates across Aave V3, Benqi, Spark, and Euler V2
+> Deposit USDC. Our AI agent allocates across Aave V3, Benqi, and Spark
 > on Avalanche mainnet — optimizing yield 24/7. Non-custodial. Gas-free.
 
 ---
@@ -17,7 +17,6 @@
 | Native USDC | `0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E` |
 | Aave V3 Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
 | Benqi qiUSDCn | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` |
-| Euler V2 Vault | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` |
 | Spark spUSDC | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` |
 | EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 
@@ -40,7 +39,7 @@
 ┌──────────────────▼─────────────────────────────────────────┐
 │  AVALANCHE C-CHAIN (43114)                                 │
 │  Kernel v3.1 Smart Accounts + Session Keys                 │
-│  Aave V3 · Benqi · Spark (base layer) · Euler V2           │
+│  Aave V3 · Benqi · Spark                                    │
 │  ZeroDev Paymaster (gas sponsoring)                        │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -65,7 +64,7 @@ SnowMind uses a **Waterfall Allocator** with Spark as the base layer:
 
 ## Fee Model
 
-- **10% performance fee** — only on yield earned, never on principal
+- **10% agent fee** — only on yield earned, never on principal
 - Collected atomically during withdrawal (fee + remainder in one UserOp)
 - Fee goes to Gnosis Safe treasury multisig
 
@@ -81,7 +80,7 @@ SnowMind uses a **Waterfall Allocator** with Spark as the base layer:
 | Execution | Node.js sidecar (ZeroDev SDK, session key signing) |
 | Database | Supabase (PostgreSQL + Row Level Security) |
 | Optimizer | Waterfall Allocator (Spark base layer) |
-| Protocols | Aave V3, Benqi, Spark, Euler V2 (Avalanche mainnet) |
+| Protocols | Aave V3, Benqi, Spark (Avalanche mainnet) |
 | Encryption | AES-256-GCM (session keys at rest) |
 | Oracle | DefiLlama Yields API (rate cross-validation) |
 
@@ -153,9 +152,9 @@ node execute.js
 ## Security Model
 
 - **Non-custodial**: SnowMind never holds your master keys. Funds stay in your smart account.
-- **Scoped session keys**: Can ONLY call supply/withdraw on 4 whitelisted protocol contracts + USDC transfer to treasury.
+- **Scoped session keys**: Can ONLY call supply/withdraw on whitelisted protocol contracts + USDC transfer to treasury.
 - **On-chain enforcement**: Session key call policies enforced by the Kernel smart account — even a stolen key can't exceed permissions.
-- **30-day expiry**: Session keys auto-expire. Max 20 ops/day.
+- **7-day expiry**: Session keys auto-expire. Max 20 ops/day.
 - **AES-256-GCM encryption**: Session keys encrypted at rest in Supabase.
 - **TWAP rates**: 15-minute time-weighted average prevents flash manipulation.
 - **DefiLlama cross-validation**: On-chain rates checked against independent oracle.

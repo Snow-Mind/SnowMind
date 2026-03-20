@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useWallets } from "@privy-io/react-auth";
 import { AlertCircle } from "lucide-react";
-import { CHAIN_ID, IS_TESTNET } from "@/lib/constants";
+import { CHAIN_ID } from "@/lib/constants";
 
 interface ChainGuardProps {
   children: React.ReactNode;
@@ -54,14 +54,14 @@ export function ChainGuard({ children }: ChainGuardProps) {
           <p className="text-sm font-medium text-[#1A1715]">Wrong Network</p>
           <p className="text-xs text-[#8A837C] mt-1">
             Your wallet is connected to the wrong network. Please switch to
-            Avalanche{IS_TESTNET ? ' Fuji testnet' : ' C-Chain'}.
+            Avalanche C-Chain.
           </p>
           <button
             onClick={handleSwitch}
             disabled={isSwitching}
             className="mt-3 bg-[#E84142] text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-[#D63031] disabled:opacity-50 transition-colors"
           >
-            {isSwitching ? "Switching..." : `Switch to Avalanche${IS_TESTNET ? ' Fuji' : ''}`}
+            {isSwitching ? "Switching..." : "Switch to Avalanche"}
           </button>
         </div>
       </div>

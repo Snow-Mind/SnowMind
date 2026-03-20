@@ -8,13 +8,13 @@ SnowMind is a non-custodial yield optimizer. The core security design ensures th
 
 The AI agent's session key is scoped to:
 
-- Call `supply()` and `withdraw()` on **whitelisted protocol contracts only** (Aave V3 Pool, Benqi Pool)
+- Call whitelisted protocol methods only (Aave V3 `supply/withdraw`, Benqi `mint/redeem`, Spark `deposit/redeem`)
 - Execute a **maximum number of transactions per day** (rate-limited on-chain)
-- Operate **within a time window** (session key expires after 30 days)
+- Operate **within a time window** (session key expires after 7 days)
 
 ### What the Session Key CANNOT Do
 
-- Transfer tokens to any address (no `transfer()` permission)
+- Transfer tokens to arbitrary addresses (only user-owner sweep and treasury transfer are allowed)
 - Call any contract not on the whitelist
 - Call any function not on the whitelist (e.g., `borrow()`, `liquidate()`, `approve()`)
 - Exceed the per-transaction or per-day limits

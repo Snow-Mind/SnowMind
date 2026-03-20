@@ -28,8 +28,8 @@ class ValidationResult:
     warnings: list[str] = field(default_factory=list)
 
 
-# DefiLlama pool-ID mapping — Avalanche pools (Fuji uses the same IDs
-# in production; for testnet we simply skip cross-validation if missing).
+# DefiLlama pool-ID mapping for Avalanche mainnet pools.
+# Missing pool IDs are treated as non-fatal and only skip cross-validation.
 _DEFILLAMA_POOL_MAP: dict[str, str] = {
     "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",
     "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",

@@ -1,0 +1,19 @@
+{
+  "name": "@snowmind/execution",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@zerodev/ecdsa-validator": "^5.4.9",
+    "@zerodev/permissions": "^5.6.3",
+    "@zerodev/sdk": "^5.5.7",
+    "express": "^4.18.0",
+    "permissionless": "^0.3.4",
+    "tslib": "^2.6.0",
+    "viem": "^2.0.0"
+  }
+}

@@ -6,13 +6,16 @@ suppress logging output.
 """
 
 import base64
+import json
 import logging
 import os
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TypedDict
 from uuid import UUID
 
+import boto3
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from supabase import Client
 
@@ -22,6 +25,7 @@ logger = logging.getLogger("snowmind")
 
 # 12 bytes recommended for AES-GCM nonce
 _NONCE_BYTES = 12
+_KMS_ENVELOPE_PREFIX = "kms:v1:"
 
 
 class ActiveSessionKey(TypedDict):
@@ -29,8 +33,31 @@ class ActiveSessionKey(TypedDict):
     allowed_protocols: list[str]
 
 
-def _get_aes_key() -> bytes:
-    """Derive the 32-byte AES key from the hex-encoded env var."""
+def _kms_key_id_or_none() -> str | None:
+    """Return a usable KMS key id, or ``None`` when not configured."""
+    key_id = getattr(get_settings(), "KMS_KEY_ID", None)
+    if isinstance(key_id, str):
+        key_id = key_id.strip()
+        return key_id or None
+    return None
+
+
+@lru_cache
+def _get_kms_client():
+    """Create and cache an AWS KMS client."""
+    key_id = _kms_key_id_or_none()
+    if not key_id:
+        raise RuntimeError("KMS_KEY_ID must be configured for session key encryption")
+    region = (
+        os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or "us-east-1"
+    )
+    return boto3.client("kms", region_name=region)
+
+
+def _get_legacy_aes_key() -> bytes:
+    """Backward-compatible env-key path for local tests/dev."""
     raw = get_settings().SESSION_KEY_ENCRYPTION_KEY
     if not raw:
         raise RuntimeError("SESSION_KEY_ENCRYPTION_KEY is not configured")
@@ -40,16 +67,63 @@ def _get_aes_key() -> bytes:
     return key
 
 
-def encrypt_session_key(raw_key: str) -> str:
-    """Encrypt *raw_key* with AES-256-GCM.
+def _encode_envelope(ciphertext: bytes, nonce: bytes, encrypted_data_key: bytes) -> str:
+    payload = {
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+        "encrypted_data_key": base64.b64encode(encrypted_data_key).decode("ascii"),
+    }
+    packed = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return _KMS_ENVELOPE_PREFIX + base64.b64encode(packed).decode("ascii")
 
-    Returns ``base64(nonce ‖ ciphertext ‖ tag)``.
+
+def _decode_envelope(encrypted: str) -> tuple[bytes, bytes, bytes]:
+    if not encrypted.startswith(_KMS_ENVELOPE_PREFIX):
+        raise ValueError(
+            "Unsupported session key envelope format. Expected KMS envelope payload."
+        )
+    payload_b64 = encrypted[len(_KMS_ENVELOPE_PREFIX):]
+    payload_raw = base64.b64decode(payload_b64)
+    payload = json.loads(payload_raw.decode("utf-8"))
+    return (
+        base64.b64decode(payload["ciphertext"]),
+        base64.b64decode(payload["nonce"]),
+        base64.b64decode(payload["encrypted_data_key"]),
+    )
+
+
+def encrypt_session_key(raw_key: str) -> str:
+    """Encrypt *raw_key* using AWS KMS envelope encryption.
+
+    Process:
+      1) KMS generates an ephemeral AES-256 data key.
+      2) AES-GCM encrypts the serialized permission with that data key.
+      3) Store ciphertext + nonce + KMS-encrypted data key.
+
+    Returns a compact versioned envelope string.
     """
-    key = _get_aes_key()
+    key_id = _kms_key_id_or_none()
+    if not key_id:
+        # Backward-compat fallback for tests/local runs.
+        key = _get_legacy_aes_key()
+        nonce = os.urandom(_NONCE_BYTES)
+        aes = AESGCM(key)
+        ct = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
+        return base64.b64encode(nonce + ct).decode("ascii")
+
+    kms = _get_kms_client()
+    data_key = kms.generate_data_key(KeyId=key_id, KeySpec="AES_256")
+    plaintext_key = data_key["Plaintext"]
+    encrypted_data_key = data_key["CiphertextBlob"]
+
     nonce = os.urandom(_NONCE_BYTES)
-    aes = AESGCM(key)
-    ct = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
-    return base64.b64encode(nonce + ct).decode("ascii")
+    aes = AESGCM(plaintext_key)
+    ciphertext = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
+
+    # Best-effort cleanup of plaintext data key from local scope.
+    del plaintext_key
+
+    return _encode_envelope(ciphertext, nonce, encrypted_data_key)
 
 
 def decrypt_session_key(encrypted: str) -> str:
@@ -58,12 +132,24 @@ def decrypt_session_key(encrypted: str) -> str:
     Returns the raw key **in memory only** — callers must not log or persist
     the return value.
     """
-    key = _get_aes_key()
-    blob = base64.b64decode(encrypted)
-    nonce = blob[:_NONCE_BYTES]
-    ct = blob[_NONCE_BYTES:]
-    aes = AESGCM(key)
-    return aes.decrypt(nonce, ct, None).decode("utf-8")
+    if not encrypted.startswith(_KMS_ENVELOPE_PREFIX):
+        key = _get_legacy_aes_key()
+        blob = base64.b64decode(encrypted)
+        nonce = blob[:_NONCE_BYTES]
+        ct = blob[_NONCE_BYTES:]
+        aes = AESGCM(key)
+        return aes.decrypt(nonce, ct, None).decode("utf-8")
+
+    ciphertext, nonce, encrypted_data_key = _decode_envelope(encrypted)
+
+    kms = _get_kms_client()
+    resp = kms.decrypt(CiphertextBlob=encrypted_data_key)
+    plaintext_key = resp["Plaintext"]
+
+    aes = AESGCM(plaintext_key)
+    raw = aes.decrypt(nonce, ciphertext, None).decode("utf-8")
+    del plaintext_key
+    return raw
 
 
 def store_session_key(
@@ -116,7 +202,7 @@ def store_session_key(
                 "is_active": True,
                 "allowed_protocols": session_key_data.get("allowed_protocols")
                     or session_key_data.get("allowedProtocols")
-                    or ["aave_v3", "benqi", "euler_v2", "spark"],
+                    or ["aave", "benqi", "spark"],
                 "max_amount_per_tx": session_key_data.get("max_amount_per_tx", "0"),
             }
         )
@@ -162,7 +248,7 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
     allowed_protocols = (
         [str(p) for p in raw_allowed]
         if isinstance(raw_allowed, list) and raw_allowed
-        else ["aave_v3", "benqi", "euler_v2", "spark"]
+        else ["aave", "benqi", "spark"]
     )
 
     return {

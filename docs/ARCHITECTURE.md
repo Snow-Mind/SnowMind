@@ -272,7 +272,7 @@ Never stored in plaintext. Decrypted only in-memory when building a UserOperatio
 | Vercel | Frontend hosting | Mumbai (bom1) |
 | Railway | Backend hosting | Auto |
 | Supabase | PostgreSQL + RLS | (nearest) |
-| Pimlico | ERC-4337 bundler + paymaster | Avalanche Fuji/Mainnet |
+| Pimlico | ERC-4337 bundler + paymaster | Avalanche Mainnet |
 | ZeroDev | Smart account SDK + deployment | Avalanche |
 | Snowtrace | Block explorer (verification) | Avalanche |
 
@@ -410,7 +410,7 @@ if result.tvl_usd > 0 and result.tvl_usd < $100K:
 Files: apps/backend/app/services/optimizer/rate_fetcher.py, apps/backend/app/core/config.py (MIN_PROTOCOL_TVL_USD)
 
 6. Aave Adapter Bug Fix
-Found and fixed a typo in the mainnet USDC address — 0x...48a6C (wrong) → 0x...48a6E (correct). Also removed hardcoded testnet/mainnet conditional logic and made it always use settings.USDC_ADDRESS directly.
+Found and fixed a typo in the mainnet USDC address — 0x...48a6C (wrong) → 0x...48a6E (correct). Also removed hardcoded network conditional logic and made it always use settings.USDC_ADDRESS directly.
 
 Files: apps/backend/app/services/protocols/aave.py
 

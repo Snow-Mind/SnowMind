@@ -13,20 +13,20 @@ from web3 import Web3
 
 from app.core.config import get_settings
 from app.core.database import get_supabase
+from app.services.execution.executor import ExecutionService
 from app.services.execution.session_key import (
     get_active_session_key,
     get_active_session_key_record,
     revoke_session_key,
 )
-from app.services.optimizer.milp_solver import (
-    OptimizerInput,
-    ProtocolInput,
-    compute_weighted_apy,
-    pick_best_protocol,
+from app.services.optimizer.allocator import (
+    UserPreference,
+    compute_allocation,
+    compute_weighted_apy as compute_alloc_weighted_apy,
 )
-from app.services.optimizer.waterfall_allocator import waterfall_allocate
+from app.services.optimizer.health_checker import HealthCheckResult, RebalanceFlag
 from app.services.optimizer.rate_fetcher import RateFetcher
-from app.services.optimizer.rate_validator import RateValidator, apply_max_move_cap
+from app.services.optimizer.rate_validator import RateValidator
 from app.services.fee_calculator import record_deposit, record_partial_withdrawal
 from app.services.protocols import get_adapter
 from app.services.protocols.base import get_shared_async_web3
@@ -56,12 +56,12 @@ class Rebalancer:
         self.rate_validator = RateValidator()
         self.w3 = get_shared_async_web3()
         self._protocol_addresses: dict[str, str] = {
+            "aave": self.settings.AAVE_V3_POOL,
             "aave_v3": self.settings.AAVE_V3_POOL,
-            "benqi": self.settings.BENQI_POOL,
-            "euler_v2": self.settings.EULER_VAULT,
+            "benqi": self.settings.BENQI_QIUSDC,
         }
-        if self.settings.SPARK_VAULT:
-            self._protocol_addresses["spark"] = self.settings.SPARK_VAULT
+        if self.settings.SPARK_SPUSDC:
+            self._protocol_addresses["spark"] = self.settings.SPARK_SPUSDC
 
     async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
         """Read the on-chain USDC balance sitting idle in the smart account."""
@@ -110,7 +110,7 @@ class Rebalancer:
         allowed_protocols = set(session_key_record["allowed_protocols"])
 
         # 1. Fetch live spot rates
-        spot_rates_raw = await self.rate_fetcher.fetch_active_rates()
+        spot_rates_raw = await self.rate_fetcher.fetch_all_rates()
 
         if not spot_rates_raw:
             return await self._log(db, account_id, "skipped",
@@ -132,6 +132,7 @@ class Rebalancer:
                 twap_rates[pid] = ProtocolRate(
                     protocol_id=pid,
                     apy=twap_apy,
+                    effective_apy=orig.effective_apy,
                     tvl_usd=orig.tvl_usd,
                     utilization_rate=orig.utilization_rate,
                     fetched_at=orig.fetched_at,
@@ -141,20 +142,13 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No validated TWAP rates available")
 
-        # 3. Build protocol inputs (risk scoring bypassed — protocols are pre-vetted whitelist)
-        protocol_inputs: list[ProtocolInput] = []
-        filtered_out: list[str] = []
-        for pid, rate in twap_rates.items():
-            if pid not in allowed_protocols:
-                filtered_out.append(pid)
-                continue
-            protocol_inputs.append(
-                ProtocolInput(
-                    protocol_id=pid,
-                    apy=rate.apy,
-                    risk_score=Decimal("0"),
-                )
-            )
+        # 3. Filter protocols by active session-key scope
+        allowed_rates = {
+            pid: rate
+            for pid, rate in twap_rates.items()
+            if pid in allowed_protocols
+        }
+        filtered_out = sorted(set(twap_rates.keys()) - set(allowed_rates.keys()))
 
         if filtered_out:
             logger.info(
@@ -163,7 +157,7 @@ class Rebalancer:
                 ", ".join(sorted(filtered_out)),
             )
 
-        if not protocol_inputs:
+        if not allowed_rates:
             return await self._log(
                 db,
                 account_id,
@@ -217,51 +211,47 @@ class Rebalancer:
             # Record the deposit for fee tracking (initial deployment)
             record_deposit(db, account_id, idle_usdc)
 
-        # 5. Waterfall allocation: fill highest-APY protocols first, base layer as floor
-        base_inp = OptimizerInput(
-            total_amount_usd=total_usd,
-            protocols=protocol_inputs,
-            current_allocations=current,
-            gas_cost_estimate_usd=Decimal(str(self.settings.GAS_COST_ESTIMATE_USD)),
-        )
-
-        tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in twap_rates.items()}
-
-        logger.info(
-            "Running waterfall allocator for %.2f USD across %d protocols",
-            total_usd, len(protocol_inputs),
-        )
-
-        # If base layer is unavailable (circuit-breaker'd), fall back to pick_best_protocol
-        base_available = any(
-            p.protocol_id == self.settings.BASE_LAYER_PROTOCOL_ID
-            for p in protocol_inputs
-        )
-        if base_available:
-            result = waterfall_allocate(
-                inp=base_inp,
-                tvl_by_protocol=tvl_by_protocol,
-                tvl_cap_pct=Decimal(str(self.settings.TVL_CAP_PCT)),
-                max_exposure_pct=Decimal(str(self.settings.MAX_SINGLE_EXPOSURE_PCT)),
-                base_beat_margin=Decimal(str(self.settings.BASE_BEAT_MARGIN)),
-                base_layer_protocol_id=self.settings.BASE_LAYER_PROTOCOL_ID,
+        # 5. APY-ranked allocation: no base layer, no move cap truncation
+        health_results = {
+            pid: HealthCheckResult(
+                protocol_id=pid,
+                is_healthy=True,
+                is_deposit_safe=True,
+                is_withdrawal_safe=True,
+                flag=RebalanceFlag.NONE,
             )
-        else:
-            logger.warning("Base layer (%s) unavailable — falling back to pick_best_protocol",
-                           self.settings.BASE_LAYER_PROTOCOL_ID)
-            result = pick_best_protocol(base_inp)
-        apy_by_protocol = {p.protocol_id: p.apy for p in protocol_inputs}
-        ranked_protocols = [
-            p.protocol_id
-            for p in sorted(protocol_inputs, key=lambda p: p.apy, reverse=True)
-        ]
+            for pid in allowed_rates
+        }
+        apy_by_protocol = {pid: rate.apy for pid, rate in allowed_rates.items()}
+        tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in allowed_rates.items()}
 
-        # 6. Check rebalance gate
-        if not result.is_rebalance_needed:
+        allocation_result = compute_allocation(
+            health_results=health_results,
+            twap_apys=apy_by_protocol,
+            protocol_tvls=tvl_by_protocol,
+            total_balance=total_usd,
+            user_preferences={
+                pid: UserPreference(protocol_id=pid, enabled=True, max_pct=None)
+                for pid in allowed_rates
+            },
+        )
+
+        result_allocations = allocation_result.allocations
+        ranked_protocols = allocation_result.details.get("ranked_order", [])
+        new_weighted_apy = allocation_result.weighted_apy
+        current_weighted_apy = compute_alloc_weighted_apy(
+            allocations=current,
+            total_balance=total_usd,
+            twap_apys=apy_by_protocol,
+        )
+        apy_improvement = new_weighted_apy - current_weighted_apy
+
+        # 6. Beat-margin gate
+        if apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
             return await self._log(
-                db, smart_account_address, "skipped",
-                reason="Rebalance not worth it",
-                proposed=result.allocations,
+                db, account_id, "skipped",
+                reason="APY improvement below beat margin",
+                proposed=result_allocations,
             )
 
         # 7. Check time since last rebalance
@@ -279,29 +269,39 @@ class Rebalancer:
             min_gap = timedelta(hours=self.settings.MIN_REBALANCE_INTERVAL_HOURS)
             if datetime.now(timezone.utc) - last_ts < min_gap:
                 return await self._log(
-                    db, smart_account_address, "skipped",
+                    db, account_id, "skipped",
                     reason=f"Last rebalance too recent ({last_ts.isoformat()})",
-                    proposed=result.allocations,
+                    proposed=result_allocations,
                 )
 
-        # 7b. Apply max move cap (30% of total per single rebalance)
-        current_dec = current
-        proposed_dec = result.allocations
-        capped = apply_max_move_cap(current_dec, proposed_dec, total_usd)
+        # 8. Delta check — skip if total movement is below $1
+        all_protocols = set(current.keys()) | set(result_allocations.keys())
+        total_movement = sum(
+            abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
+            for pid in all_protocols
+        ) / Decimal("2")
+        if total_movement < Decimal("1"):
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason="Total movement below $1",
+                proposed=result_allocations,
+            )
 
-        # 8. Execute
+        # 9. Execute
         try:
             tx_hash = await self.execute_rebalance(
                 account_id=account_id,
                 smart_account_address=smart_account_address,
-                target_allocations=capped,
+                target_allocations=result_allocations,
             )
         except ValueError as exc:
             # Non-retryable (e.g. invalid/revoked session key)
             logger.warning("Rebalance skipped for %s: %s", smart_account_address, exc)
             await self._log(db, account_id, "skipped",
                             reason=str(exc),
-                            proposed=result.allocations)
+                            proposed=result_allocations)
             raise  # Let scheduler see ValueError as non-retryable
         except Exception as exc:
             logger.exception("Rebalance execution failed for %s", smart_account_address)
@@ -312,7 +312,7 @@ class Rebalancer:
             is_initial_deployment = (not has_existing_positions) and idle_usdc > Decimal("1")
 
             if is_initial_deployment and ranked_protocols:
-                primary_protocol = max(result.allocations, key=result.allocations.get)
+                primary_protocol = max(result_allocations, key=result_allocations.get)
                 attempted = [primary_protocol]
                 for fallback_protocol in ranked_protocols:
                     if fallback_protocol == primary_protocol:
@@ -356,27 +356,24 @@ class Rebalancer:
                     reason=(
                         f"Execution failed on all candidate protocols: {', '.join(attempted)}"
                     ),
-                    proposed=result.allocations,
+                    proposed=result_allocations,
                 )
 
             return await self._log(db, account_id, "failed",
                                    reason=str(exc),
-                                   proposed=result.allocations)
+                                   proposed=result_allocations)
 
         if tx_hash is None:
             return await self._log(db, account_id, "skipped",
                                    reason="No concrete moves generated",
-                                   proposed=result.allocations)
+                                   proposed=result_allocations)
 
-        # 9. Log success
+        # 10. Log success
         return await self._log(
             db, account_id, "executed",
-            proposed=result.allocations,
+            proposed=result_allocations,
             tx_hash=tx_hash,
-            apr_improvement=result.expected_apy - compute_weighted_apy(
-                current,
-                apy_by_protocol,
-            ),
+            apr_improvement=apy_improvement,
         )
 
     # â”€â”€ Get current allocations (DB + on-chain verification) â”€â”€â”€â”€â”€â”€â”€â”€
@@ -403,9 +400,7 @@ class Rebalancer:
         for pid in list(current.keys()):
             try:
                 adapter = get_adapter(pid)
-                balance_wei = await adapter.get_user_balance(
-                    smart_account_address, usdc,
-                )
+                balance_wei = await adapter.get_balance(smart_account_address)
                 # Convert to USD (USDC = 6 decimals)
                 balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
                 if abs(balance_usd - current[pid]) > Decimal("1"):
@@ -437,58 +432,44 @@ class Rebalancer:
         user_transfer: optional {"to": eoa_address, "amountUSDC": float}
         Both appended to the batch after withdrawals, before deposits.
         """
-        payload = {
-            "serializedPermission": serialized_permission,
-            "smartAccountAddress": smart_account_address,
-            "withdrawals": withdrawals,
-            "deposits": deposits,
-            "contracts": {
-                "AAVE_POOL": self.settings.AAVE_V3_POOL,
-                "BENQI_POOL": self.settings.BENQI_POOL,
-                "EULER_VAULT": self.settings.EULER_VAULT,
-                "SPARK_VAULT": self.settings.SPARK_VAULT,
-                "USDC": self.settings.USDC_ADDRESS,
-                "REGISTRY": self.settings.REGISTRY_CONTRACT_ADDRESS,
-            },
-        }
-        if fee_transfer:
-            payload["feeTransfer"] = fee_transfer
-        if user_transfer:
-            payload["userTransfer"] = user_transfer
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{self.settings.EXECUTION_SERVICE_URL}/execute-rebalance",
-                json=payload,
-                headers={"x-internal-key": self.settings.INTERNAL_SERVICE_KEY},
+        try:
+            result = await ExecutionService().execute_rebalance(
+                serialized_permission=serialized_permission,
+                smart_account_address=smart_account_address,
+                withdrawals=withdrawals,
+                deposits=deposits,
+                fee_transfer=fee_transfer,
+                user_transfer=user_transfer,
             )
-            # Detect invalid session key errors and revoke so we don't retry forever
-            if resp.status_code == 500:
-                try:
-                    body = resp.json()
-                    err_msg = body.get("error", "")
-                except Exception:
-                    err_msg = resp.text
-                if (
-                    "serializedSessionKey" in err_msg
-                    or "No signer" in err_msg
-                    or "Session key/account mismatch" in err_msg
-                    or "EnableNotApproved" in err_msg
-                    or "validateUserOp" in err_msg
-                ):
-                    logger.warning(
-                        "Invalid session key for %s — revoking",
-                        smart_account_address,
-                    )
-                    if account_id:
-                        db = get_supabase()
-                        revoke_session_key(db, UUID(account_id))
-                    raise ValueError(
-                        f"Session key invalid for {smart_account_address} — revoked"
-                    )
-            resp.raise_for_status()
-            result = resp.json()
             logger.info("Execution service returned: %s", result)
             return result["txHash"]
+        except httpx.HTTPStatusError as exc:
+            # Detect invalid session key errors and revoke so we don't retry forever.
+            err_msg = ""
+            if exc.response is not None:
+                try:
+                    err_msg = exc.response.json().get("error", "")
+                except Exception:
+                    err_msg = exc.response.text
+
+            if (
+                "serializedSessionKey" in err_msg
+                or "No signer" in err_msg
+                or "Session key/account mismatch" in err_msg
+                or "EnableNotApproved" in err_msg
+                or "validateUserOp" in err_msg
+            ):
+                logger.warning(
+                    "Invalid session key for %s — revoking",
+                    smart_account_address,
+                )
+                if account_id:
+                    db = get_supabase()
+                    revoke_session_key(db, UUID(account_id))
+                raise ValueError(
+                    f"Session key invalid for {smart_account_address} — revoked"
+                ) from exc
+            raise
 
     async def execute_rebalance(
         self,
@@ -694,21 +675,10 @@ class Rebalancer:
                 float(fee_breakdown["fee_usd"]), treasury, smart_account_address,
             )
 
-        # Resolve user's EOA address for the remaining USDC transfer
-        acct = (
-            db.table("accounts")
-            .select("owner_address")
-            .eq("id", account_id)
-            .limit(1)
-            .execute()
-        )
-        owner_eoa = acct.data[0]["owner_address"] if acct.data else None
-
-        # Build user transfer payload (send remaining USDC to user's EOA)
+        # Build user transfer payload (receiver resolved on-chain by execution service).
         user_transfer = None
-        if owner_eoa and fee_breakdown["net_withdrawal_usd"] > Decimal("0.01"):
+        if fee_breakdown["net_withdrawal_usd"] > Decimal("0.01"):
             user_transfer = {
-                "to": owner_eoa,
                 "amountUSDC": float(fee_breakdown["net_withdrawal_usd"]),
             }
 

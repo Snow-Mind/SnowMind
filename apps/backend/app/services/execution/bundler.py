@@ -18,6 +18,7 @@ class PimlicoBundler:
     def __init__(self) -> None:
         settings = get_settings()
         self.rpc_url = settings.pimlico_rpc_url
+        self.fallback_rpc_url = settings.alchemy_aa_rpc_url if settings.ALCHEMY_AA_API_KEY else ""
         self.entrypoint = settings.ENTRYPOINT_V07
 
     # ── JSON-RPC transport ──────────────────────────────────────────
@@ -27,10 +28,11 @@ class PimlicoBundler:
         client: httpx.AsyncClient,
         method: str,
         params: list,
+        rpc_url: str | None = None,
     ) -> dict:
         """Send a single JSON-RPC request to Pimlico."""
         resp = await client.post(
-            self.rpc_url,
+            rpc_url or self.rpc_url,
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
         )
         resp.raise_for_status()
@@ -38,6 +40,24 @@ class PimlicoBundler:
         if "error" in body:
             raise RuntimeError(f"Pimlico RPC error ({method}): {body['error']}")
         return body
+
+    async def _rpc_with_fallback(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        params: list,
+    ) -> dict:
+        """Try Pimlico first, then Alchemy AA API as fallback."""
+        try:
+            return await self._rpc(client, method, params, self.rpc_url)
+        except Exception as primary_exc:
+            if not self.fallback_rpc_url:
+                raise
+            logger.warning(
+                "Primary bundler call failed (%s). Retrying with fallback provider.",
+                primary_exc,
+            )
+            return await self._rpc(client, method, params, self.fallback_rpc_url)
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -47,7 +67,7 @@ class PimlicoBundler:
         Returns the ``userOpHash`` assigned by the bundler.
         """
         async with httpx.AsyncClient(timeout=30) as client:
-            body = await self._rpc(
+            body = await self._rpc_with_fallback(
                 client, "eth_sendUserOperation", [userop, self.entrypoint],
             )
             op_hash: str = body["result"]
@@ -65,11 +85,7 @@ class PimlicoBundler:
         """
         async with httpx.AsyncClient(timeout=15) as client:
             for _ in range(timeout_secs // 2):
-                body = await self._rpc(
-                    client,
-                    "eth_getUserOperationReceipt",
-                    [userop_hash],
-                )
+                body = await self._rpc_with_fallback(client, "eth_getUserOperationReceipt", [userop_hash])
                 receipt = body.get("result")
                 if receipt and receipt.get("success"):
                     tx_hash = receipt["receipt"]["transactionHash"]
@@ -93,7 +109,7 @@ class PimlicoBundler:
     async def estimate_gas(self, userop: dict) -> dict:
         """``eth_estimateUserOperationGas`` — returns gas-limit fields."""
         async with httpx.AsyncClient(timeout=15) as client:
-            body = await self._rpc(
+            body = await self._rpc_with_fallback(
                 client,
                 "eth_estimateUserOperationGas",
                 [userop, self.entrypoint],
@@ -107,7 +123,7 @@ class PimlicoBundler:
         Makes the transaction gasless for the end-user.
         """
         async with httpx.AsyncClient(timeout=15) as client:
-            body = await self._rpc(
+            body = await self._rpc_with_fallback(
                 client,
                 "pm_sponsorUserOperation",
                 [userop, self.entrypoint],
@@ -123,7 +139,7 @@ class PimlicoBundler:
     async def get_gas_prices(self) -> dict:
         """``pimlico_getUserOperationGasPrice`` — returns fast gas prices."""
         async with httpx.AsyncClient(timeout=10) as client:
-            body = await self._rpc(
+            body = await self._rpc_with_fallback(
                 client, "pimlico_getUserOperationGasPrice", [],
             )
             return body["result"]["fast"]

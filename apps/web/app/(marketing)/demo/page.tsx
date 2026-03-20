@@ -15,7 +15,7 @@ import {
   FileCode2,
 } from "lucide-react";
 import CrystalCard from "@/components/snow/CrystalCard";
-import { CONTRACTS, EXPLORER, IS_TESTNET } from "@/lib/constants";
+import { CONTRACTS, EXPLORER } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
