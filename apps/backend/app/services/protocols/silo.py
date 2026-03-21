@@ -113,11 +113,16 @@ class SiloAdapter(BaseProtocolAdapter):
         # Cache for share price APY estimation
         self._last_share_price: Decimal | None = None
         self._last_share_price_time: float | None = None
+        self._cached_apy: Decimal = Decimal("0")
 
     # ── Rate reading ──────────────────────────────────────────────────────────
 
     async def get_rate(self) -> ProtocolRate:
-        """Estimate APY from share price growth (convertToAssets over time)."""
+        """Estimate APY from share price growth (convertToAssets over time).
+
+        When called rapidly (< 60s), returns the previously computed APY
+        without resetting the share-price observation window.
+        """
         if not self.vault:
             return ProtocolRate(
                 protocol_id=self.protocol_id,
@@ -140,7 +145,6 @@ class SiloAdapter(BaseProtocolAdapter):
         now = time.time()
 
         # Estimate APY from price change since last reading
-        apy = Decimal("0")
         if (
             self._last_share_price is not None
             and self._last_share_price_time is not None
@@ -150,16 +154,20 @@ class SiloAdapter(BaseProtocolAdapter):
             if elapsed > Decimal("60"):  # At least 1 minute between readings
                 growth = (current_price - self._last_share_price) / self._last_share_price
                 if growth > Decimal("0"):
-                    apy = growth * SECONDS_PER_YEAR / elapsed
-
-        # Update cache for next call
-        self._last_share_price = current_price
-        self._last_share_price_time = now
+                    self._cached_apy = growth * SECONDS_PER_YEAR / elapsed
+                # Update observation window only when we compute a new APY
+                self._last_share_price = current_price
+                self._last_share_price_time = now
+            # elapsed < 60s: keep _cached_apy, don't reset the observation window
+        else:
+            # First call ever: seed the price cache
+            self._last_share_price = current_price
+            self._last_share_price_time = now
 
         return ProtocolRate(
             protocol_id=self.protocol_id,
-            apy=apy,
-            effective_apy=apy,
+            apy=self._cached_apy,
+            effective_apy=self._cached_apy,
             tvl_usd=tvl,
             utilization_rate=None,
             fetched_at=now,

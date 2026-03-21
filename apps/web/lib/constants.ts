@@ -33,9 +33,9 @@ export const CONTRACTS = {
   SPARK_VAULT: (process.env.NEXT_PUBLIC_SPARK_VAULT_ADDRESS ?? '0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d') as `0x${string}`,
   EULER_VAULT: (process.env.NEXT_PUBLIC_EULER_VAULT_ADDRESS ?? '0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e') as `0x${string}`,
 
-  // Silo isolated lending markets on Avalanche mainnet
-  SILO_SAVUSD_VAULT: (process.env.NEXT_PUBLIC_SILO_SAVUSD_VAULT_ADDRESS ?? '0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1') as `0x${string}`,
-  SILO_SUSDP_VAULT: (process.env.NEXT_PUBLIC_SILO_SUSDP_VAULT_ADDRESS ?? '0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca') as `0x${string}`,
+  // Silo V2 USDC lending vaults on Avalanche mainnet (bUSDC ERC-4626 vaults, NOT SiloConfig)
+  SILO_SAVUSD_VAULT: (process.env.NEXT_PUBLIC_SILO_SAVUSD_VAULT_ADDRESS ?? '0x606fe9a70338e798a292CA22C1F28C829F24048E') as `0x${string}`,
+  SILO_SUSDP_VAULT: (process.env.NEXT_PUBLIC_SILO_SUSDP_VAULT_ADDRESS ?? '0x8ad697a333569ca6f04c8c063e9807747ef169c1') as `0x${string}`,
 
   // Native USDC on Avalanche mainnet (Circle-issued)
   USDC:        (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E') as `0x${string}`,
