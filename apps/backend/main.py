@@ -25,9 +25,9 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     description="Autonomous non-custodial AI yield optimizer on Avalanche",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 # ── slowapi per-endpoint rate limiter ────────────────────────

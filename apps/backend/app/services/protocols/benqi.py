@@ -240,17 +240,22 @@ class BenqiAdapter(BaseProtocolAdapter):
 
         if comptroller:
             try:
-                mint_paused, redeem_paused = await asyncio.gather(
-                    comptroller.functions.mintGuardianPaused(
-                        w3.to_checksum_address(self.pool_address)
-                    ).call(),
-                    comptroller.functions.redeemGuardianPaused(
-                        w3.to_checksum_address(self.pool_address)
-                    ).call(),
-                )
+                mint_paused = await comptroller.functions.mintGuardianPaused(
+                    w3.to_checksum_address(self.pool_address)
+                ).call()
             except Exception as exc:
-                logger.warning("Benqi comptroller check failed: %s", exc)
-                details["comptroller_error"] = str(exc)
+                logger.warning("Benqi mintGuardianPaused check failed: %s", exc)
+                details["mint_check_error"] = str(exc)
+
+            try:
+                redeem_paused = await comptroller.functions.redeemGuardianPaused(
+                    w3.to_checksum_address(self.pool_address)
+                ).call()
+            except Exception as exc:
+                # redeemGuardianPaused returns empty data for some markets (e.g. qiUSDCn).
+                # Conservative default: assume NOT paused (withdrawals allowed).
+                logger.debug("Benqi redeemGuardianPaused unavailable for %s: %s", self.pool_address, exc)
+                details["redeem_check_unavailable"] = True
 
         details["mint_paused"] = mint_paused
         details["redeem_paused"] = redeem_paused

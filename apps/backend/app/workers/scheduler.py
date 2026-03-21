@@ -63,6 +63,12 @@ class SnowMindScheduler:
             self._snapshot_daily_apy, "cron",
             hour=2, minute=0, id="apy_snapshot",
         )
+        # Seed Spark convertToAssets snapshot on startup if table is empty
+        self._scheduler.add_job(
+            self._seed_spark_snapshot_if_needed, "date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=10),
+            id="spark_seed",
+        )
         self._scheduler.start()
         logger.info(
             "Scheduler started [instance=%s, interval=%ds]",
@@ -298,6 +304,35 @@ class SnowMindScheduler:
             logger.info("Daily APY snapshot recorded for %d protocols", len(rates))
         except Exception as e:
             logger.error("APY snapshot job failed: %s", e)
+
+        # Also save Spark convertToAssets snapshot for APY calculation
+        try:
+            await RateFetcher().save_spark_daily_snapshot()
+        except Exception as e:
+            logger.error("Spark daily snapshot failed: %s", e)
+
+    # ── Spark snapshot seed ────────────────────────────────────────────────
+
+    async def _seed_spark_snapshot_if_needed(self) -> None:
+        """Seed the first Spark convertToAssets snapshot if table is empty.
+
+        Without at least one snapshot, Spark APY will always be 0%.
+        This runs once on startup, 10 seconds after the scheduler starts.
+        """
+        try:
+            result = (
+                self.db.table("spark_convert_snapshots")
+                .select("id")
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
+                logger.info("Spark snapshot table is empty — seeding initial snapshot")
+                await RateFetcher().save_spark_daily_snapshot()
+            else:
+                logger.info("Spark snapshot table already has data — skipping seed")
+        except Exception as e:
+            logger.error("Failed to seed Spark snapshot: %s", e)
 
     # ── Balance reconciliation ───────────────────────────────────────────────
 
