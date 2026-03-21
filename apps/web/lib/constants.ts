@@ -152,7 +152,7 @@ export const PROTOCOL_CONFIG = {
     riskScore: 8,     // Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1 = 8/10
     color: '#22C55E',
     bgColor: 'rgba(34, 197, 94, 0.12)',
-    logoPath: '/protocols/silo-placeholder.svg',
+    logoPath: '/protocols/silo-official.svg',
     isActive: true,
     defaultEnabled: false,
     description: 'Isolated lending market — savUSD/USDC on Silo V2',
@@ -165,10 +165,10 @@ export const PROTOCOL_CONFIG = {
     name: 'Silo (sUSDp/USDC)',
     shortName: 'Silo',
     contractAddress: CONTRACTS.SILO_SUSDP_VAULT,
-    riskScore: 8,     // Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1 = 8/10
+    riskScore: 6,     // Safety 2 + Liquidity 1 + Collateral 1 + Yield 1 + Architecture 1 = 6/10
     color: '#16A34A',
     bgColor: 'rgba(22, 163, 74, 0.12)',
-    logoPath: '/protocols/silo-placeholder.svg',
+    logoPath: '/protocols/silo-official.svg',
     isActive: true,
     defaultEnabled: false,
     description: 'Isolated lending market — sUSDp/USDC on Silo V2',

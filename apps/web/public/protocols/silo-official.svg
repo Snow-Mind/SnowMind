@@ -1,0 +1,7 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" rx="12" fill="#000000"/>
+  <!-- Upper white D-shape: flat left, rounded right -->
+  <path d="M14 10 L34 10 C45.046 10 54 18.954 54 30 L34 30 L14 30 Z" fill="#FFFFFF"/>
+  <!-- Lower white D-shape: flat right, rounded left -->
+  <path d="M50 54 L30 54 C18.954 54 10 45.046 10 34 L30 34 L50 34 Z" fill="#FFFFFF"/>
+</svg>

@@ -60,7 +60,7 @@ RISK_SCORES: dict[str, float] = {
     "spark": 9.0,      # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 0
     "euler_v2": 6.0,   # Safety 2 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 0
     "silo_savusd_usdc": 8.0,  # Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1
-    "silo_susdp_usdc": 8.0,   # Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1
+    "silo_susdp_usdc": 6.0,   # Safety 2 + Liquidity 1 + Collateral 1 + Yield 1 + Architecture 1
 }
 
 

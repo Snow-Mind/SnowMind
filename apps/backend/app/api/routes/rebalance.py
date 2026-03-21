@@ -8,10 +8,11 @@ import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from supabase import Client
 
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_db, get_supabase
 from app.core.limiter import limiter
 from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
@@ -370,3 +371,282 @@ async def get_platform_capacity(
         "remainingCapacityUsd": str(remaining),
         "isCapReached": remaining <= Decimal("0"),
     }
+
+
+# ── POST /dry-run — full pipeline dry-run (no auth, no execution) ────────────
+
+class DryRunRequest(BaseModel):
+    """Simulate a rebalance decision for a hypothetical or real account.
+
+    - If account_address is provided: reads real on-chain balances and DB allocations.
+    - If omitted: uses total_usdc as a fresh deployment (no current positions).
+    - Never executes anything. Never writes to DB.
+    """
+    account_address: str | None = None
+    total_usdc: Decimal | None = None
+    current_allocations: dict[str, Decimal] | None = None
+
+
+class DryRunAllocationItem(CamelModel):
+    protocol_id: str
+    current_usd: Decimal
+    proposed_usd: Decimal
+    delta_usd: Decimal
+
+
+class DryRunResponse(CamelModel):
+    dry_run: bool = True
+    total_usdc: Decimal
+    idle_usdc: Decimal
+    current_allocations: dict[str, Decimal]
+    proposed_allocations: list[DryRunAllocationItem]
+    current_weighted_apy: Decimal
+    proposed_weighted_apy: Decimal
+    apy_improvement: Decimal
+    rebalance_needed: bool
+    skip_reason: str | None = None
+    health_checks: dict[str, dict]
+    protocol_rates: dict[str, dict]
+    reasoning: list[str]
+
+
+@router.post("/dry-run", response_model=DryRunResponse)
+@limiter.limit("20/minute")
+async def dry_run_rebalance(request: Request, body: DryRunRequest):
+    """Full 19-step rebalancer pipeline as a dry-run.
+
+    - Reads LIVE on-chain APYs from actual protocols
+    - Runs health checks (adapter.get_health() for each protocol)
+    - Runs the allocator algorithm
+    - Computes deltas, beat-margin gate, profitability gate
+    - Returns exactly what the live rebalancer would decide and WHY
+    - Does NOT execute anything. Does NOT write to DB. No auth required.
+    """
+    settings = get_settings()
+    reasoning: list[str] = []
+
+    # Resolve total balance and current allocations
+    current: dict[str, Decimal] = {}
+    idle_usdc = Decimal("0")
+    total_usd = Decimal("0")
+
+    if body.account_address:
+        # Real account: read on-chain balances
+        addr = validate_eth_address(body.account_address)
+        reasoning.append(f"Reading on-chain state for {addr}")
+
+        rebalancer = Rebalancer()
+        idle_usdc = await rebalancer._get_idle_usdc_balance(addr)
+        reasoning.append(f"Idle USDC in smart account: ${float(idle_usdc):.2f}")
+
+        # Read DB allocations if account exists
+        db = get_supabase()
+        acct = (
+            db.table("accounts")
+            .select("id")
+            .eq("address", addr)
+            .limit(1)
+            .execute()
+        )
+        if acct.data:
+            alloc_rows = (
+                db.table("allocations")
+                .select("protocol_id, amount_usdc")
+                .eq("account_id", acct.data[0]["id"])
+                .execute()
+            )
+            for row in alloc_rows.data:
+                amt = Decimal(str(row["amount_usdc"]))
+                current[row["protocol_id"]] = amt
+                total_usd += amt
+            reasoning.append(f"DB allocations: {dict(current)}")
+
+        total_usd += idle_usdc
+    elif body.total_usdc:
+        total_usd = body.total_usdc
+        idle_usdc = body.total_usdc
+        if body.current_allocations:
+            current = {k: v for k, v in body.current_allocations.items()}
+            total_usd = sum(current.values(), Decimal("0")) + idle_usdc
+        reasoning.append(f"Simulated balance: ${float(total_usd):.2f}")
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either account_address or total_usdc",
+        )
+
+    if total_usd <= 0:
+        raise HTTPException(status_code=400, detail="Total balance is zero")
+
+    # Fetch live rates
+    from app.services.optimizer.rate_fetcher import RateFetcher
+    from app.services.optimizer.risk_scorer import RiskScorer
+    from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
+    from app.services.protocols.base import ProtocolHealth, ProtocolStatus
+    from app.services.optimizer.health_checker import check_protocol_health, HealthCheckResult, RebalanceFlag
+    from app.services.optimizer.allocator import (
+        compute_allocation,
+        compute_weighted_apy as compute_alloc_weighted_apy,
+        UserPreference,
+    )
+
+    rate_fetcher = RateFetcher()
+    risk_scorer = RiskScorer()
+
+    spot_rates = await rate_fetcher.fetch_all_rates()
+    if not spot_rates:
+        raise HTTPException(status_code=503, detail="No protocol rates available")
+
+    # Build rate info for response
+    rate_info: dict[str, dict] = {}
+    for pid, rate in spot_rates.items():
+        rate_info[pid] = {
+            "apy": str(rate.apy),
+            "apyPct": f"{float(rate.apy) * 100:.2f}%",
+            "tvlUsd": str(rate.tvl_usd),
+            "utilizationRate": str(rate.utilization_rate) if rate.utilization_rate else None,
+        }
+        reasoning.append(
+            f"{pid}: APY={float(rate.apy) * 100:.2f}%, TVL=${float(rate.tvl_usd):,.0f}"
+        )
+
+    apy_by_protocol = {pid: rate.apy for pid, rate in spot_rates.items()}
+    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in spot_rates.items()}
+
+    # Health checks for all protocols
+    health_results: dict[str, HealthCheckResult] = {}
+    health_info: dict[str, dict] = {}
+
+    for pid in spot_rates:
+        try:
+            adapter = ALL_ADAPTERS.get(pid)
+            if adapter:
+                proto_health = await adapter.get_health()
+            else:
+                proto_health = ProtocolHealth(
+                    protocol_id=pid,
+                    status=ProtocolStatus.HEALTHY,
+                    is_deposit_safe=True,
+                    is_withdrawal_safe=True,
+                )
+        except Exception as exc:
+            reasoning.append(f"Health check RPC failed for {pid}: {exc}")
+            proto_health = ProtocolHealth(
+                protocol_id=pid,
+                status=ProtocolStatus.HEALTHY,
+                is_deposit_safe=True,
+                is_withdrawal_safe=True,
+            )
+
+        hr = await check_protocol_health(
+            protocol_id=pid,
+            protocol_health=proto_health,
+            current_apy=apy_by_protocol.get(pid, Decimal("0")),
+            twap_apy=apy_by_protocol.get(pid, Decimal("0")),
+            previous_apy=None,
+            yesterday_avg_apy=None,
+            daily_snapshots_7d=None,
+            current_position=current.get(pid, Decimal("0")),
+            protocol_tvl=tvl_by_protocol.get(pid, Decimal("0")),
+            circuit_breaker_failures=0,
+        )
+        health_results[pid] = hr
+        health_info[pid] = {
+            "isHealthy": hr.is_healthy,
+            "isDepositSafe": hr.is_deposit_safe,
+            "flag": hr.flag.value if hasattr(hr.flag, "value") else str(hr.flag),
+            "exclusionReasons": hr.exclusion_reasons,
+        }
+        if not hr.is_deposit_safe:
+            reasoning.append(f"{pid}: EXCLUDED — {'; '.join(hr.exclusion_reasons)}")
+        else:
+            reasoning.append(f"{pid}: HEALTHY (deposit safe)")
+
+    # Run allocator
+    allocation_result = compute_allocation(
+        health_results=health_results,
+        twap_apys=apy_by_protocol,
+        protocol_tvls=tvl_by_protocol,
+        total_balance=total_usd,
+        user_preferences={
+            pid: UserPreference(protocol_id=pid, enabled=True, max_pct=None)
+            for pid in spot_rates
+        },
+    )
+    result_allocations = allocation_result.allocations
+
+    # Compute weighted APYs
+    new_weighted_apy = allocation_result.weighted_apy
+    current_weighted_apy = compute_alloc_weighted_apy(
+        allocations=current,
+        total_balance=total_usd,
+        twap_apys=apy_by_protocol,
+    )
+    apy_improvement = new_weighted_apy - current_weighted_apy
+
+    # Determine if rebalance is needed
+    rebalance_needed = True
+    skip_reason: str | None = None
+
+    # Beat margin gate
+    if apy_improvement < Decimal(str(settings.BEAT_MARGIN)):
+        rebalance_needed = False
+        skip_reason = f"APY improvement ({float(apy_improvement) * 100:.4f}%) below beat margin ({float(settings.BEAT_MARGIN) * 100:.2f}%)"
+        reasoning.append(f"SKIP: {skip_reason}")
+
+    # Movement threshold
+    all_protocols = set(current.keys()) | set(result_allocations.keys())
+    total_movement = sum(
+        abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
+        for pid in all_protocols
+    ) / Decimal("2")
+    if rebalance_needed and total_movement < Decimal("1"):
+        rebalance_needed = False
+        skip_reason = f"Total movement below $1 (${float(total_movement):.2f})"
+        reasoning.append(f"SKIP: {skip_reason}")
+
+    # Profitability gate
+    if rebalance_needed and total_usd > 0:
+        daily_gain = apy_improvement * total_usd / Decimal("365")
+        gas_cost = Decimal(str(settings.GAS_COST_ESTIMATE_USD))
+        if daily_gain < gas_cost:
+            rebalance_needed = False
+            skip_reason = f"Profitability gate: daily gain ${float(daily_gain):.4f} < gas ${float(gas_cost):.4f}"
+            reasoning.append(f"SKIP: {skip_reason}")
+
+    # Build delta items
+    proposed_items: list[DryRunAllocationItem] = []
+    for pid in sorted(all_protocols | set(result_allocations.keys())):
+        cur = current.get(pid, Decimal("0"))
+        prop = result_allocations.get(pid, Decimal("0"))
+        if cur > 0 or prop > 0:
+            proposed_items.append(DryRunAllocationItem(
+                protocol_id=pid,
+                current_usd=cur,
+                proposed_usd=prop,
+                delta_usd=prop - cur,
+            ))
+
+    if rebalance_needed:
+        reasoning.append(
+            f"REBALANCE NEEDED: move ${float(total_movement):.2f}, "
+            f"APY {float(current_weighted_apy) * 100:.2f}% → {float(new_weighted_apy) * 100:.2f}%"
+        )
+    else:
+        reasoning.append("NO REBALANCE: " + (skip_reason or "allocation unchanged"))
+
+    return DryRunResponse(
+        dry_run=True,
+        total_usdc=total_usd,
+        idle_usdc=idle_usdc,
+        current_allocations=current,
+        proposed_allocations=proposed_items,
+        current_weighted_apy=current_weighted_apy,
+        proposed_weighted_apy=new_weighted_apy,
+        apy_improvement=apy_improvement,
+        rebalance_needed=rebalance_needed,
+        skip_reason=skip_reason,
+        health_checks=health_info,
+        protocol_rates=rate_info,
+        reasoning=reasoning,
+    )

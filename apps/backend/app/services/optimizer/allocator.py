@@ -6,8 +6,8 @@ There is NO base layer. Every protocol competes on effective APY.
 Algorithm:
   1. Rank all healthy protocols by effective TWAP APY (highest first)
   2. For each in ranked order:
-     - Aave/Benqi: cap = min(remaining, 15% × protocol_tvl, user_max_cap)
-     - Spark: cap = min(remaining, user_max_cap) — no system TVL cap
+     - Spark: cap = min(remaining, user_max_cap) — no system TVL cap (fixed rate)
+     - All others (Aave, Benqi, Euler, Silo): cap = min(remaining, 15% × protocol_tvl, user_max_cap)
   3. If remaining > 0 after all protocols: hold idle, alert ops
 
 User preferences (≥ $10K deposits):
@@ -84,7 +84,7 @@ def get_effective_cap(
     if user_pref and not user_pref.enabled:
         return Decimal("0")
 
-    # System TVL cap (Aave/Benqi only, Spark exempt)
+    # System TVL cap (all protocols except Spark; Spark's fixed-rate doesn't compress)
     if protocol_id == "spark":
         system_cap = total_balance  # No system cap for Spark
     else:

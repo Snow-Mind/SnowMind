@@ -272,9 +272,7 @@ class Rebalancer:
                 previous_apys[pid] = latest.apy
 
         # ── Helper: health-check a SINGLE protocol via its adapter ───
-        _NO_TVL_CAP_PROTOCOLS = frozenset(
-            ("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc")
-        )
+        _NO_TVL_CAP_PROTOCOLS = frozenset(("spark",))
 
         async def _check_one(pid: str, position: Decimal) -> HealthCheckResult:
             """Fetch adapter health + run check_protocol_health for one protocol."""

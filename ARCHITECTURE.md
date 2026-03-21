@@ -161,10 +161,10 @@ There is no default "base layer." Every protocol competes on effective APY. The 
    Use twap_apy directly for Aave, Benqi, Euler, and Silo
 
 2. For each protocol in ranked order:
-   a. If protocol is Aave or Benqi:
+   a. If protocol is Spark:
+      max_allowed = remaining_funds  (no TVL cap — PSM3 fixed-rate, doesn't compress)
+   b. All other protocols (Aave, Benqi, Euler, Silo):
       max_allowed = min(remaining_funds, 0.15 × protocol_tvl)
-   b. If protocol is Spark, Euler, or Silo:
-      max_allowed = remaining_funds  (no TVL cap — ERC-4626 vaults)
    c. Allocate min(remaining_funds, max_allowed)
    d. Subtract allocated amount from remaining_funds
    e. Stop when remaining_funds == 0
@@ -177,7 +177,7 @@ There is no default "base layer." Every protocol competes on effective APY. The 
 
 ### Why This Works
 
-Spark/Euler/Silo almost always rank lower and absorb overflow — giving them the same practical effect as the old "base layer" design, but without the artificial bias. If any vault's rate rises above the lending protocols, it captures all funds, which is correct. The algorithm is neutral and APY-driven.
+Spark almost always ranks lower and absorbs overflow — giving it the same practical effect as the old "base layer" design, but without the artificial bias. ERC-4626 vaults (Euler, Silo) still respect the 15% TVL cap since their liquidity can be limited. The algorithm is neutral and APY-driven.
 
 ### User Market Selection & Diversification Preferences
 
@@ -907,7 +907,7 @@ ZeroDev paymaster must be funded. If it runs empty, all UserOperations fail sile
 | Silo opt-in only | Growing protocol, isolated markets. Lower TVL than established protocols. |
 | No base layer | Pure APY ranking is neutral and correct. Spark absorbs overflow naturally. |
 | No 30% move cap | If pre-checks pass, they pass for full amount. Truncating is incoherent. |
-| No TVL cap for Spark/Euler/Silo | Fixed-rate / ERC-4626 vaults don't compress. Cap would only hurt yield. |
+| No TVL cap for Spark only | PSM3 fixed-rate doesn't compress under deposits. Euler/Silo have the standard 15% TVL cap like Aave/Benqi. |
 | 0.1% beat margin | Low enough to capture real improvements. Low Avalanche gas makes it viable. |
 | Proportional fee at every withdrawal | Prevents the partial-withdrawal fee-drain exploit. |
 | userEOA from on-chain | DB-stored EOA is spoofable by DB compromise. On-chain is immutable. |

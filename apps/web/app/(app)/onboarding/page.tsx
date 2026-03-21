@@ -8,7 +8,6 @@ import {
   Copy,
   ExternalLink,
   Loader2,
-  MessageCircle,
   Wallet,
   Zap,
   Shield,
@@ -42,28 +41,6 @@ import {
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
-
-const DIVERSIFICATION_OPTIONS: {
-  value: DiversificationPreference;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "max_yield",
-    label: "Max Yield",
-    description: "100% in the single best protocol. Maximum return, no splitting.",
-  },
-  {
-    value: "balanced",
-    label: "Balanced",
-    description: "Split across up to 2 protocols, max 60% each. Good default.",
-  },
-  {
-    value: "diversified",
-    label: "Diversified",
-    description: "Spread across up to 4 protocols, max 40% each. Maximum safety.",
-  },
-];
 
 const ERC20_ABI = [
   {
@@ -126,13 +103,13 @@ function normalizeProtocolId(protocolId: string): ProtocolId | null {
   return null;
 }
 
-// Ordered markets shown in onboarding strategy step.
+// Ordered markets shown in onboarding strategy step (risk desc, then alphabetical).
 const MARKET_PROTOCOL_IDS: ProtocolId[] = [
   "aave_v3",
   "benqi",
-  "euler_v2",
   "spark",
   "silo_savusd_usdc",
+  "euler_v2",
   "silo_susdp_usdc",
 ];
 
@@ -167,9 +144,8 @@ export default function OnboardingPage() {
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
     () => new Set(MARKET_PROTOCOLS.filter((p) => p.defaultEnabled).map((p) => p.id)),
   );
-  // Diversification preference — defaults to balanced
-  const [diversificationPref, setDiversificationPref] =
-    useState<DiversificationPreference>("balanced");
+  // Diversification preference — hardcoded to balanced (allocation strategy UI removed)
+  const diversificationPref: DiversificationPreference = "balanced";
 
   const toggleProtocol = (id: string, isEnabled: boolean) => {
     if (!isEnabled) return;
@@ -233,33 +209,6 @@ export default function OnboardingPage() {
   const selectedMarketNames = MARKET_PROTOCOLS
     .filter((p) => selectedProtocols.has(p.id))
     .map((p) => p.name);
-
-  const assistantHeadline =
-    diversificationPref === "max_yield"
-      ? "Go concentrated on top APY"
-      : diversificationPref === "balanced"
-        ? "Blend APY with resiliency"
-        : "Diversify across multiple markets";
-
-  const assistantSuggestion = (() => {
-    if (!selectedMarketNames.length) {
-      return "Select at least one active market to continue.";
-    }
-    if (diversificationPref === "max_yield") {
-      return topProtocolByApy
-        ? `Recommended: prioritize ${PROTOCOL_CONFIG[topProtocolByApy].name} for this cycle based on current APY.`
-        : "Recommended: choose the single market with the strongest live APY.";
-    }
-    if (diversificationPref === "balanced") {
-      return `Recommended: keep 2-3 markets active (${selectedMarketNames.slice(0, 3).join(", ")}) to reduce single-market risk.`;
-    }
-    return `Recommended: keep all high-quality markets active and let caps reduce concentration. Current: ${selectedMarketNames.join(", ")}.`;
-  })();
-
-  const assistantRiskNote =
-    selectedProtocols.has("euler_v2")
-      ? "Euler (9Summits) can show elevated APY during high utilization. SnowMind still applies utilization and health gates."
-      : "Enable Euler (9Summits) if you want a higher-volatility APY option in your allowed market set.";
 
   // Poll USDC balance of user's EOA wallet
   useEffect(() => {
@@ -715,9 +664,10 @@ export default function OnboardingPage() {
               {/* Protocol table */}
               <div className="overflow-hidden rounded-lg border border-[#E8E2DA]">
                 {/* Table header */}
-                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-14">Risk</span>
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-right w-16">APY</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-right w-20">TVL</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-12">Active</span>
                 </div>
@@ -727,12 +677,13 @@ export default function OnboardingPage() {
                   const isSelected = selectedProtocols.has(protocol.id);
                   const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
                   const tvl = rateData?.tvlUsd;
+                  const apy = rateData?.currentApy;
                   const isEnabled = protocol.isActive;
                   return (
                     <div
                       key={protocol.id}
                       className={cn(
-                        "grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
+                        "grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected
@@ -789,9 +740,16 @@ export default function OnboardingPage() {
                                 : "bg-[#DC2626]/10 text-[#DC2626]",
                           )}
                         >
-                          {protocol.riskScore.toFixed(1)}
+                          {protocol.riskScore}/10
                         </span>
                       </div>
+
+                      {/* APY */}
+                      <span className="font-mono text-[11px] font-semibold text-[#059669] text-right w-16">
+                        {apy != null && apy > 0
+                          ? `${(apy * 100).toFixed(2)}%`
+                          : "—"}
+                      </span>
 
                       {/* TVL */}
                       <span className="font-mono text-[11px] text-[#5C5550] text-right w-20">
@@ -823,58 +781,6 @@ export default function OnboardingPage() {
                   );
                 })}
               </div>
-
-              {/* Diversification preference */}
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-[#5C5550]">Allocation Strategy</p>
-                <div className="space-y-2">
-                  {DIVERSIFICATION_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setDiversificationPref(opt.value)}
-                      className={cn(
-                        "flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition-all",
-                        diversificationPref === opt.value
-                          ? "border-[#E84142] bg-[#E84142]/[0.04]"
-                          : "border-[#E8E2DA] bg-white hover:border-[#D4CEC7]",
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-                          diversificationPref === opt.value
-                            ? "border-[#E84142] bg-[#E84142]"
-                            : "border-[#C4BEB8]",
-                        )}
-                      >
-                        {diversificationPref === opt.value && (
-                          <div className="h-1.5 w-1.5 rounded-full bg-white" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-[#1A1715]">{opt.label}</p>
-                        <p className="text-[11px] text-[#8A837C]">{opt.description}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-[#E8E2DA] bg-[#F5F0EB] p-3">
-                <div className="flex items-start gap-2">
-                  <div className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-[#E84142]/10">
-                    <MessageCircle className="h-3.5 w-3.5 text-[#E84142]" />
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-semibold text-[#1A1715]">Market Assistant: {assistantHeadline}</p>
-                    <p className="text-[11px] text-[#5C5550]">{assistantSuggestion}</p>
-                    <p className="text-[11px] text-[#8A837C]">{assistantRiskNote}</p>
-                  </div>
-                </div>
-              </div>
-
-
 
               <div className="flex gap-3">
                 <button
