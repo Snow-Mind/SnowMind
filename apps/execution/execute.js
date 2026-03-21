@@ -381,21 +381,25 @@ export async function executeRebalance({
     })
   }
 
+  // Log each withdrawal once. If there are deposits, pair with the first
+  // deposit target so the registry records the flow direction. Previous code
+  // used a nested loop that created N×M false entries.
+  const firstDepositAddr = deposits.length > 0
+    ? resolveContractKey(deposits[0].protocol, contracts)
+    : null
   for (const w of withdrawals) {
-    for (const d of deposits) {
-      const from = resolveContractKey(w.protocol, contracts)
-      const to = resolveContractKey(d.protocol, contracts)
-      if (from && to) {
-        calls.push({
-          to: contracts.REGISTRY,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: REGISTRY_ABI,
-            functionName: "logRebalance",
-            args: [from, to, parseUnits(String(w.amountUSDC), 6)],
-          }),
-        })
-      }
+    const from = resolveContractKey(w.protocol, contracts)
+    const to = firstDepositAddr || from  // fallback to self if no deposits
+    if (from && to) {
+      calls.push({
+        to: contracts.REGISTRY,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: REGISTRY_ABI,
+          functionName: "logRebalance",
+          args: [from, to, parseUnits(String(w.amountUSDC), 6)],
+        }),
+      })
     }
   }
 

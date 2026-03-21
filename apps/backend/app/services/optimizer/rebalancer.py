@@ -832,10 +832,15 @@ class Rebalancer:
             entry: dict = {"protocol": protocol_id, "amountUSDC": "MAX"}
             if protocol_id == "benqi":
                 adapter = get_adapter(protocol_id)
-                qi_balance = await adapter.pool.functions.balanceOf(
-                    self.w3.to_checksum_address(smart_account_address)
-                ).call()
-                entry["qiTokenAmount"] = str(qi_balance)
+                try:
+                    qi_balance = await adapter.get_shares(smart_account_address)
+                    entry["qiTokenAmount"] = str(int(qi_balance))
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read Benqi qiToken balance for %s: %s — skipping protocol",
+                        smart_account_address, exc,
+                    )
+                    continue
             elif protocol_id in _ERC4626_PROTOCOLS:
                 # ERC-4626 redeem() requires exact share balance — read on-chain
                 adapter = get_adapter(protocol_id)
