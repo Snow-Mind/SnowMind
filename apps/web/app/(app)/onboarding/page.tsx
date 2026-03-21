@@ -170,6 +170,7 @@ export default function OnboardingPage() {
   const [activating, setActivating] = useState(false);
   const [activated, setActivated] = useState(false);
   const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
+  const [activationError, setActivationError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activateGuardRef = useRef(false);
 
@@ -461,13 +462,16 @@ export default function OnboardingPage() {
       toast.success("Agent activated! Redirecting to dashboard…");
       setTimeout(() => router.push("/dashboard"), 2000);
     } catch (err) {
-      setActivationPhase("error");
       activateGuardRef.current = false;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("User denied") || msg.includes("User rejected")) {
+        // User cancelled — go back to review state, don't show error phase
+        setActivationPhase("idle");
         toast.error("Transaction cancelled.");
       } else {
-        toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
+        setActivationPhase("error");
+        setActivationError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
+        toast.error("Activation failed. You can retry — your funds are safe.");
       }
     } finally {
       if (!activated) setActivating(false);
@@ -960,16 +964,39 @@ export default function OnboardingPage() {
                   </p>
                 </div>
               ) : activationPhase === "error" ? (
-                <div className="flex flex-col items-center gap-3 text-center">
-                  <p className="text-sm font-medium text-[#DC2626]">Activation failed</p>
-                  <p className="text-xs text-[#5C5550]">You can retry — your funds are safe in your smart account.</p>
-                  <button
-                    onClick={handleActivate}
-                    disabled={!wallet}
-                    className="flex items-center gap-2 rounded-xl bg-[#E84142] px-6 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
-                  >
-                    Retry Activation
-                  </button>
+                <div className="space-y-4">
+                  <div className="flex flex-col items-center gap-2 text-center">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#DC2626]/10">
+                      <Shield className="h-5 w-5 text-[#DC2626]" />
+                    </div>
+                    <p className="text-sm font-medium text-[#DC2626]">Activation failed</p>
+                    <p className="text-xs text-[#5C5550]">
+                      Your funds are safe in your smart account. You can retry the activation.
+                    </p>
+                  </div>
+
+                  {activationError && (
+                    <div className="rounded-lg bg-[#DC2626]/5 border border-[#DC2626]/15 p-3">
+                      <p className="text-[11px] font-mono text-[#5C5550] break-words">{activationError}</p>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { setActivationPhase("idle"); setActivationError(null); }}
+                      className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-2.5 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
+                    >
+                      Back
+                    </button>
+                    <button
+                      onClick={() => { setActivationError(null); handleActivate(); }}
+                      disabled={!wallet}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+                    >
+                      <Zap className="h-4 w-4" />
+                      Retry Activation
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-5">

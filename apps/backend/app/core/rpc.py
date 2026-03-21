@@ -32,6 +32,7 @@ MAX_BACKOFF_SECONDS = 8.0
 CONSECUTIVE_FAILURES_FOR_ROTATION = 3
 HEALTH_CHECK_INTERVAL_SECONDS = 60
 PUBLIC_AVALANCHE_RPC = "https://api.avax.network/ext/bc/C/rpc"
+RATE_LIMIT_COOLDOWN_SECONDS = 60  # Re-enable rate-limited providers after cooldown
 
 
 class ProviderTier(Enum):
@@ -143,7 +144,22 @@ class RPCManager:
         return self._providers[0]
 
     def _get_next_available_provider(self) -> ProviderHealth | None:
-        """Find the next available provider in priority order."""
+        """Find the next available provider in priority order.
+
+        Re-enables providers that were rate-limited after a cooldown period.
+        """
+        now = time.time()
+        for p in self._providers:
+            # Re-enable providers after cooldown (e.g. 429 rate-limit recovery)
+            if not p.is_available and p.last_failure_at > 0:
+                if now - p.last_failure_at > RATE_LIMIT_COOLDOWN_SECONDS:
+                    p.is_available = True
+                    p.consecutive_failures = 0
+                    logger.info(
+                        "RPC provider %s re-enabled after cooldown",
+                        p.tier.value,
+                    )
+
         for p in self._providers:
             if p.is_available and p.url != self._active_provider_url:
                 return p
@@ -225,13 +241,23 @@ class RPCManager:
                 except Exception as e:
                     active.record_failure()
                     last_exception = e
+                    err_str = str(e)[:200]
                     logger.warning(
                         "RPC call failed (provider=%s, attempt=%d/%d): %s",
                         active.tier.value,
                         attempt,
                         MAX_RETRIES,
-                        str(e)[:200],
+                        err_str,
                     )
+
+                    # Immediate rotation on rate-limit (429) — don't waste retries
+                    if "429" in err_str or "Too Many Requests" in err_str:
+                        logger.warning(
+                            "Rate-limited (429) on provider %s — rotating immediately",
+                            active.tier.value,
+                        )
+                        active.is_available = False
+                        break
 
                     if attempt < MAX_RETRIES:
                         await asyncio.sleep(min(backoff, MAX_BACKOFF_SECONDS))

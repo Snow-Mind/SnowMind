@@ -84,16 +84,6 @@ function TopBar({
           </button>
         )}
 
-        {isAgentActive && (
-          <button
-            onClick={onEmergencyWithdraw}
-            className="flex items-center gap-1.5 rounded-lg border border-[#DC2626]/30 bg-[#DC2626]/10 px-3 py-1.5 text-xs font-medium text-[#DC2626] transition-all hover:bg-[#DC2626]/15"
-          >
-            <ArrowUpFromLine className="h-3.5 w-3.5" />
-            Emergency Withdraw
-          </button>
-        )}
-
         {/* Account dropdown — Giza-style */}
         <div className="relative">
           <button
@@ -142,6 +132,15 @@ function TopBar({
                     >
                       <Settings className="h-3.5 w-3.5 text-[#8A837C]" />
                       Settings
+                    </button>
+                  )}
+                  {isAgentActive && (
+                    <button
+                      onClick={() => { setAccountOpen(false); onEmergencyWithdraw(); }}
+                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#DC2626] transition-colors hover:bg-[#DC2626]/5"
+                    >
+                      <ArrowUpFromLine className="h-3.5 w-3.5 text-[#DC2626]" />
+                      Emergency Withdraw
                     </button>
                   )}
                   <button

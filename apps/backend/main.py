@@ -125,7 +125,7 @@ _SAFE_ERROR_MAP: dict[str, tuple[int, str]] = {
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     return JSONResponse(
-        status_code=422,
+        status_code=400,
         content={"detail": str(exc)},
     )
 

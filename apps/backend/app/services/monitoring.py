@@ -73,22 +73,11 @@ async def check_paymaster_balance() -> Decimal:
             })
             resp.raise_for_status()
 
-            # Fallback: check the EntryPoint deposit balance via standard RPC
-            rpc = settings.AVALANCHE_RPC_URL
-            if settings.INFURA_RPC_URL:
-                rpc = settings.INFURA_RPC_URL
-
-            # Read EntryPoint.balanceOf(paymaster) on-chain
-            # For now, use eth_getBalance on the EntryPoint deposit
-            # This is a best-effort check — exact method depends on paymaster type
-            resp2 = await client.post(rpc, json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "eth_getBalance",
-                "params": [settings.ENTRYPOINT_V07, "latest"],
-            })
-            resp2.raise_for_status()
-            result = resp2.json().get("result", "0x0")
+            # Read EntryPoint balance via RPC manager (auto-failover)
+            from app.core.rpc import get_rpc_manager
+            w3 = get_rpc_manager().get_web3()
+            balance_wei_raw = await w3.eth.get_balance(settings.ENTRYPOINT_V07)
+            result = hex(balance_wei_raw)
             balance_wei = int(result, 16)
             balance_avax = Decimal(str(balance_wei)) / Decimal("10") ** 18
 

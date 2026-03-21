@@ -134,9 +134,6 @@ class Settings(BaseSettings):
     SENTRY_DSN: str = ""
     PAYMASTER_LOW_BALANCE_AVAX: float = 10.0  # Alert when < 10 AVAX remaining
 
-    # ── Runtime flags ────────────────────────────────────────
-    # Reserved for backward compatibility; production is mainnet-only.
-    IS_TESTNET: bool = False
 
     @property
     def pimlico_rpc_url(self) -> str:

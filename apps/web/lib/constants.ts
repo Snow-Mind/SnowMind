@@ -15,8 +15,6 @@ export const ZERODEV_PROJECT_ID =
 export const AVALANCHE_RPC_URL =
   process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL ?? "https://api.avax.network/ext/bc/C/rpc";
 
-export const IS_TESTNET = false
-
 // ── Mainnet contract addresses ──────────────────────────────────────────────
 export const CONTRACTS = {
   REGISTRY:    (process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ?? '') as `0x${string}`,
