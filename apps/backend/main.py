@@ -25,9 +25,9 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     description="Autonomous non-custodial AI yield optimizer on Avalanche",
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url="/redoc" if settings.DEBUG else None,
-    openapi_url="/openapi.json" if settings.DEBUG else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 # ── slowapi per-endpoint rate limiter ────────────────────────
@@ -46,6 +46,23 @@ app.add_middleware(
 
 # ── Rate-limiting middleware (must be added BEFORE routing) ───
 app.middleware("http")(rate_limit_middleware)
+
+
+# ── Path normalization middleware (fix double-slash from frontend) ──
+@app.middleware("http")
+async def normalize_path(request: Request, call_next):  # type: ignore[no-untyped-def]
+    # Some frontends send //api/v1/... when BACKEND_URL has a trailing slash.
+    # Normalise to a single slash so routes match correctly.
+    from starlette.datastructures import URL
+
+    path = request.scope.get("path", "")
+    if "//" in path:
+        cleaned = path.replace("//", "/")
+        request.scope["path"] = cleaned
+        # Also update raw_path if present
+        if "raw_path" in request.scope:
+            request.scope["raw_path"] = cleaned.encode("ascii")
+    return await call_next(request)
 
 
 # ── Security headers middleware ──────────────────────────────
@@ -224,4 +241,4 @@ app.include_router(accounts.router, prefix=f"{PREFIX}/accounts", tags=["accounts
 app.include_router(portfolio.router, prefix=f"{PREFIX}/portfolio", tags=["portfolio"])
 app.include_router(optimizer.router, prefix=f"{PREFIX}/optimizer", tags=["optimizer"])
 app.include_router(rebalance.router, prefix=f"{PREFIX}/rebalance", tags=["rebalance"])
-app.include_router(withdrawal.router, prefix=f"{PREFIX}/withdrawal", tags=["withdrawal"])
+app.include_router(withdrawal.router, prefix=f"{PREFIX}/withdrawals", tags=["withdrawals"])

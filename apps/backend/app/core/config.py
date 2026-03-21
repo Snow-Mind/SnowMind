@@ -55,8 +55,8 @@ class Settings(BaseSettings):
     BENQI_QIUSDC: str = "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C"
     SPARK_SPUSDC: str = "0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d"
     EULER_VAULT: str = "0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e"
-    SILO_SAVUSD_VAULT: str = "0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1"
-    SILO_SUSDP_VAULT: str = "0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca"
+    SILO_SAVUSD_VAULT: str = "0x606fe9a70338e798a292CA22C1F28C829F24048E"  # bUSDC-142 (Silo1 from savUSD/USDC SiloConfig)
+    SILO_SUSDP_VAULT: str = "0x8ad697a333569ca6f04c8c063e9807747ef169c1"  # bUSDC-162 (Silo1 from sUSDp/USDC SiloConfig)
     USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC (6 decimals)
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     SPARK_PSM3: str = ""  # PSM3 on Avalanche — for totalAssets() liquidity check
 
     # ── Benqi-specific addresses ─────────────────────────────
-    BENQI_COMPTROLLER: str = ""  # Comptroller for pause flag checks — set via env
+    BENQI_COMPTROLLER: str = "0x486Af39519B4Dc9a7fCcd318217352830E8AD9b4"  # Benqi Comptroller on Avalanche
 
     # ── Auth / Privy ──────────────────────────────────────────
     PRIVY_APP_ID: str = ""       # From privy.io dashboard

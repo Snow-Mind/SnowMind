@@ -1,5 +1,6 @@
 """Euler (9Summits) adapter — ERC-4626 vault interface on Avalanche."""
 
+import logging
 import time
 from decimal import Decimal
 
@@ -13,7 +14,11 @@ from .base import (
     get_shared_async_web3,
 )
 
+logger = logging.getLogger("snowmind.protocols.euler")
+
 # ── ERC-4626 Euler V2 Vault ABI ──────────────────────────────────────────────
+# Uses only standard ERC-4626 functions — interestRatePerSecond is NOT available
+# on EVK vaults. APY is derived from share price growth (convertToAssets).
 EULER_V2_ABI = [
     {
         "name": "deposit",
@@ -51,13 +56,6 @@ EULER_V2_ABI = [
         "stateMutability": "view",
     },
     {
-        "name": "interestRatePerSecond",
-        "type": "function",
-        "inputs": [],
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-    },
-    {
         "name": "balanceOf",
         "type": "function",
         "inputs": [{"name": "account", "type": "address"}],
@@ -66,8 +64,9 @@ EULER_V2_ABI = [
     },
 ]
 
+# 1 USDC = 1e6 (6 decimals)
+ONE_USDC = Decimal("1000000")
 SECONDS_PER_YEAR = Decimal("31557600")
-MANTISSA = Decimal("1e18")
 
 
 class EulerV2Adapter(BaseProtocolAdapter):
@@ -88,10 +87,19 @@ class EulerV2Adapter(BaseProtocolAdapter):
                 address=self.w3.to_checksum_address(self.vault_address),
                 abi=EULER_V2_ABI,
             )
+        # Cache for share price APY estimation
+        self._last_share_price: Decimal | None = None
+        self._last_share_price_time: float | None = None
 
     # ── Rate reading ──────────────────────────────────────────────────────────
 
     async def get_rate(self) -> ProtocolRate:
+        """Estimate APY from share price growth (convertToAssets(1e6) over time).
+
+        EVK vaults do NOT expose interestRatePerSecond() — the only reliable
+        way to get the supply APY is to observe the share price changing.
+        First call returns 0% APY; subsequent calls compute annualized growth.
+        """
         if not self.vault:
             return ProtocolRate(
                 protocol_id=self.protocol_id,
@@ -102,12 +110,31 @@ class EulerV2Adapter(BaseProtocolAdapter):
                 fetched_at=time.time(),
             )
 
-        rate_per_sec_raw = await self.vault.functions.interestRatePerSecond().call()
-        rate_per_sec = Decimal(str(rate_per_sec_raw)) / MANTISSA
-        apy = (1 + rate_per_sec) ** SECONDS_PER_YEAR - 1
+        # Read current share price: how much USDC does 1e6 shares convert to
+        current_assets = await self.vault.functions.convertToAssets(int(ONE_USDC)).call()
+        current_price = Decimal(str(current_assets)) / ONE_USDC  # ratio >= 1.0
 
         total_assets_raw = await self.vault.functions.totalAssets().call()
-        tvl = Decimal(str(total_assets_raw)) / Decimal("1e6")  # USDC 6 decimals
+        tvl = Decimal(str(total_assets_raw)) / ONE_USDC
+
+        now = time.time()
+
+        # Estimate APY from price change since last reading
+        apy = Decimal("0")
+        if (
+            self._last_share_price is not None
+            and self._last_share_price_time is not None
+            and self._last_share_price > Decimal("0")
+        ):
+            elapsed = Decimal(str(now - self._last_share_price_time))
+            if elapsed > Decimal("60"):  # At least 1 minute between readings
+                growth = (current_price - self._last_share_price) / self._last_share_price
+                if growth > Decimal("0"):
+                    apy = growth * SECONDS_PER_YEAR / elapsed
+
+        # Update cache for next call
+        self._last_share_price = current_price
+        self._last_share_price_time = now
 
         return ProtocolRate(
             protocol_id=self.protocol_id,
@@ -115,7 +142,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
             effective_apy=apy,
             tvl_usd=tvl,
             utilization_rate=None,
-            fetched_at=time.time(),
+            fetched_at=now,
         )
 
     async def get_health(self) -> ProtocolHealth:

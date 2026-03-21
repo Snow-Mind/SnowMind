@@ -1,14 +1,19 @@
 """Silo V2 adapter — ERC-4626 vault interface on Avalanche.
 
 Supports two isolated lending markets:
-  - savUSD/USDC (0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1)
-  - sUSDp/USDC  (0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca)
+  - savUSD/USDC  vault = 0x606fe9a70338e798a292CA22C1F28C829F24048E (bUSDC-142)
+  - sUSDp/USDC   vault = 0x8ad697a333569ca6f04c8c063e9807747ef169c1 (bUSDC-162)
 
 Both vaults implement the standard ERC-4626 interface:
   deposit(assets, receiver) / redeem(shares, receiver, owner)
   convertToAssets(shares) / totalAssets()
+
+Note: Silo V2 USDC vaults have a non-1:1 share-to-asset ratio.
+Shares have 6 decimals (same as USDC) but each share is worth ~0.001 USDC.
+We use a large query amount (1e18) in convertToAssets for APY precision.
 """
 
+import logging
 import time
 from decimal import Decimal
 
@@ -21,6 +26,8 @@ from .base import (
     TransactionCalldata,
     get_shared_async_web3,
 )
+
+logger = logging.getLogger("snowmind.protocols.silo")
 
 # ── ERC-4626 Silo Vault ABI ──────────────────────────────────────────────────
 SILO_VAULT_ABI = [
@@ -70,6 +77,11 @@ SILO_VAULT_ABI = [
 
 # 1 USDC = 1e6 (6 decimals)
 ONE_USDC = Decimal("1000000")
+# Use a large share amount for convertToAssets to get high-precision share price.
+# Silo V2 vaults have ~0.001 USDC per share, so 1e6 shares only yields ~1052.
+# Using 1e18 gives ~15 digits of precision for APY estimation.
+SHARE_PRICE_QUERY_AMOUNT = 10**18
+SHARE_PRICE_QUERY_DECIMAL = Decimal("1000000000000000000")
 SECONDS_PER_YEAR = Decimal("31557600")
 
 
@@ -102,7 +114,7 @@ class SiloAdapter(BaseProtocolAdapter):
     # ── Rate reading ──────────────────────────────────────────────────────────
 
     async def get_rate(self) -> ProtocolRate:
-        """Estimate APY from share price growth (convertToAssets(1e6) over time)."""
+        """Estimate APY from share price growth (convertToAssets over time)."""
         if not self.vault:
             return ProtocolRate(
                 protocol_id=self.protocol_id,
@@ -113,9 +125,11 @@ class SiloAdapter(BaseProtocolAdapter):
                 fetched_at=time.time(),
             )
 
-        # Read current share price: how much USDC does 1e6 shares convert to
-        current_assets = await self.vault.functions.convertToAssets(int(ONE_USDC)).call()
-        current_price = Decimal(str(current_assets)) / ONE_USDC  # ratio >= 1.0
+        # Read current share price with high precision
+        current_assets = await self.vault.functions.convertToAssets(
+            SHARE_PRICE_QUERY_AMOUNT
+        ).call()
+        current_price = Decimal(str(current_assets)) / SHARE_PRICE_QUERY_DECIMAL
 
         total_assets_raw = await self.vault.functions.totalAssets().call()
         tvl = Decimal(str(total_assets_raw)) / ONE_USDC
@@ -172,9 +186,11 @@ class SiloAdapter(BaseProtocolAdapter):
                     details={"reason": "totalAssets is zero — vault may be drained"},
                 )
 
-            # Sanity: convertToAssets should return at least 1:1 ratio
-            test_assets = await self.vault.functions.convertToAssets(int(ONE_USDC)).call()
-            if test_assets < int(ONE_USDC):
+            # Sanity: convertToAssets must return a positive value
+            test_assets = await self.vault.functions.convertToAssets(
+                SHARE_PRICE_QUERY_AMOUNT
+            ).call()
+            if test_assets <= 0:
                 return ProtocolHealth(
                     protocol_id=self.protocol_id,
                     status=ProtocolStatus.DEPOSITS_DISABLED,
@@ -182,10 +198,8 @@ class SiloAdapter(BaseProtocolAdapter):
                     is_withdrawal_safe=True,
                     utilization=None,
                     details={
-                        "reason": "Share price below 1:1 — possible loss event",
-                        "share_price_ratio": str(
-                            Decimal(str(test_assets)) / ONE_USDC
-                        ),
+                        "reason": "Share price is zero — possible loss event",
+                        "convertToAssets": str(test_assets),
                     },
                 )
         except Exception as exc:
