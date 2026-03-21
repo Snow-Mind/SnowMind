@@ -103,6 +103,9 @@ class SiloAdapter(BaseProtocolAdapter):
         self.vault_address: str | None = vault_address if vault_address else None
         self.vault = None
         if self.vault_address:
+            logger.info(
+                "%s using vault address: %s", self.protocol_id or self.name, self.vault_address
+            )
             self.vault = self.w3.eth.contract(
                 address=self.w3.to_checksum_address(self.vault_address),
                 abi=SILO_VAULT_ABI,

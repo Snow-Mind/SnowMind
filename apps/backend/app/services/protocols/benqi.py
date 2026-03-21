@@ -194,9 +194,12 @@ class BenqiAdapter(BaseProtocolAdapter):
         apy = (1 + rate_per_second) ** SECONDS_PER_YEAR - 1
 
         # TVL: totalSupply (qiTokens) × exchangeRate → underlying USDC
+        # qiToken has 8 decimals, exchangeRate mantissa is 1e18.
+        # underlying_raw = totalSupply * exchangeRate / 1e18 → USDC 6-decimal units
+        # TVL in dollars = underlying_raw / 1e6
         exchange_rate = Decimal(str(exchange_rate_raw)) / MANTISSA
         tvl_underlying = Decimal(str(total_supply_raw)) * exchange_rate
-        tvl_usdc = tvl_underlying / Decimal("1e12")  # Convert to USDC 6 decimals display
+        tvl_usdc = tvl_underlying / Decimal("1e6")
 
         # Utilization: totalBorrows / (cash + totalBorrows - totalReserves)
         cash = Decimal(str(cash_raw))
