@@ -174,7 +174,17 @@ async def get_account(
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        # Return a minimal stub so the frontend doesn't 404-loop
+        # before registration completes
+        return AccountDetailResponse(
+            id="",
+            address=address,
+            owner_address="",
+            is_active=False,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            diversification_preference="balanced",
+            session_key=None,
+        )
 
     row = acct.data[0]
 

@@ -29,7 +29,7 @@ def waterfall_allocate(
     inp: OptimizerInput,
     tvl_by_protocol: dict[str, Decimal],
     tvl_cap_pct: Decimal = Decimal("0.15"),
-    max_exposure_pct: Decimal = Decimal("0.40"),
+    max_exposure_pct: Decimal = Decimal("1.00"),
     base_beat_margin: Decimal = Decimal("0.005"),
     base_layer_protocol_id: str = "spark",
 ) -> OptimizerOutput:

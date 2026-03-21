@@ -115,14 +115,11 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 
     reasoning.append(f"Simulating ${req.total_usdc} USDC allocation")
 
-    # Map risk tolerance to max exposure
-    exposure_map = {
-        "conservative": Decimal("0.40"),
-        "moderate": Decimal("0.60"),
-        "aggressive": Decimal("1.00"),
-    }
-    max_exposure = exposure_map.get(req.risk_tolerance, Decimal("0.60"))
-    reasoning.append(f"Risk tolerance: {req.risk_tolerance} → max_exposure={max_exposure}")
+    # Max exposure = 100% — the 15% TVL cap is the binding constraint.
+    # Risk tiers (conservative/moderate/aggressive) were never user-selectable
+    # and always hardcoded to "moderate".  Removed to simplify.
+    max_exposure = Decimal("1.00")
+    reasoning.append(f"Max single-protocol exposure: {max_exposure} (TVL cap is binding)")
 
     # Fetch live rates
     rates = await _rate_fetcher.fetch_active_rates()
@@ -316,13 +313,8 @@ async def run_optimizer_preview(
 
     account_id = acct.data[0]["id"]
 
-    # Map risk tolerance to max exposure for waterfall allocator
-    exposure_map = {
-        "conservative": Decimal("0.40"),  # diversified
-        "moderate": Decimal("0.60"),      # balanced
-        "aggressive": Decimal("1.00"),    # max yield
-    }
-    max_exposure = exposure_map.get(req.risk_tolerance, Decimal("0.60"))
+    # Max exposure = 100% — the 15% TVL cap is the binding constraint.
+    max_exposure = Decimal("1.00")
 
     # Fetch + validate rates
     rates = await _rate_fetcher.fetch_active_rates()

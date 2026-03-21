@@ -87,7 +87,8 @@ async def get_portfolio(
 ):
     """Return current portfolio state for a smart account."""
     address = validate_eth_address(address)
-    # Find account
+    # Find account — return empty portfolio for unregistered addresses
+    # (prevents 404 spam from frontend polling before registration completes)
     acct = (
         db.table("accounts")
         .select("id")
@@ -96,7 +97,12 @@ async def get_portfolio(
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        return PortfolioResponse(
+            total_deposited_usd=Decimal("0"),
+            total_yield_usd=Decimal("0"),
+            allocations=[],
+            last_rebalance_at=None,
+        )
 
     account_id = acct.data[0]["id"]
 
@@ -226,7 +232,7 @@ async def get_rebalance_history(
         .execute()
     )
     if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
+        return RebalanceHistoryResponse(logs=[], total=0)
 
     account_id = acct.data[0]["id"]
 
