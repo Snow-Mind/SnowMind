@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     STABILITY_SWING_THRESHOLD: float = 0.50  # 50% relative swing in 7 days → skip
     MIN_PROTOCOL_TVL_USD: float = 100000.0   # $100K minimum TVL for Aave/Benqi
     CIRCUIT_BREAKER_THRESHOLD: int = 3   # Consecutive RPC failures before excluding
+    CIRCUIT_BREAKER_COOLDOWN_SECONDS: int = 60  # Seconds before half-open retry
+    RPC_CONCURRENCY_LIMIT: int = 3       # Max concurrent RPC calls to avoid 429
     GAS_COST_ESTIMATE_USD: float = 0.008  # Realistic Avalanche UserOp gas cost
     TWAP_SNAPSHOT_COUNT: int = 3         # Number of snapshots for TWAP calculation
     TWAP_WINDOW_MINUTES: int = 15         # Backward-compatible oracle TWAP window

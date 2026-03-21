@@ -30,12 +30,20 @@ logger = logging.getLogger("snowmind.rate_fetcher")
 
 @dataclass
 class CircuitBreaker:
-    """Track consecutive failures per protocol to exclude flaky adapters."""
+    """Track consecutive failures per protocol with half-open recovery.
+
+    Once a protocol hits CIRCUIT_BREAKER_THRESHOLD consecutive failures,
+    the circuit opens.  After CIRCUIT_BREAKER_COOLDOWN_SECONDS, it enters
+    a 'half-open' state where a single test request is allowed through.
+    If that succeeds, the circuit closes.  If it fails, cooldown resets.
+    """
 
     _failures: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    _last_failure_at: dict[str, float] = field(default_factory=lambda: defaultdict(float))
 
     def record_failure(self, protocol_id: str) -> None:
         self._failures[protocol_id] += 1
+        self._last_failure_at[protocol_id] = time.time()
         if self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD:
             logger.error(
                 "Circuit OPEN for %s (%d consecutive failures)",
@@ -44,10 +52,25 @@ class CircuitBreaker:
             )
 
     def record_success(self, protocol_id: str) -> None:
+        if self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD:
+            logger.info("Circuit CLOSED for %s after successful half-open probe", protocol_id)
         self._failures[protocol_id] = 0
 
     def is_open(self, protocol_id: str) -> bool:
-        return self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD
+        threshold = get_settings().CIRCUIT_BREAKER_THRESHOLD
+        if self._failures[protocol_id] < threshold:
+            return False
+        # Half-open: allow one retry after cooldown period
+        cooldown = get_settings().CIRCUIT_BREAKER_COOLDOWN_SECONDS
+        elapsed = time.time() - self._last_failure_at.get(protocol_id, 0.0)
+        if elapsed >= cooldown:
+            logger.info(
+                "Circuit half-open for %s — allowing probe after %.0fs cooldown",
+                protocol_id,
+                elapsed,
+            )
+            return False
+        return True
 
     def get_failure_count(self, protocol_id: str) -> int:
         return self._failures[protocol_id]
@@ -231,29 +254,46 @@ class RateFetcher:
 
     async def fetch_all_rates(self) -> dict[str, ProtocolRate]:
         """
-        Fetch from ALL active adapters concurrently.
+        Fetch from ALL active adapters with concurrency throttling.
 
-        For Spark: passes yesterday's convertToAssets snapshot to the adapter.
+        Uses an asyncio.Semaphore to limit concurrent RPC calls and prevent
+        Infura 429 rate-limiting.  For Spark: passes yesterday's
+        convertToAssets snapshot to the adapter.
         """
-        tasks: dict[str, Any] = {}
-        for pid, adapter in ALL_ADAPTERS.items():
+        settings = self.settings
+        semaphore = asyncio.Semaphore(settings.RPC_CONCURRENCY_LIMIT)
+
+        async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
+            """Run a single adapter fetch under the concurrency semaphore."""
+            async with semaphore:
+                try:
+                    adapter = ALL_ADAPTERS[pid]
+                    if pid == "spark":
+                        yesterday_snapshot = self._get_spark_yesterday_snapshot()
+                        result = await adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
+                    else:
+                        result = await adapter.get_rate()
+                    return pid, result
+                except Exception as exc:
+                    return pid, exc
+
+        pids_to_fetch = [
+            pid for pid in ALL_ADAPTERS
+            if not circuit_breaker.is_open(pid)
+        ]
+        for pid in ALL_ADAPTERS:
             if circuit_breaker.is_open(pid):
                 logger.warning("Skipping %s — circuit breaker open", pid)
-                continue
 
-            if pid == "spark":
-                # Spark needs yesterday's convertToAssets snapshot for APY calculation
-                yesterday_snapshot = self._get_spark_yesterday_snapshot()
-                tasks[pid] = adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
-            else:
-                tasks[pid] = adapter.get_rate()
+        if not pids_to_fetch:
+            return {}
 
-        completed = await asyncio.gather(
-            *tasks.values(), return_exceptions=True
+        raw_results = await asyncio.gather(
+            *[_throttled_fetch(pid) for pid in pids_to_fetch]
         )
 
         results: dict[str, ProtocolRate] = {}
-        for pid, result in zip(tasks.keys(), completed):
+        for pid, result in raw_results:
             if isinstance(result, Exception):
                 logger.warning("Rate fetch failed for %s: %s", pid, result)
                 circuit_breaker.record_failure(pid)

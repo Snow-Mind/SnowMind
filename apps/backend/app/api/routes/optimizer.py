@@ -15,7 +15,7 @@ from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
-from app.services.optimizer.rate_fetcher import RateFetcher
+from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
 from app.services.optimizer.milp_solver import (
     OptimizerInput,
     ProtocolInput,
@@ -239,7 +239,12 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 @router.get("/rates", response_model=list[ProtocolRateResponse])
 @limiter.limit("60/minute")
 async def get_all_rates(request: Request):
-    """Fetch live on-chain rates from every known protocol adapter."""
+    """Fetch live on-chain rates from every known protocol adapter.
+
+    Falls back to TWAP-cached data for protocols whose live fetch failed
+    (circuit breaker open, 429, RPC timeout, etc.).  This prevents the
+    frontend from showing 0% APY / $0 TVL when Infura is rate-limited.
+    """
     rates = await _rate_fetcher.fetch_all_rates()
 
     out: list[ProtocolRateResponse] = []
@@ -247,6 +252,24 @@ async def get_all_rates(request: Request):
         rate = rates.get(pid)
         is_active = pid in ACTIVE_ADAPTERS
         is_coming_soon = getattr(adapter, "is_active", True) is False
+
+        # If live fetch failed, fall back to last-known-good TWAP snapshot
+        if rate is None:
+            cached = twap_buffer.get_latest(pid)
+            if cached is not None:
+                out.append(
+                    ProtocolRateResponse(
+                        protocol_id=pid,
+                        name=adapter.name,
+                        is_active=is_active,
+                        is_coming_soon=is_coming_soon,
+                        current_apy=cached.effective_apy,
+                        tvl_usd=cached.tvl_usd,
+                        risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
+                        last_updated=cached.fetched_at,
+                    )
+                )
+                continue
 
         out.append(
             ProtocolRateResponse(
