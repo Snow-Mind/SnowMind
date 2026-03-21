@@ -39,6 +39,12 @@ snow-mind-technical-spec.txt
 snowmind-deep-dive.md
 temp.md
 link.md
+query_contracts.py
+tmp_*.json
+
+# Copilot customization (local only — not needed in repo)
+.github/copilot-instructions.md
+.github/prompts/
 
 # Foundry cache/broadcast
 contracts/cache/
