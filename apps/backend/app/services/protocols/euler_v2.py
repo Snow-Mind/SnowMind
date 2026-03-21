@@ -68,6 +68,13 @@ EULER_V2_ABI = [
 ONE_USDC = Decimal("1000000")
 SECONDS_PER_YEAR = Decimal("31557600")
 
+# Use large query amount for sub-second APY precision.
+# convertToAssets(1e6) returns an integer — at 4.74% APY, the change over 60s
+# is < 1 raw unit, so growth rounds to 0.  With 1e18 we get ~100k units of
+# precision per minute, enough to detect any meaningful APY.
+SHARE_PRICE_QUERY_AMOUNT = 10**18
+SHARE_PRICE_QUERY_DECIMAL = Decimal("1e18")
+
 
 class EulerV2Adapter(BaseProtocolAdapter):
     protocol_id = "euler_v2"
@@ -114,9 +121,11 @@ class EulerV2Adapter(BaseProtocolAdapter):
                 fetched_at=time.time(),
             )
 
-        # Read current share price: how much USDC does 1e6 shares convert to
-        current_assets = await self.vault.functions.convertToAssets(int(ONE_USDC)).call()
-        current_price = Decimal(str(current_assets)) / ONE_USDC  # ratio >= 1.0
+        # Read current share price with high precision
+        current_assets = await self.vault.functions.convertToAssets(
+            SHARE_PRICE_QUERY_AMOUNT
+        ).call()
+        current_price = Decimal(str(current_assets)) / SHARE_PRICE_QUERY_DECIMAL
 
         total_assets_raw = await self.vault.functions.totalAssets().call()
         tvl = Decimal(str(total_assets_raw)) / ONE_USDC
