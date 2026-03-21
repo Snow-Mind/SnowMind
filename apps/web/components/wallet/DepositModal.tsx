@@ -56,7 +56,7 @@ export default function DepositModal({ open, onClose }: DepositModalProps) {
   }, [depositTxHash]);
 
   const numAmount = parseFloat(amount) || 0;
-  const isValid = numAmount >= 500;
+  const isValid = numAmount >= 1;
 
   function handlePreview() {
     if (!smartAccountAddress || !isValid) return;
@@ -140,16 +140,16 @@ export default function DepositModal({ open, onClose }: DepositModalProps) {
                 </label>
                 <input
                   type="number"
-                  min={500}
-                  step={100}
+                  min={1}
+                  step={1}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  placeholder="5,000"
+                  placeholder="100"
                   className="mt-1 w-full rounded-lg border border-border/50 bg-void-2/40 px-4 py-3 font-mono text-lg text-arctic outline-none focus:border-glacier/50"
                 />
                 {amount && !isValid && (
                   <p className="mt-1 text-[10px] text-crimson">
-                    Minimum deposit is $500
+                    Minimum deposit is $1
                   </p>
                 )}
               </div>

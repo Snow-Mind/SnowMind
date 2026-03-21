@@ -175,7 +175,7 @@ export default function OnboardingPage() {
 
   const eoaBalanceNum = parseFloat(eoaBalance);
   const parsedAmount = parseFloat(depositAmount);
-  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 100 && parsedAmount <= eoaBalanceNum;
+  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
 
   // Best APY from selected protocols (for now, show Benqi APY as highest)
   const bestApy = (() => {
@@ -868,8 +868,8 @@ export default function OnboardingPage() {
                 {parsedAmount > eoaBalanceNum && (
                   <span className="text-[#DC2626]">Exceeds balance</span>
                 )}
-                {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 100 && (
-                  <span className="text-[#DC2626]">Min $100.00</span>
+                {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 1 && (
+                  <span className="text-[#DC2626]">Min $1.00</span>
                 )}
               </div>
 

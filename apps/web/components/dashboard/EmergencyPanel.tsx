@@ -81,30 +81,40 @@ export default function EmergencyPanel() {
       });
 
       // Check balances across all active protocols
-      const [qiBalance, aTokenBalance, sparkShares] = await Promise.all([
+      const [qiBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares] = await Promise.all([
         publicClient.readContract({
           address: CONTRACTS.BENQI_POOL,
           abi: BALANCE_OF_ABI,
           functionName: "balanceOf",
           args: [sa],
-        }),
+        }).catch(() => 0n),
         publicClient.readContract({
-          address: CONTRACTS.USDC, // aUSDC mirrors USDC balance
+          address: CONTRACTS.SPARK_VAULT,
           abi: BALANCE_OF_ABI,
           functionName: "balanceOf",
           args: [sa],
         }).catch(() => 0n),
-        CONTRACTS.SPARK_VAULT
-          ? publicClient.readContract({
-              address: CONTRACTS.SPARK_VAULT,
-              abi: BALANCE_OF_ABI,
-              functionName: "balanceOf",
-              args: [sa],
-            }).catch(() => 0n)
-          : Promise.resolve(0n),
+        publicClient.readContract({
+          address: CONTRACTS.EULER_VAULT,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
+        publicClient.readContract({
+          address: CONTRACTS.SILO_SAVUSD_VAULT,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
+        publicClient.readContract({
+          address: CONTRACTS.SILO_SUSDP_VAULT,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
       ]);
 
-      const hasAnyFunds = qiBalance > 0n || aTokenBalance > 0n || sparkShares > 0n;
+      const hasAnyFunds = qiBalance > 0n || sparkShares > 0n || eulerShares > 0n || siloSavusdShares > 0n || siloSusdpShares > 0n;
 
       if (!hasAnyFunds) {
         toast.info("No funds deposited in any protocol to withdraw.");
@@ -130,22 +140,20 @@ export default function EmergencyPanel() {
         });
       }
 
-      // Aave: withdraw max USDC
-      if (aTokenBalance > 0n) {
-        const maxUint = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-        calls.push({
-          to: CONTRACTS.AAVE_POOL,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: AAVE_WITHDRAW_ABI,
-            functionName: "withdraw",
-            args: [CONTRACTS.USDC, maxUint, sa],
-          }),
-        });
-      }
+      // Aave: always try withdraw max (reverts harmlessly if no position)
+      const maxUint = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+      calls.push({
+        to: CONTRACTS.AAVE_POOL,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: AAVE_WITHDRAW_ABI,
+          functionName: "withdraw",
+          args: [CONTRACTS.USDC, maxUint, sa],
+        }),
+      });
 
       // Spark: redeem shares
-      if (sparkShares > 0n && CONTRACTS.SPARK_VAULT) {
+      if (sparkShares > 0n) {
         calls.push({
           to: CONTRACTS.SPARK_VAULT,
           value: 0n,
@@ -153,6 +161,45 @@ export default function EmergencyPanel() {
             abi: ERC4626_VAULT_ABI,
             functionName: "redeem",
             args: [sparkShares, sa, sa],
+          }),
+        });
+      }
+
+      // Euler: redeem shares
+      if (eulerShares > 0n) {
+        calls.push({
+          to: CONTRACTS.EULER_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_VAULT_ABI,
+            functionName: "redeem",
+            args: [eulerShares, sa, sa],
+          }),
+        });
+      }
+
+      // Silo savUSD: redeem shares
+      if (siloSavusdShares > 0n) {
+        calls.push({
+          to: CONTRACTS.SILO_SAVUSD_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_VAULT_ABI,
+            functionName: "redeem",
+            args: [siloSavusdShares, sa, sa],
+          }),
+        });
+      }
+
+      // Silo sUSDp: redeem shares
+      if (siloSusdpShares > 0n) {
+        calls.push({
+          to: CONTRACTS.SILO_SUSDP_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_VAULT_ABI,
+            functionName: "redeem",
+            args: [siloSusdpShares, sa, sa],
           }),
         });
       }

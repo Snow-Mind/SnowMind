@@ -57,6 +57,7 @@ function TopBar({
   onDisconnect: () => void;
 }) {
   const [accountOpen, setAccountOpen] = useState(false);
+  const router = useRouter();
   const truncatedEoa = eoaAddress
     ? `${eoaAddress.slice(0, 6)}...${eoaAddress.slice(-4)}`
     : "Connected";
@@ -132,6 +133,15 @@ function TopBar({
                     >
                       <Settings className="h-3.5 w-3.5 text-[#8A837C]" />
                       Agent account details
+                    </button>
+                  )}
+                  {isAgentActive && (
+                    <button
+                      onClick={() => { setAccountOpen(false); router.push("/settings"); }}
+                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
+                    >
+                      <Settings className="h-3.5 w-3.5 text-[#8A837C]" />
+                      Settings
                     </button>
                   )}
                   <button
@@ -234,9 +244,9 @@ export default function AppLayout({
     }
   }, [dataReady, isAgentActive, pathname, router]);
 
-  // Redirect portfolio/settings to dashboard (removed pages)
+  // Redirect portfolio to dashboard (removed page)
   useEffect(() => {
-    if (pathname === "/portfolio" || pathname === "/settings") {
+    if (pathname === "/portfolio") {
       router.replace("/dashboard");
     }
   }, [pathname, router]);
@@ -493,9 +503,10 @@ async function readAllProtocolBalances(
   smartAddr: `0x${string}`,
 ) {
   // Read all balances in parallel
-  const [idleBalance, qiBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares] = await Promise.all([
+  const [idleBalance, qiBalance, aaveBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares] = await Promise.all([
     publicClient.readContract({ address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.AAVE_AUSDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.SPARK_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.SILO_SAVUSD_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
@@ -543,17 +554,16 @@ async function readAllProtocolBalances(
     } catch { /* fallback: 0 */ }
   }
 
-  // Aave: aToken balance IS the USDC value (1:1). Use MAX_UINT to withdraw all via withdraw().
-  // We don't need a separate aToken address — Aave withdraw(MAX_UINT) handles it.
-  // But we need to know if there's an Aave position. The simplest check: try the Aave withdraw
-  // and it will return 0 if no position. For balance display we'll rely on the portfolio API.
+  // Aave: aToken balance IS the USDC value (1:1 with underlying)
+  const aaveUsdc = Number(formatUnits(aaveBalance as bigint, 6));
 
   const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
 
   return {
-    totalUsdc: idleUsdc + benqiUsdc + sparkUsdc + eulerUsdc + siloSavusdUsdc + siloSusdpUsdc,
+    totalUsdc: idleUsdc + benqiUsdc + aaveUsdc + sparkUsdc + eulerUsdc + siloSavusdUsdc + siloSusdpUsdc,
     idleUsdc,
     benqiUsdc,
+    aaveUsdc,
     sparkUsdc,
     eulerUsdc,
     siloSavusdUsdc,

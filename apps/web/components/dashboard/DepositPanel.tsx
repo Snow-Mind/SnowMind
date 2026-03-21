@@ -70,7 +70,7 @@ export default function DepositPanel() {
 
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const parsedAmount = parseFloat(amount);
-  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 100;
+  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1;
 
   async function handleDeposit() {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;

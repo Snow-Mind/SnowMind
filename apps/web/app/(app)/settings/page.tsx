@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Bell, Wallet, ExternalLink, RefreshCw, BarChart3, Trash2, AlertTriangle } from "lucide-react";
+import { Bell, Wallet, ExternalLink, RefreshCw, BarChart3 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { EXPLORER, CHAIN } from "@/lib/constants";
@@ -43,16 +42,10 @@ export default function SettingsPage() {
   const { eoaAddress, activeWallet } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
-  const router = useRouter();
 
   // Diversification preference state
   const [divPref, setDivPref] = useState<DiversificationPreference>("balanced");
   const [savingPref, setSavingPref] = useState(false);
-
-  // Delete account state
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
-  const [deleting, setDeleting] = useState(false);
 
   // Fetch current preference from backend
   useEffect(() => {
@@ -319,106 +312,6 @@ export default function SettingsPage() {
         <EmergencyPanel />
       </motion.div>
 
-      {/* ─── Danger Zone: Delete Account ─── */}
-      <motion.div
-        className="crystal-card border-red-300/50 p-5"
-        variants={fadeUp}
-        initial="hidden"
-        animate="visible"
-        custom={6}
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50">
-            <Trash2 className="h-3.5 w-3.5 text-red-500" />
-          </div>
-          <div>
-            <h2 className="text-[13px] font-medium text-red-600">
-              Delete Account
-            </h2>
-            <p className="text-[11px] text-slate-500">
-              Permanently remove your account and all associated data.
-            </p>
-          </div>
-        </div>
-
-        {!showDeleteConfirm ? (
-          <button
-            className="mt-4 flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-100"
-            onClick={() => setShowDeleteConfirm(true)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete Account
-          </button>
-        ) : (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50/50 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-              <div className="text-[12px] text-red-700">
-                <p className="font-medium">This action is irreversible.</p>
-                <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                  <li>You must withdraw ALL funds first</li>
-                  <li>Your session key, allocation history, and rebalance logs will be deleted</li>
-                  <li>Your smart account contract will still exist on-chain but SnowMind will stop managing it</li>
-                </ul>
-              </div>
-            </div>
-            <div>
-              <label className="text-[11px] text-slate-500">
-                Type <span className="font-mono font-medium text-red-600">DELETE</span> to confirm
-              </label>
-              <input
-                type="text"
-                value={deleteConfirmText}
-                onChange={(e) => setDeleteConfirmText(e.target.value)}
-                placeholder="DELETE"
-                className="mt-1 w-full rounded-lg border border-red-200 bg-white px-3 py-2 font-mono text-[13px] text-red-600 placeholder:text-red-300 focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-200"
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                disabled={deleteConfirmText !== "DELETE" || deleting}
-                className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
-                onClick={async () => {
-                  if (!smartAccountAddress) return;
-                  setDeleting(true);
-                  try {
-                    await api.deleteAccount(smartAccountAddress);
-                    toast.success("Account deleted. Redirecting...");
-                    usePortfolioStore.getState().clearSmartAccount();
-                    setTimeout(() => router.push("/"), 2000);
-                  } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    if (msg.includes("409") || msg.toLowerCase().includes("still has")) {
-                      toast.error("Please withdraw all funds before deleting your account.");
-                    } else if (msg.includes("503")) {
-                      toast.error("Could not verify balances. Please try again later.");
-                    } else {
-                      toast.error(msg.length > 120 ? msg.slice(0, 100) + "..." : msg);
-                    }
-                  } finally {
-                    setDeleting(false);
-                  }
-                }}
-              >
-                {deleting ? "Deleting..." : "Permanently Delete"}
-              </button>
-              <button
-                className="rounded-lg border border-[#E8E2DA] px-4 py-2 text-[13px] text-slate-600 hover:bg-slate-50"
-                onClick={() => {
-                  setShowDeleteConfirm(false);
-                  setDeleteConfirmText("");
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        <p className="mt-2 text-[11px] text-slate-400">
-          This cannot be undone. Make sure you have withdrawn all your USDC first.
-        </p>
-      </motion.div>
     </div>
   );
 }

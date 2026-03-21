@@ -23,6 +23,8 @@ export const CONTRACTS = {
 
   // Aave V3 on Avalanche mainnet
   AAVE_POOL:   (process.env.NEXT_PUBLIC_AAVE_POOL_ADDRESS ?? '0x794a61358D6845594F94dc1DB02A252b5b4814aD') as `0x${string}`,
+  // Aave V3 aUSDC (aAvaUSDC) token — 1:1 with USDC balance
+  AAVE_AUSDC:  '0x625E7708f30cA75bfd92586e17077590C60eb4cD' as `0x${string}`,
 
   // Benqi qiUSDCn on Avalanche mainnet
   BENQI_QIUSDC: (process.env.NEXT_PUBLIC_BENQI_POOL_ADDRESS ?? '0xB715808a78F6041E46d61Cb123C9B4A27056AE9C') as `0x${string}`,

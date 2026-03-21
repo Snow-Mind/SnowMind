@@ -215,10 +215,4 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // Account deletion
-  deleteAccount: (address: string) =>
-    request<{ success: boolean; message: string }>(
-      `/api/v1/accounts/${encodeURIComponent(address)}`,
-      { method: "DELETE" },
-    ),
 };

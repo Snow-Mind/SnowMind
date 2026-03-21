@@ -416,18 +416,21 @@ async def execute_withdrawal(
             "apy_improvement": None,
         }).execute()
 
-        # If full withdrawal, deactivate account and revoke session key
+        # If full withdrawal, delete account from DB (cascading FKs clean up
+        # session_keys, allocations, rebalance_logs, account_yield_tracking).
+        # Smart account is deterministic (CREATE2) so user can re-onboard to
+        # the same address and get a fresh session key.
         if req.is_full_withdrawal:
-            db.table("accounts").update({
-                "is_active": False,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", account["id"]).execute()
+            # Revoke session key first (best-effort)
+            try:
+                revoke_session_key(db, UUID(account["id"]))
+            except Exception as exc:
+                logger.warning("Session key revocation during full withdrawal failed: %s", exc)
 
-            # Revoke session key
-            revoke_session_key(db, UUID(account["id"]))
+            db.table("accounts").delete().eq("id", account["id"]).execute()
 
             logger.info(
-                "Full withdrawal complete for %s. Account deactivated.",
+                "Full withdrawal complete for %s. Account deleted from DB.",
                 address,
             )
 

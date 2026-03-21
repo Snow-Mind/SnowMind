@@ -1,4 +1,4 @@
-"""Account registration, lookup, session-key management, and deletion."""
+"""Account registration, lookup, and session-key management."""
 
 import asyncio
 import logging
@@ -22,7 +22,7 @@ from app.services.execution.session_key import (
     revoke_session_key,
     store_session_key,
 )
-from app.services.protocols import ALL_ADAPTERS
+
 
 logger = logging.getLogger("snowmind")
 
@@ -306,90 +306,3 @@ async def update_diversification_preference(
     return {
         "diversificationPreference": req.diversification_preference.value,
     }
-
-
-# ── DELETE /accounts/{address} ────────────────────────────
-
-
-@router.delete("/{address}")
-@limiter.limit("5/minute")
-async def delete_account(
-    request: Request,
-    address: str,
-    db: Client = Depends(get_db),
-    auth: dict = Depends(require_privy_auth),
-):
-    """Permanently delete an account and all related data.
-
-    Pre-conditions:
-    1. Account must exist.
-    2. Caller must be the owner (Privy auth → owner_address match).
-    3. All protocol balances must be zero (user must withdraw first).
-
-    Cascading FKs will delete: session_keys, allocations, rebalance_logs,
-    account_yield_tracking, session_key_audit.
-    """
-    address = validate_eth_address(address)
-
-    # 1. Fetch account
-    acct = (
-        db.table("accounts")
-        .select("*")
-        .eq("address", address)
-        .limit(1)
-        .execute()
-    )
-    if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-    row = acct.data[0]
-
-    # 2. Ownership check — caller's Privy-verified address must match owner
-    caller_address = auth.get("wallet_address", "").lower()
-    if caller_address and caller_address != row["owner_address"].lower():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only delete your own account",
-        )
-
-    # 3. Verify zero balances across ALL protocols (on-chain check)
-    total_balance = 0
-    for protocol_id, adapter in ALL_ADAPTERS.items():
-        try:
-            balance = await adapter.get_balance(address)
-            total_balance += balance
-        except Exception as exc:
-            logger.warning(
-                "Could not check %s balance for %s during deletion: %s",
-                protocol_id, address, exc,
-            )
-            # Fail safe: if we can't verify, refuse deletion
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Cannot verify {protocol_id} balance. Try again later.",
-            )
-
-    if total_balance > 0:
-        total_usdc = total_balance / 1_000_000
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Account still has ${total_usdc:.2f} USDC deposited across protocols. "
-                   f"Please withdraw all funds before deleting your account.",
-        )
-
-    # 4. Revoke session key first (best effort)
-    try:
-        revoke_session_key(db, row["id"])
-    except Exception as exc:
-        logger.warning("Session key revocation during deletion failed: %s", exc)
-
-    # 5. Hard delete — cascading FKs handle related rows
-    db.table("accounts").delete().eq("id", row["id"]).execute()
-
-    logger.info(
-        "Account permanently deleted: %s (owner: %s)",
-        address,
-        row["owner_address"],
-    )
-
-    return {"success": True, "message": "Account permanently deleted."}
