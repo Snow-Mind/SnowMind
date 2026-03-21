@@ -68,6 +68,8 @@ export const PROTOCOL_CONFIG = {
     id: 'aave_v3' as const,
     name: 'Aave V3',
     shortName: 'Aave',
+    category: 'Lending',
+    asset: 'USDC',
     contractAddress: CONTRACTS.AAVE_POOL,
     riskScore: 10,     // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 = 10/10
     color: '#8381D9',
@@ -84,6 +86,8 @@ export const PROTOCOL_CONFIG = {
     id: 'aave' as const,
     name: 'Aave V3',
     shortName: 'Aave',
+    category: 'Lending',
+    asset: 'USDC',
     contractAddress: CONTRACTS.AAVE_POOL,
     riskScore: 10,     // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 = 10/10
     color: '#8381D9', // Aave brand purple
@@ -100,6 +104,8 @@ export const PROTOCOL_CONFIG = {
     id: 'benqi' as const,
     name: 'Benqi',
     shortName: 'Benqi',
+    category: 'Lending',
+    asset: 'USDC',
     contractAddress: CONTRACTS.BENQI_QIUSDC,
     riskScore: 9,     // Safety 3 + Liquidity 2 + Collateral 2 + Yield 2 + Architecture 1 = 9/10
     color: '#2A72FF', // Benqi brand blue
@@ -116,6 +122,8 @@ export const PROTOCOL_CONFIG = {
     id: 'spark' as const,
     name: 'Spark Savings',
     shortName: 'Spark',
+    category: 'Savings',
+    asset: 'USDC',
     contractAddress: CONTRACTS.SPARK_SPUSDC,
     riskScore: 9,     // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 0 = 9/10
     color: '#FFB347', // Spark brand orange
@@ -132,6 +140,8 @@ export const PROTOCOL_CONFIG = {
     id: 'euler_v2' as const,
     name: 'Euler (9Summits)',
     shortName: 'Euler (9Summits)',
+    category: 'Lending',
+    asset: 'USDC',
     contractAddress: CONTRACTS.EULER_VAULT,
     riskScore: 6,     // Safety 2 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 0 = 6/10
     color: '#4A6CF6',
@@ -148,6 +158,8 @@ export const PROTOCOL_CONFIG = {
     id: 'silo_savusd_usdc' as const,
     name: 'Silo (savUSD/USDC)',
     shortName: 'Silo',
+    category: 'Lending',
+    asset: 'USDC',
     contractAddress: CONTRACTS.SILO_SAVUSD_VAULT,
     riskScore: 8,     // Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1 = 8/10
     color: '#22C55E',
@@ -164,6 +176,8 @@ export const PROTOCOL_CONFIG = {
     id: 'silo_susdp_usdc' as const,
     name: 'Silo (sUSDp/USDC)',
     shortName: 'Silo',
+    category: 'Lending',
+    asset: 'USDC',
     contractAddress: CONTRACTS.SILO_SUSDP_VAULT,
     riskScore: 6,     // Safety 2 + Liquidity 1 + Collateral 1 + Yield 1 + Architecture 1 = 6/10
     color: '#16A34A',
@@ -208,20 +222,24 @@ export const SESSION_KEY_SELECTORS = {
     redeem: '0xdb006a75',  // redeem(uint256)
   },
   spark: {
-    deposit: '0x6e553f65',  // deposit(uint256,address) — ERC-4626
-    redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+    deposit:  '0x6e553f65',  // deposit(uint256,address) — ERC-4626
+    withdraw: '0xb460af94',  // withdraw(uint256,address,address) — ERC-4626
+    redeem:   '0xba087652',  // redeem(uint256,address,address) — ERC-4626
   },
   euler_v2: {
-    deposit: '0x6e553f65',
-    redeem:  '0xba087652',
+    deposit:  '0x6e553f65',
+    withdraw: '0xb460af94',  // withdraw(uint256,address,address) — ERC-4626
+    redeem:   '0xba087652',
   },
   silo_savusd_usdc: {
-    deposit: '0x6e553f65',  // deposit(uint256,address) — ERC-4626
-    redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+    deposit:  '0x6e553f65',  // deposit(uint256,address) — ERC-4626
+    withdraw: '0xb460af94',  // withdraw(uint256,address,address) — ERC-4626
+    redeem:   '0xba087652',  // redeem(uint256,address,address) — ERC-4626
   },
   silo_susdp_usdc: {
-    deposit: '0x6e553f65',  // deposit(uint256,address) — ERC-4626
-    redeem:  '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+    deposit:  '0x6e553f65',  // deposit(uint256,address) — ERC-4626
+    withdraw: '0xb460af94',  // withdraw(uint256,address,address) — ERC-4626
+    redeem:   '0xba087652',  // redeem(uint256,address,address) — ERC-4626
   },
 } as const
 

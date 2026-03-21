@@ -257,7 +257,7 @@ export default function OnboardingPage() {
 
     const effectiveSelectedProtocols = selectedProtocols;
 
-    const amountWei = parseUnits(parsedAmount.toFixed(6), 6);
+    const amountWei = parseUnits(depositAmount, 6);
 
     try {
       // Phase 0: Derive canonical smart account first to prevent stale-address drift.
@@ -275,53 +275,70 @@ export default function OnboardingPage() {
       }
 
       // Phase 1: Transfer USDC from EOA wallet → canonical smart account
+      // On retry after partial failure, the smart account may already hold USDC.
+      // Check existing balance and only transfer the shortfall to prevent double-deposits.
       setActivationPhase("transferring-usdc");
-      const provider = await wallet.getEthereumProvider();
-
-      const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
-      try {
-        await provider.request({
-          method: "wallet_switchEthereumChain",
-          params: [{ chainId: hexChainId }],
-        });
-      } catch (switchErr: unknown) {
-        const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
-        if (code === 4902 || code === -32603) {
-          await provider.request({
-            method: "wallet_addEthereumChain",
-            params: [{
-              chainId: hexChainId,
-              chainName: CHAIN.name,
-              nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-              rpcUrls: [AVALANCHE_RPC_URL],
-              blockExplorerUrls: [EXPLORER.base],
-            }],
-          });
-        }
-      }
-
-      const walletClient = createWalletClient({
-        chain: CHAIN,
-        transport: custom(provider),
-      });
-      const [eoaAddress] = await walletClient.getAddresses();
-
-      const transferHash = await walletClient.sendTransaction({
-        account: eoaAddress,
-        to: CONTRACTS.USDC,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "transfer",
-          args: [derivedSmartAccountAddress as `0x${string}`, amountWei],
-        }),
-      });
 
       const publicClient = createPublicClient({
         chain: CHAIN,
         transport: http(AVALANCHE_RPC_URL),
       });
-      await publicClient.waitForTransactionReceipt({ hash: transferHash });
-      toast.success("USDC transferred to smart account!");
+
+      const existingBalance = await publicClient.readContract({
+        address: CONTRACTS.USDC as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [derivedSmartAccountAddress as `0x${string}`],
+      }) as bigint;
+
+      const shortfall = amountWei > existingBalance ? amountWei - existingBalance : 0n;
+
+      if (shortfall > 0n) {
+        const provider = await wallet.getEthereumProvider();
+
+        const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
+        try {
+          await provider.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: hexChainId }],
+          });
+        } catch (switchErr: unknown) {
+          const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
+          if (code === 4902 || code === -32603) {
+            await provider.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: hexChainId,
+                chainName: CHAIN.name,
+                nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
+                rpcUrls: [AVALANCHE_RPC_URL],
+                blockExplorerUrls: [EXPLORER.base],
+              }],
+            });
+          }
+        }
+
+        const walletClient = createWalletClient({
+          chain: CHAIN,
+          transport: custom(provider),
+        });
+        const [eoaAddress] = await walletClient.getAddresses();
+
+        const transferHash = await walletClient.sendTransaction({
+          account: eoaAddress,
+          to: CONTRACTS.USDC,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "transfer",
+            args: [derivedSmartAccountAddress as `0x${string}`, shortfall],
+          }),
+        });
+
+        await publicClient.waitForTransactionReceipt({ hash: transferHash });
+        toast.success("USDC transferred to smart account!");
+      } else {
+        toast.success("Smart account already funded — skipping transfer.");
+      }
 
       // Phase 2: Deploy smart account on-chain & approve USDC for all protocols
       // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
@@ -375,7 +392,7 @@ export default function OnboardingPage() {
               USDC: CONTRACTS.USDC,
             },
             protocolId,
-            parsedAmount,
+            depositAmount,
           );
           deployedProtocol = protocolId;
           break;
@@ -405,8 +422,8 @@ export default function OnboardingPage() {
           TREASURY: CONTRACTS.TREASURY,
         },
         {
-          maxAmountUSDC: 10_000,
-          durationDays: 7,
+          maxAmountUSDC: Math.max(parsedAmount * 2, 50_000),
+          durationDays: 30,
           maxOpsPerDay: 20,
           userEOA: wallet.address as `0x${string}`,
         },
@@ -723,7 +740,7 @@ export default function OnboardingPage() {
                             )}
                           </div>
                           <p className="text-[10px] text-[#8A837C] truncate">
-                            {protocol.id === "silo_savusd_usdc" ? "savUSD/USDC" : protocol.id === "silo_susdp_usdc" ? "sUSDp/USDC" : `${protocol.shortName} · USDC`}
+                            {protocol.category}, {protocol.asset}
                           </p>
                         </div>
                       </div>

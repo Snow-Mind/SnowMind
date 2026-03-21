@@ -108,6 +108,15 @@ export const ERC4626_VAULT_ABI = [
     outputs: [{ name: "shares", type: "uint256" }],
   },
   {
+    name: "withdraw", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "assets",   type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner",    type: "address" },
+    ],
+    outputs: [{ name: "shares", type: "uint256" }],
+  },
+  {
     name: "redeem", type: "function", stateMutability: "nonpayable",
     inputs: [
       { name: "shares",   type: "uint256" },
@@ -419,6 +428,15 @@ export async function grantAndSerializeSessionKey(
         args: [null, null, null],
       },
 
+      // SPARK — withdraw (ERC-4626, for known USDC amount withdrawals)
+      {
+        target: contracts.SPARK_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "withdraw",
+        args: [null, null, null],
+      },
+
       // EULER (9Summits) — deposit (ERC-4626)
       {
         target: contracts.EULER_VAULT,
@@ -437,6 +455,15 @@ export async function grantAndSerializeSessionKey(
         valueLimit: 0n,
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
+        args: [null, null, null],
+      },
+
+      // EULER (9Summits) — withdraw (ERC-4626)
+      {
+        target: contracts.EULER_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "withdraw",
         args: [null, null, null],
       },
 
@@ -461,6 +488,15 @@ export async function grantAndSerializeSessionKey(
         args: [null, null, null],
       },
 
+      // SILO savUSD/USDC — withdraw (ERC-4626)
+      {
+        target: contracts.SILO_SAVUSD_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "withdraw",
+        args: [null, null, null],
+      },
+
       // SILO sUSDp/USDC — deposit (ERC-4626)
       {
         target: contracts.SILO_SUSDP_VAULT,
@@ -479,6 +515,15 @@ export async function grantAndSerializeSessionKey(
         valueLimit: 0n,
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
+        args: [null, null, null],
+      },
+
+      // SILO sUSDp/USDC — withdraw (ERC-4626)
+      {
+        target: contracts.SILO_SUSDP_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "withdraw",
         args: [null, null, null],
       },
     // USDC.transfer — fee collection to SnowMind treasury ONLY
@@ -588,9 +633,9 @@ export async function deployInitialToProtocol(
     USDC: `0x${string}`
   },
   protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc",
-  amountUsdc: number,
+  amountUsdc: string,
 ): Promise<{ txHash: string; explorerUrl: string }> {
-  const amount = parseUnits(amountUsdc.toFixed(6), 6)
+  const amount = parseUnits(amountUsdc, 6)
 
   const calls = [] as Array<{ to: `0x${string}`; value: bigint; data: `0x${string}` }>
 
