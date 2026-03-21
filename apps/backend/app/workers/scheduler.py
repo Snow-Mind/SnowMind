@@ -69,6 +69,11 @@ class SnowMindScheduler:
             run_date=datetime.now(timezone.utc) + timedelta(seconds=10),
             id="spark_seed",
         )
+        # Purge old TWAP/Spark snapshots daily at 4:00 UTC
+        self._scheduler.add_job(
+            self._purge_old_snapshots, "cron",
+            hour=4, minute=0, id="snapshot_purge",
+        )
         self._scheduler.start()
         logger.info(
             "Scheduler started [instance=%s, interval=%ds]",
@@ -333,6 +338,46 @@ class SnowMindScheduler:
                 logger.info("Spark snapshot table already has data — skipping seed")
         except Exception as e:
             logger.error("Failed to seed Spark snapshot: %s", e)
+
+    # ── Snapshot cleanup ────────────────────────────────────────────────────
+
+    async def _purge_old_snapshots(self) -> None:
+        """Delete TWAP and Spark snapshots older than 7 days.
+
+        The TWAP buffer only needs the 3 most recent snapshots per protocol,
+        and Spark APY only needs yesterday's value. Keeping 7 days provides
+        ample margin while preventing unbounded table growth.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        cutoff_epoch = (datetime.now(timezone.utc) - timedelta(days=7)).timestamp()
+
+        # Purge twap_snapshots (uses fetched_at as Unix epoch float)
+        try:
+            result = (
+                self.db.table("twap_snapshots")
+                .delete()
+                .lt("fetched_at", cutoff_epoch)
+                .execute()
+            )
+            deleted = len(result.data) if result.data else 0
+            if deleted > 0:
+                logger.info("Purged %d TWAP snapshots older than 7 days", deleted)
+        except Exception as e:
+            logger.error("TWAP snapshot purge failed: %s", e)
+
+        # Purge spark_convert_snapshots (uses snapshot_at as timestamptz)
+        try:
+            result = (
+                self.db.table("spark_convert_snapshots")
+                .delete()
+                .lt("snapshot_at", cutoff)
+                .execute()
+            )
+            deleted = len(result.data) if result.data else 0
+            if deleted > 0:
+                logger.info("Purged %d Spark snapshots older than 7 days", deleted)
+        except Exception as e:
+            logger.error("Spark snapshot purge failed: %s", e)
 
     # ── Balance reconciliation ───────────────────────────────────────────────
 
