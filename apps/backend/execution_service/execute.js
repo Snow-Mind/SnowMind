@@ -57,6 +57,13 @@ const ERC4626_ABI = [
       { name: "receiver", type: "address" },
     ],
     outputs: [{ name: "shares", type: "uint256" }] },
+  { name: "withdraw", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "assets",   type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner",    type: "address" },
+    ],
+    outputs: [{ name: "shares", type: "uint256" }] },
   { name: "redeem",  type: "function", stateMutability: "nonpayable",
     inputs: [
       { name: "shares",   type: "uint256" },
@@ -64,6 +71,9 @@ const ERC4626_ABI = [
       { name: "owner",    type: "address" },
     ],
     outputs: [{ name: "assets", type: "uint256" }] },
+  { name: "balanceOf", type: "function", stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }] },
 ]
 
 // ERC-20 ABI — shared by USDC approve/transfer across all protocols
@@ -187,6 +197,37 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
   }
 }
 
+/**
+ * Build the correct ERC-4626 withdrawal call.
+ * - Known amount → withdraw(assets, receiver, owner) — takes USDC amount directly.
+ * - MAX → redeem(shareBalance, receiver, owner) — requires backend to pass actual share balance.
+ * NEVER use redeem() with USDC amounts — shares ≠ assets when share price > 1.0.
+ */
+function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAccountAddress) {
+  if (amountUSDC === "MAX") {
+    if (!shareBalance) {
+      throw new Error(`MAX withdrawal from ${vaultAddress} requires shareBalance but none provided`)
+    }
+    return {
+      to: vaultAddress,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI, functionName: "redeem",
+        args: [BigInt(shareBalance), smartAccountAddress, smartAccountAddress],
+      }),
+    }
+  }
+  // Known USDC amount → use withdraw(assets) which accepts the USDC amount directly
+  return {
+    to: vaultAddress,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC4626_ABI, functionName: "withdraw",
+      args: [parseUnits(String(amountUSDC), 6), smartAccountAddress, smartAccountAddress],
+    }),
+  }
+}
+
 function resolveContractKey(protocol, contracts) {
   const map = {
     aave_v3:  "AAVE_POOL",
@@ -243,7 +284,7 @@ export async function executeRebalance({
   const calls = []
 
   // ── WITHDRAWALS FIRST — ensure funds available before deposits ─────────────
-  for (const { protocol, amountUSDC, qiTokenAmount } of withdrawals) {
+  for (const { protocol, amountUSDC, qiTokenAmount, shareBalance } of withdrawals) {
     if (protocol === "aave_v3" || protocol === "aave") {
       calls.push({
         to: contracts.AAVE_POOL,
@@ -268,45 +309,13 @@ export async function executeRebalance({
         }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
-      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
-      calls.push({
-        to: contracts.SPARK_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI, functionName: "redeem",
-          args: [shares, smartAccountAddress, smartAccountAddress],
-        }),
-      })
+      calls.push(buildErc4626Withdrawal(contracts.SPARK_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
-      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
-      calls.push({
-        to: contracts.EULER_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI, functionName: "redeem",
-          args: [shares, smartAccountAddress, smartAccountAddress],
-        }),
-      })
+      calls.push(buildErc4626Withdrawal(contracts.EULER_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
-      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
-      calls.push({
-        to: contracts.SILO_SAVUSD_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI, functionName: "redeem",
-          args: [shares, smartAccountAddress, smartAccountAddress],
-        }),
-      })
+      calls.push(buildErc4626Withdrawal(contracts.SILO_SAVUSD_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
-      const shares = amountUSDC === "MAX" ? maxUint256 : parseUnits(String(amountUSDC), 6)
-      calls.push({
-        to: contracts.SILO_SUSDP_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI, functionName: "redeem",
-          args: [shares, smartAccountAddress, smartAccountAddress],
-        }),
-      })
+      calls.push(buildErc4626Withdrawal(contracts.SILO_SUSDP_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     }
   }
 
@@ -579,10 +588,10 @@ export async function executeWithdrawal({
   }
 
   // 5) Final user transfer — always to on-chain owner.
-  // Full withdrawals sweep all remaining USDC. Partial withdrawals transfer exact requested amount.
-  const transferAmount = isFullWithdrawal ? maxUint256 : BigInt(withdrawAmount || "0")
-  if (!isFullWithdrawal && transferAmount <= 0n) {
-    throw new Error("withdrawAmount must be > 0 for partial withdrawals")
+  // Backend sends net-of-fee amount (withdrawAmount = requestedAmount - agentFee).
+  const transferAmount = BigInt(withdrawAmount || "0")
+  if (transferAmount <= 0n) {
+    throw new Error("withdrawAmount must be > 0")
   }
 
   calls.push({

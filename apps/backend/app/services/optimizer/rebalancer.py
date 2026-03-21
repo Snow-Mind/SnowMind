@@ -825,6 +825,7 @@ class Rebalancer:
         current = await self._get_current_allocations(account_id, smart_account_address)
 
         exec_withdrawals = []
+        _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
         for protocol_id, amount_usd in current.items():
             if amount_usd < Decimal("1"):
                 continue
@@ -835,6 +836,18 @@ class Rebalancer:
                     self.w3.to_checksum_address(smart_account_address)
                 ).call()
                 entry["qiTokenAmount"] = str(qi_balance)
+            elif protocol_id in _ERC4626_PROTOCOLS:
+                # ERC-4626 redeem() requires exact share balance — read on-chain
+                adapter = get_adapter(protocol_id)
+                try:
+                    share_balance = await adapter.get_shares(smart_account_address)
+                    entry["shareBalance"] = str(int(share_balance))
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read share balance for %s/%s: %s — skipping protocol",
+                        smart_account_address, protocol_id, exc,
+                    )
+                    continue
             exec_withdrawals.append(entry)
 
         if not exec_withdrawals:

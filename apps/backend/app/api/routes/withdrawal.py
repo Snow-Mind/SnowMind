@@ -316,12 +316,12 @@ async def execute_withdrawal(
         euler_share_balance = 0
         try:
             benqi_adapter = get_adapter("benqi")
-            benqi_qi_balance = int(await benqi_adapter.get_balance(address))
+            benqi_qi_balance = int(await benqi_adapter.get_shares(address))
         except Exception as exc:
             logger.warning("Failed to read Benqi share balance for %s: %s", address, exc)
         try:
             spark_adapter = get_adapter("spark")
-            spark_share_balance = int(await spark_adapter.get_balance(address))
+            spark_share_balance = int(await spark_adapter.get_shares(address))
         except Exception as exc:
             logger.warning("Failed to read Spark share balance for %s: %s", address, exc)
         try:
@@ -344,7 +344,9 @@ async def execute_withdrawal(
             logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
 
         agent_fee_raw = int(fee_calc.agent_fee * Decimal("1e6"))  # Convert to 6-decimal raw
-        withdraw_raw = int(withdraw_amount * Decimal("1e6"))
+        # withdrawAmount is what the user receives = requested amount minus fee
+        net_to_user = withdraw_amount - fee_calc.agent_fee
+        withdraw_raw = int(net_to_user * Decimal("1e6"))
 
         payload = {
             "serializedPermission": session_key,
