@@ -196,6 +196,38 @@ class RateFetcher:
         self.settings = get_settings()
         # Ensure DB snapshots are loaded on first use
         twap_buffer.load_from_db()
+        # Seed share-price-growth adapters with DB-persisted APY to avoid
+        # 30-minute cold-start 0% APY after Railway deploys/restarts
+        self._seed_cached_apy_from_db()
+
+    def _seed_cached_apy_from_db(self) -> None:
+        """Seed _cached_apy on share-price-growth adapters from DB TWAP snapshots.
+
+        After a server restart, Euler/Silo/Spark adapters start with _cached_apy=0.
+        The share-price-growth algorithm needs ≥2 readings >60s apart (i.e. ~30 min
+        with the current scheduler interval) before computing a non-zero APY.
+
+        This method uses the last known effective_apy from the DB-persisted TWAP
+        buffer to populate _cached_apy so the first get_rate() call after restart
+        returns a reasonable APY immediately.
+        """
+        share_price_protocols = ["euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "spark"]
+        for pid in share_price_protocols:
+            adapter = ALL_ADAPTERS.get(pid)
+            if adapter is None:
+                continue
+            if not hasattr(adapter, "_cached_apy"):
+                continue
+            if adapter._cached_apy != Decimal("0"):
+                continue  # Already seeded or computed — don't overwrite
+            latest = twap_buffer.get_latest(pid)
+            if latest and latest.effective_apy > Decimal("0"):
+                adapter._cached_apy = latest.effective_apy
+                logger.info(
+                    "Seeded %s cached APY from DB: %.4f%%",
+                    pid,
+                    float(latest.effective_apy * Decimal("100")),
+                )
 
     async def fetch_all_rates(self) -> dict[str, ProtocolRate]:
         """
