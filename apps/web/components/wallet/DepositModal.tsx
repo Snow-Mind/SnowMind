@@ -61,7 +61,7 @@ export default function DepositModal({ open, onClose }: DepositModalProps) {
   function handlePreview() {
     if (!smartAccountAddress || !isValid) return;
     preview.mutate(
-      { address: smartAccountAddress, riskTolerance: "moderate" },
+      { address: smartAccountAddress },
       { onSuccess: () => setStep("preview") }
     );
   }

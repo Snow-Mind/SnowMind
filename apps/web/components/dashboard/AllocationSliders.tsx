@@ -8,14 +8,12 @@
  * Most restrictive wins: min(system_tvl_cap, user_cap).
  */
 
-import { useState, useCallback } from 'react'
+import { useCallback } from 'react'
 import { SlidersHorizontal, Info, Lock } from 'lucide-react'
 import {
   PROTOCOL_CONFIG,
-  RISK_PRESETS,
   ACTIVE_PROTOCOLS,
   type ProtocolId,
-  type RiskPreset,
 } from '@/lib/constants'
 
 interface AllocationSliderProps {
@@ -96,8 +94,6 @@ interface AllocationSlidersProps {
   totalBalance: number
   currentCaps: Record<ProtocolId, number>  // Current caps (0-100)
   onCapsChange: (caps: Record<ProtocolId, number>) => void
-  onPresetSelect?: (preset: RiskPreset) => void
-  selectedPreset?: RiskPreset | 'custom'
   disabled?: boolean
 }
 
@@ -105,35 +101,16 @@ export function AllocationSliders({
   totalBalance,
   currentCaps,
   onCapsChange,
-  onPresetSelect,
-  selectedPreset = 'balanced',
   disabled = false,
 }: AllocationSlidersProps) {
   const isEligible = totalBalance >= 10000
-  const [activePreset, setActivePreset] = useState<RiskPreset | 'custom'>(selectedPreset)
 
   const handleSliderChange = useCallback(
     (protocolId: ProtocolId, value: number) => {
       const newCaps = { ...currentCaps, [protocolId]: value }
       onCapsChange(newCaps)
-      setActivePreset('custom')
     },
     [currentCaps, onCapsChange]
-  )
-
-  const handlePresetClick = useCallback(
-    (preset: RiskPreset) => {
-      const presetConfig = RISK_PRESETS[preset]
-      const presetCaps = presetConfig.caps as Record<string, number | undefined>
-      const newCaps = {} as Record<ProtocolId, number>
-      for (const pid of ACTIVE_PROTOCOLS) {
-        newCaps[pid] = Math.round((presetCaps[pid] ?? 1.0) * 100)
-      }
-      onCapsChange(newCaps)
-      setActivePreset(preset)
-      onPresetSelect?.(preset)
-    },
-    [onCapsChange, onPresetSelect]
   )
 
   if (!isEligible) {
@@ -157,7 +134,7 @@ export function AllocationSliders({
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-2">
           <SlidersHorizontal className="h-4 w-4 text-white/50" />
-          <span className="text-sm font-semibold text-white/90">Allocation Preferences</span>
+          <span className="text-sm font-semibold text-white/90">Per-Protocol Max Caps</span>
         </div>
         <div className="group relative">
           <Info className="h-4 w-4 text-white/30 cursor-help" />
@@ -168,37 +145,10 @@ export function AllocationSliders({
         </div>
       </div>
 
-      {/* Risk Preset Buttons */}
-      <div className="grid grid-cols-3 gap-2 mb-6">
-        {(Object.keys(RISK_PRESETS) as RiskPreset[]).map((preset) => {
-          const presetConfig = RISK_PRESETS[preset]
-          const isActive = activePreset === preset
-          return (
-            <button
-              key={preset}
-              onClick={() => handlePresetClick(preset)}
-              disabled={disabled}
-              className={`
-                rounded-xl px-3 py-2.5 text-center transition-all duration-200
-                ${isActive
-                  ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400'
-                  : 'bg-white/[0.03] border border-white/[0.06] text-white/50 hover:text-white/70 hover:border-white/[0.10]'
-                }
-                disabled:opacity-40 disabled:cursor-not-allowed
-              `}
-            >
-              <div className="text-xs font-semibold">{presetConfig.label}</div>
-              <div className="text-[10px] mt-0.5 opacity-60">{presetConfig.description}</div>
-            </button>
-          )
-        })}
-      </div>
-
       {/* Sliders */}
       <div className="space-y-5">
         {ACTIVE_PROTOCOLS.map((pid) => {
-          // Spark has no system TVL cap → slider goes to 100%
-          const systemMax = pid === 'spark' ? 100 : 60
+          const systemMax = 100
           return (
             <AllocationSlider
               key={pid}
@@ -211,14 +161,6 @@ export function AllocationSliders({
           )
         })}
       </div>
-
-      {/* Custom preset indicator */}
-      {activePreset === 'custom' && (
-        <div className="mt-4 flex items-center gap-1.5 text-xs text-white/30">
-          <SlidersHorizontal className="h-3 w-3" />
-          Custom allocation
-        </div>
-      )}
     </div>
   )
 }

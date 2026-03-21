@@ -123,13 +123,10 @@ export const api = {
       body: JSON.stringify({ account_address: address }),
     }),
 
-  previewOptimization: (
-    address: string,
-    riskTolerance: "conservative" | "moderate" | "aggressive" = "moderate",
-  ) =>
+  previewOptimization: (address: string) =>
     request<OptimizerPreviewResponse>(`/api/v1/optimizer/${encodeURIComponent(address)}/preview`, {
       method: "POST",
-      body: JSON.stringify({ risk_tolerance: riskTolerance }),
+      body: JSON.stringify({}),
     }),
 
   // Rebalance

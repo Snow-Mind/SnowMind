@@ -225,27 +225,6 @@ export const SESSION_KEY_SELECTORS = {
   },
 } as const
 
-// Risk presets for per-protocol caps (≥$10K deposits)
-export const RISK_PRESETS = {
-  conservative: {
-    label: 'Conservative',
-    description: 'Higher allocation to battle-tested Aave',
-    caps: { aave: 0.70, benqi: 0.20, spark: 1.0, euler_v2: 0.10, silo_savusd_usdc: 0.10, silo_susdp_usdc: 0.10 },
-  },
-  balanced: {
-    label: 'Balanced',
-    description: 'Equal opportunity across all protocols',
-    caps: { aave: 0.50, benqi: 0.40, spark: 1.0, euler_v2: 0.20, silo_savusd_usdc: 0.20, silo_susdp_usdc: 0.20 },
-  },
-  aggressive: {
-    label: 'Aggressive',
-    description: 'Maximize yield — higher Benqi allocation',
-    caps: { aave: 0.40, benqi: 0.40, spark: 1.0, euler_v2: 0.30, silo_savusd_usdc: 0.30, silo_susdp_usdc: 0.30 },
-  },
-} as const
-
-export type RiskPreset = keyof typeof RISK_PRESETS
-
 // Agent fee configuration
 export const FEE_CONFIG = {
   rate: 0.10,            // 10% of profit

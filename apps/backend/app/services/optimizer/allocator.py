@@ -10,10 +10,9 @@ Algorithm:
      - All others (Aave, Benqi, Euler, Silo): cap = min(remaining, 15% × protocol_tvl, user_max_cap)
   3. If remaining > 0 after all protocols: hold idle, alert ops
 
-User preferences (≥ $10K deposits):
+User preferences (future):
   - Per-protocol max_pct cap (0.0–1.0)
   - Per-protocol enabled toggle
-  - Risk presets: Conservative (70/20/∞), Balanced (50/40/∞), Aggressive (40/40/∞)
   - Most restrictive wins: min(system_tvl_cap, user_amount_cap)
 """
 
@@ -26,26 +25,6 @@ from app.core.config import get_settings
 from app.services.optimizer.health_checker import HealthCheckResult
 
 logger = logging.getLogger("snowmind.allocator")
-
-# ── Risk Presets ─────────────────────────────────────────────────────────────
-
-RISK_PRESETS: dict[str, dict[str, Decimal | None]] = {
-    "conservative": {
-        "aave": Decimal("0.70"),
-        "benqi": Decimal("0.20"),
-        "spark": None,  # unlimited
-    },
-    "balanced": {
-        "aave": Decimal("0.50"),
-        "benqi": Decimal("0.40"),
-        "spark": None,  # unlimited
-    },
-    "aggressive": {
-        "aave": Decimal("0.40"),
-        "benqi": Decimal("0.40"),
-        "spark": None,  # unlimited
-    },
-}
 
 
 @dataclass
