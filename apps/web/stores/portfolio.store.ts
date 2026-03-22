@@ -8,6 +8,8 @@ interface PortfolioState {
   totalDepositedUsd: string;
   totalYieldUsd: string;
   isAgentActivated: boolean;
+  /** True once Zustand has loaded persisted state from localStorage. */
+  _hasHydrated: boolean;
   setSmartAccountAddress: (address: string) => void;
   setAllocations: (allocations: ProtocolAllocation[]) => void;
   setTotals: (deposited: string, yield_: string) => void;
@@ -23,6 +25,7 @@ export const usePortfolioStore = create<PortfolioState>()(
       totalDepositedUsd: "0",
       totalYieldUsd: "0",
       isAgentActivated: false,
+      _hasHydrated: false,
       setSmartAccountAddress: (address) => set({ smartAccountAddress: address }),
       setAllocations: (allocations) => set({ allocations }),
       setTotals: (deposited, yield_) =>
@@ -34,6 +37,9 @@ export const usePortfolioStore = create<PortfolioState>()(
     {
       name: "snowmind-portfolio",
       partialize: (state) => ({ smartAccountAddress: state.smartAccountAddress, isAgentActivated: state.isAgentActivated }),
+      onRehydrateStorage: () => () => {
+        usePortfolioStore.setState({ _hasHydrated: true });
+      },
     },
   ),
 );

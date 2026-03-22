@@ -416,7 +416,7 @@ class Rebalancer:
                 )
 
         for pid in ranked_candidates:
-            if remaining_to_allocate <= Decimal("1"):
+            if remaining_to_allocate <= Decimal("0"):
                 break  # Enough healthy capacity found
             if pid in health_results:
                 continue  # Already checked (current position)
@@ -489,8 +489,12 @@ class Rebalancer:
         )
         apy_improvement = new_weighted_apy - current_weighted_apy
 
-        # 6. Beat-margin gate (bypassed by FORCED/EMERGENCY flags)
-        if global_flag == RebalanceFlag.NONE and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
+        # 6. Beat-margin gate (bypassed by FORCED/EMERGENCY flags AND initial deployments)
+        #    Initial deployment: idle USDC earning 0% → any protocol is better.
+        has_existing_protocol_positions = any(v > Decimal("1") for v in current.values())
+        is_initial_deployment = not has_existing_protocol_positions and idle_usdc > Decimal("0.01")
+
+        if global_flag == RebalanceFlag.NONE and not is_initial_deployment and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
             return await self._log(
                 db, account_id, "skipped",
                 reason="APY improvement below beat margin",
@@ -535,9 +539,7 @@ class Rebalancer:
         # 8b. Profitability gate — skip if daily gain does not cover gas + fees
         #     Bypass for initial deployments: idle USDC at 0% → any protocol is
         #     better than idle regardless of deposit size. Gas is paymaster-sponsored.
-        has_existing_protocol_positions = any(v > Decimal("1") for v in current.values())
-        is_initial_deployment = not has_existing_protocol_positions and idle_usdc > Decimal("0.01")
-
+        #     (is_initial_deployment computed above at step 6)
         if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
             daily_gain = apy_improvement * total_usd / Decimal("365")
             gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))

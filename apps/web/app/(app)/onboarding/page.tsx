@@ -141,10 +141,17 @@ export default function OnboardingPage() {
   const derivedAddressRef = useRef<string | null>(null);
   const deployGuardRef = useRef(false);
 
-  // Keep formStep in sync with account readiness — only advance after deployment
+  // Keep formStep in sync with account readiness — skip deploy if account is
+  // already set up (e.g. returning user redirected to onboarding after deactivation,
+  // or edge case where user arrives with existing smart account).
   useEffect(() => {
-    if (isAccountReady && deployPhase === "deployed" && formStep === "account") {
-      setFormStep("strategy");
+    if (isAccountReady && formStep === "account") {
+      // Account already exists (from localStorage or just deployed) — skip to strategy
+      if (deployPhase === "deployed" || deployPhase === "idle") {
+        setDeployPhase("deployed");
+        deployGuardRef.current = true;
+        setFormStep("strategy");
+      }
     }
   }, [isAccountReady, deployPhase, formStep]);
 

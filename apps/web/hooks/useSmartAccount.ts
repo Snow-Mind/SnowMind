@@ -26,9 +26,13 @@ interface SmartAccountState {
  * Session key granting + protocol approvals happen ONLY during activation
  * (in the onboarding page's handleActivate).
  * This prevents race conditions and duplicate bundler calls.
+ *
+ * CRITICAL: We wait for Zustand hydration before auto-initializing to prevent
+ * re-creating the smart account on page refresh (which would trigger MetaMask).
  */
 export function useSmartAccount(wallet: ConnectedWallet | null) {
   const storedAddress = usePortfolioStore((s) => s.smartAccountAddress) as Address | null;
+  const hasHydrated = usePortfolioStore((s) => s._hasHydrated);
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount);
 
@@ -84,27 +88,28 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     }
   }, [wallet, setSmartAccountAddress]);
 
-  // Auto-initialize when wallet is available and no stored address
+  // Auto-initialize ONLY after Zustand hydration confirms no stored address.
+  // This prevents re-creating the smart account (and triggering MetaMask) on
+  // page refresh when the address is in localStorage but hasn't loaded yet.
   useEffect(() => {
-    if (!wallet || state.setupStep !== "idle") return;
-    const timer = setTimeout(() => {
-      const currentStored = usePortfolioStore.getState().smartAccountAddress;
-      if (!currentStored) {
-        initializeAccount();
-      }
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [wallet, state.setupStep, initializeAccount]);
+    if (!hasHydrated || !wallet || state.setupStep !== "idle") return;
+    // Hydration complete — if store has no address, this is a genuinely new user
+    const currentStored = usePortfolioStore.getState().smartAccountAddress;
+    if (!currentStored) {
+      initializeAccount();
+    }
+  }, [hasHydrated, wallet, state.setupStep, initializeAccount]);
 
   // Sync state when storedAddress becomes available after Zustand hydration
   useEffect(() => {
-    if (storedAddress && !state.address && state.setupStep === "idle") {
+    if (storedAddress && !state.address && (state.setupStep === "idle" || state.setupStep === "creating")) {
       setState((prev) => ({
         ...prev,
         address: storedAddress as Address,
         isDeployed: true,
         setupStep: "ready",
       }));
+      initializingRef.current = false;
     }
   }, [storedAddress, state.address, state.setupStep]);
 

@@ -195,10 +195,12 @@ export default function AppLayout({
     (a) => Number(a.amountUsdc) > 0,
   ) ?? false;
   const hasActiveSessionKey = sessionKey?.isActive ?? false;
+  const hasHydrated = usePortfolioStore((s) => s._hasHydrated);
 
   // Clear stale storeActivated flag ONLY when real data proves no activation
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
-  const dataLoaded = !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
+  // Require hydration + real API data (both queries finished AND smartAccount resolved)
+  const dataLoaded = hasHydrated && !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
   useEffect(() => {
     if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasFunds) {
       setAgentActivated(false);
@@ -214,8 +216,10 @@ export default function AppLayout({
     }
   }, [ready, authenticated, router]);
 
-  // Redirect FRESH users (no stored smart account) to onboarding
+  // Redirect FRESH users (no stored smart account) to onboarding —
+  // only after Zustand hydration to avoid false positives on refresh
   useEffect(() => {
+    if (!hasHydrated) return;
     if (
       smartAccount.setupStep === "creating" &&
       !smartAccount.address &&
@@ -223,10 +227,12 @@ export default function AppLayout({
     ) {
       router.replace("/onboarding");
     }
-  }, [smartAccount.setupStep, smartAccount.address, pathname, router]);
+  }, [hasHydrated, smartAccount.setupStep, smartAccount.address, pathname, router]);
 
-  // Gate: redirect to onboarding if agent NOT active and accessing dashboard
-  const dataReady = storeActivated || (!portfolioLoading && !sessionKeyLoading);
+  // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
+  // Wait for BOTH Zustand hydration AND real API data before deciding.
+  // Do NOT treat disabled queries (no smartAccountAddress yet) as "loaded".
+  const dataReady = hasHydrated && (storeActivated || (!!smartAccount.address && !portfolioLoading && !sessionKeyLoading));
   useEffect(() => {
     if (!dataReady) return;
     if (!isAgentActive && pathname === "/dashboard") {
@@ -262,8 +268,8 @@ export default function AppLayout({
 
   if (!authenticated) return null;
 
-  // Show loading spinner while determining routing
-  if (!storeActivated && !isAgentActive && pathname === "/dashboard" && !dataReady) {
+  // Show loading spinner while determining routing (waiting for hydration + data)
+  if (!hasHydrated || (!storeActivated && !isAgentActive && pathname === "/dashboard" && !dataReady)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
