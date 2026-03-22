@@ -10,7 +10,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEFAULT_ORIGINS = "https://www.snowmind.xyz"
+_DEFAULT_ORIGINS = "https://www.snowmind.xyz,https://snowmind.xyz"
 
 
 class Settings(BaseSettings):
@@ -25,13 +25,21 @@ class Settings(BaseSettings):
         """Parse ALLOWED_ORIGINS env var into a list.
 
         Accepts JSON array, comma-separated string, or empty string.
+        Always includes production origins to prevent lockout.
         """
         raw = self.ALLOWED_ORIGINS.strip()
         if not raw:
-            return _DEFAULT_ORIGINS.split(",")
-        if raw.startswith("["):
-            return json.loads(raw)
-        return [o.strip() for o in raw.split(",") if o.strip()]
+            origins = _DEFAULT_ORIGINS.split(",")
+        elif raw.startswith("["):
+            origins = json.loads(raw)
+        else:
+            origins = [o.strip() for o in raw.split(",") if o.strip()]
+
+        # Always include production origins
+        for prod in ["https://www.snowmind.xyz", "https://snowmind.xyz"]:
+            if prod not in origins:
+                origins.append(prod)
+        return origins
 
     # ── Supabase ─────────────────────────────────────────────
     SUPABASE_URL: str = ""

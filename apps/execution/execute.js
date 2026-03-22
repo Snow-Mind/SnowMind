@@ -19,8 +19,8 @@ const CHAIN_ID = 43114
 const CHAIN = avalanche
 const ENTRYPOINT = getEntryPoint("0.7")
 const ZERODEV_ID = process.env.ZERODEV_PROJECT_ID
-const BUNDLER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
-const PAYMASTER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
+const BUNDLER_URL = process.env.BUNDLER_RPC_URL || `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
+const PAYMASTER_URL = process.env.PAYMASTER_RPC_URL || `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 
 const EXPLORER_BASE = "https://snowtrace.io"
 

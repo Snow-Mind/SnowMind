@@ -27,5 +27,7 @@ RUN uv sync --frozen --no-dev
 ENV PORT=8000
 EXPOSE 8000
 
-# Start execution service in background, then Python server in foreground
-CMD ["sh", "-c", "cd execution_service && node server.js & cd /app && exec uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Start execution service sidecar in background on fixed port 3001,
+# then Python server in foreground on Railway's $PORT.
+# Railway injects PORT env var — sidecar must NOT inherit it.
+CMD ["sh", "-c", "cd execution_service && PORT=3001 node server.js & cd /app && exec uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

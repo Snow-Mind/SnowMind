@@ -201,6 +201,8 @@ app.listen(port, () =>
     action: "server_started",
     port,
     version: VERSION,
+    bundlerUrl: (process.env.BUNDLER_RPC_URL || "zerodev-default").replace(/apikey=\w+/, "apikey=***"),
+    paymasterUrl: (process.env.PAYMASTER_RPC_URL || "zerodev-default").replace(/apikey=\w+/, "apikey=***"),
     timestamp: new Date().toISOString(),
   })),
 )
