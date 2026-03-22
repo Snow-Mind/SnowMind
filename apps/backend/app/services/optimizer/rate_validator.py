@@ -29,7 +29,7 @@ class RateValidator:
     """
 
     TWAP_WINDOW_SECONDS = 900        # 15 minutes
-    DEFILLAMA_DIVERGENCE_THRESHOLD = Decimal("0.02")  # 2%
+    DEFILLAMA_DIVERGENCE_THRESHOLD = Decimal("0.15")  # 15% — allows normal DeFi Llama data lag
     VELOCITY_SPIKE_THRESHOLD = Decimal("0.25")        # 25% jump between reads
     SANITY_MAX_APY = Decimal("0.25")                  # 25% APY — flag anything above
     MAX_SINGLE_MOVE_PCT = Decimal("0.30")             # Doc: cap single rebalance at 30%
@@ -201,7 +201,8 @@ class RateValidator:
 
             # 4. DefiLlama validation
             if not await self.validate_with_defillama(protocol_id, spot_apy):
-                return None  # Halt if cross-validation fails
+                logger.warning("Skipping %s this cycle due to DefiLlama divergence", protocol_id)
+                continue  # Exclude this protocol, don't halt entirely
 
             # 5. Get TWAP rate (fallback to spot if insufficient history)
             twap = self.get_twap(protocol_id)
