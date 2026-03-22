@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   RefreshCw,
   BarChart3,
   ScrollText,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import LiveRates from "@/components/dashboard/LiveRates";
@@ -78,7 +80,9 @@ const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
 export default function DashboardPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const address = smartAccountAddress || undefined;
-  const [activeTab, setActiveTab] = useState<DashboardTab>("markets");
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
+  const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
 
   const {
     data: portfolio,
@@ -184,8 +188,13 @@ export default function DashboardPage() {
                   <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
                     {stats.activeProtocols > 0
                       ? stats.activeProtocols
-                      : portfolio?.allocations.some((a) => a.protocolId === "idle")
-                        ? "Pending"
+                      : portfolio?.allocations.some((a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0)
+                        ? (
+                          <span className="inline-flex items-center gap-1 text-glacier">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Deploying
+                          </span>
+                        )
                         : "0"}
                   </p>
                 </div>
@@ -194,6 +203,24 @@ export default function DashboardPage() {
             <div className="mx-auto lg:mx-0">
               <PortfolioChart portfolio={portfolio ?? null} compact />
             </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Deploying funds banner — shown when all funds are idle after activation */}
+      {!isLoading && stats && stats.activeProtocols === 0 && portfolio?.allocations.some((a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0) && (
+        <motion.div
+          className="flex items-center gap-3 rounded-lg border border-glacier/20 bg-glacier/[0.06] px-4 py-3"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-glacier" />
+          <div>
+            <p className="text-[13px] font-medium text-arctic">Agent is deploying your funds</p>
+            <p className="text-[11px] text-[#8A837C]">
+              The optimizer will allocate your USDC to the best-yielding protocol shortly. This usually takes a few minutes.
+            </p>
           </div>
         </motion.div>
       )}

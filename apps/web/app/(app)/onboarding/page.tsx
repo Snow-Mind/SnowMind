@@ -448,6 +448,19 @@ export default function OnboardingPage() {
         },
       });
 
+      // Best-effort: explicitly store session key as a backup in case
+      // the inline storage during register failed (e.g. encryption key issue)
+      try {
+        await api.storeSessionKey(derivedAddr, {
+          serializedPermission: sessionKeyResult.serializedPermission,
+          sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
+          expiresAt: sessionKeyResult.expiresAt,
+          allowedProtocols: Array.from(effectiveSelectedProtocols),
+        });
+      } catch {
+        // Non-critical — the register endpoint also tries to store it
+      }
+
       // Best-effort diversification preference save
       try {
         await api.saveDiversificationPreference(derivedAddr, diversificationPref);
@@ -461,7 +474,7 @@ export default function OnboardingPage() {
 
       setActivated(true);
       toast.success("Agent activated! Redirecting to dashboard…");
-      setTimeout(() => router.push("/dashboard"), 2000);
+      setTimeout(() => router.push("/dashboard?tab=agent-log"), 2000);
     } catch (err) {
       activateGuardRef.current = false;
       const msg = err instanceof Error ? err.message : String(err);

@@ -195,13 +195,43 @@ class RPCManager:
         Get an AsyncWeb3 instance connected to the healthiest available provider.
 
         This is the primary interface for callers. The returned Web3 instance
-        is connected to whichever provider is currently active.
+        is connected to whichever provider is currently active.  If the active
+        provider has been marked unavailable (e.g. by report_rate_limit()),
+        this automatically rotates to the next healthy provider.
         """
+        active = self._get_active_provider()
+        if not active.is_available:
+            next_p = self._get_next_available_provider()
+            if next_p:
+                self._active_provider_url = next_p.url
+                logger.info(
+                    "get_web3() auto-rotated from unavailable %s to %s",
+                    active.tier.value,
+                    next_p.tier.value,
+                )
         return self._get_or_create_web3(self._active_provider_url)
 
     def get_active_tier(self) -> ProviderTier:
         """Return the tier of the currently active provider."""
         return self._get_active_provider().tier
+
+    def report_rate_limit(self) -> None:
+        """Report a 429 rate-limit error from a direct web3 call.
+
+        Protocol adapters and route handlers call this when they detect a 429
+        from contract calls that bypass ``call_with_fallback()``.  Marks the
+        active provider unavailable and rotates to the next healthy one.
+        """
+        active = self._get_active_provider()
+        if not active.is_available:
+            return  # already handled
+        active.record_failure()
+        active.is_available = False
+        logger.warning(
+            "429 rate-limit reported for %s — marking unavailable and rotating",
+            active.tier.value,
+        )
+        self._rotate_provider()
 
     async def call_with_fallback(
         self,

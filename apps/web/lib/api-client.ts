@@ -52,7 +52,7 @@ const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
   const token = _getAccessToken ? await _getAccessToken() : null;
 
   const headers: Record<string, string> = {
@@ -64,7 +64,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   const method = options?.method?.toUpperCase() ?? "GET";
   const isIdempotent = method === "GET" || method === "HEAD";
-  const maxAttempts = isIdempotent ? MAX_RETRIES + 1 : 1;
+  const canRetry = isIdempotent || options?.retryable === true;
+  const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -77,12 +78,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
     } catch {
       lastError = new NetworkError("Network request failed. Check your connection.");
-      if (!isIdempotent) throw lastError;
+      if (!canRetry) throw lastError;
       continue;
     }
 
     if (!res.ok) {
-      if (isIdempotent && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
+      if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
         continue;
       }
       const text = await res.text().catch(() => "Unknown error");
@@ -101,11 +102,12 @@ export const api = {
   // Health
   health: () => request<HealthResponse>("/api/v1/health"),
 
-  // Accounts
+  // Accounts — uses DB upsert, safe to retry on 502/503/504
   registerAccount: (data: RegisterAccountRequest) =>
     request<RegisterAccountResponse>("/api/v1/accounts/register", {
       method: "POST",
       body: JSON.stringify(data),
+      retryable: true,
     }),
 
   // Portfolio
@@ -174,6 +176,7 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify(data),
+        retryable: true,
       },
     ),
 

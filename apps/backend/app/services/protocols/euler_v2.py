@@ -84,20 +84,27 @@ class EulerV2Adapter(BaseProtocolAdapter):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.w3 = get_shared_async_web3()
         self.vault_address: str | None = (
             settings.EULER_VAULT if settings.EULER_VAULT else None
         )
-        self.vault = None
-        if self.vault_address:
-            self.vault = self.w3.eth.contract(
-                address=self.w3.to_checksum_address(self.vault_address),
-                abi=EULER_V2_ABI,
-            )
         # Cache for share price APY estimation
         self._last_share_price: Decimal | None = None
         self._last_share_price_time: float | None = None
         self._cached_apy: Decimal = Decimal("0")
+
+    def _get_w3(self):
+        """Get current active web3 instance (may rotate on 429)."""
+        return get_shared_async_web3()
+
+    def _get_vault(self):
+        """Get vault contract using the current active RPC provider."""
+        if not self.vault_address:
+            return None
+        w3 = self._get_w3()
+        return w3.eth.contract(
+            address=w3.to_checksum_address(self.vault_address),
+            abi=EULER_V2_ABI,
+        )
 
     # ── Rate reading ──────────────────────────────────────────────────────────
 
@@ -111,7 +118,8 @@ class EulerV2Adapter(BaseProtocolAdapter):
         When called rapidly (< 60s), returns the previously computed APY
         without resetting the share-price observation window.
         """
-        if not self.vault:
+        vault = self._get_vault()
+        if not vault:
             return ProtocolRate(
                 protocol_id=self.protocol_id,
                 apy=Decimal("0"),
@@ -122,12 +130,12 @@ class EulerV2Adapter(BaseProtocolAdapter):
             )
 
         # Read current share price with high precision
-        current_assets = await self.vault.functions.convertToAssets(
+        current_assets = await vault.functions.convertToAssets(
             SHARE_PRICE_QUERY_AMOUNT
         ).call()
         current_price = Decimal(str(current_assets)) / SHARE_PRICE_QUERY_DECIMAL
 
-        total_assets_raw = await self.vault.functions.totalAssets().call()
+        total_assets_raw = await vault.functions.totalAssets().call()
         tvl = Decimal(str(total_assets_raw)) / ONE_USDC
 
         now = time.time()
@@ -163,7 +171,8 @@ class EulerV2Adapter(BaseProtocolAdapter):
 
     async def get_health(self) -> ProtocolHealth:
         """Health check: vault must have non-zero totalAssets and valid share price."""
-        if not self.vault:
+        vault = self._get_vault()
+        if not vault:
             return ProtocolHealth(
                 protocol_id=self.protocol_id,
                 status=ProtocolStatus.EXCLUDED,
@@ -174,7 +183,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
             )
 
         try:
-            total_assets = await self.vault.functions.totalAssets().call()
+            total_assets = await vault.functions.totalAssets().call()
             if total_assets == 0:
                 return ProtocolHealth(
                     protocol_id=self.protocol_id,
@@ -187,7 +196,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
 
             # Sanity: convertToAssets should return at least 1:1 ratio
             one_usdc = 1_000_000  # 1 USDC in 6 decimals
-            test_assets = await self.vault.functions.convertToAssets(one_usdc).call()
+            test_assets = await vault.functions.convertToAssets(one_usdc).call()
             if test_assets < one_usdc:
                 return ProtocolHealth(
                     protocol_id=self.protocol_id,
@@ -225,11 +234,13 @@ class EulerV2Adapter(BaseProtocolAdapter):
         self, amount: int, on_behalf_of: str
     ) -> TransactionCalldata:
         """ERC-4626: deposit(uint256 assets, address receiver)"""
-        if not self.vault:
+        vault = self._get_vault()
+        if not vault:
             raise RuntimeError("Euler V2 vault not configured")
-        data = self.vault.encode_abi(
+        w3 = self._get_w3()
+        data = vault.encode_abi(
             "deposit",
-            args=[amount, self.w3.to_checksum_address(on_behalf_of)],
+            args=[amount, w3.to_checksum_address(on_behalf_of)],
         )
         return TransactionCalldata(to=self.vault_address, data=data, value=0)
 
@@ -237,27 +248,33 @@ class EulerV2Adapter(BaseProtocolAdapter):
         self, shares_or_amount: int, to: str
     ) -> TransactionCalldata:
         """ERC-4626: redeem(uint256 shares, address receiver, address owner)"""
-        if not self.vault:
+        vault = self._get_vault()
+        if not vault:
             raise RuntimeError("Euler V2 vault not configured")
-        to_addr = self.w3.to_checksum_address(to)
-        data = self.vault.encode_abi("redeem", args=[shares_or_amount, to_addr, to_addr])
+        w3 = self._get_w3()
+        to_addr = w3.to_checksum_address(to)
+        data = vault.encode_abi("redeem", args=[shares_or_amount, to_addr, to_addr])
         return TransactionCalldata(to=self.vault_address, data=data, value=0)
 
     # ── Balance ───────────────────────────────────────────────────────────────
 
     async def get_balance(self, user_address: str) -> int:
         """Returns underlying USDC amount by converting shares → assets."""
-        if not self.vault:
+        vault = self._get_vault()
+        if not vault:
             return 0
-        shares = await self.vault.functions.balanceOf(
-            self.w3.to_checksum_address(user_address)
+        w3 = self._get_w3()
+        shares = await vault.functions.balanceOf(
+            w3.to_checksum_address(user_address)
         ).call()
-        return await self.vault.functions.convertToAssets(shares).call()
+        return await vault.functions.convertToAssets(shares).call()
 
     async def get_shares(self, user_address: str) -> int:
         """Returns the raw ERC-4626 share balance for redemption paths."""
-        if not self.vault:
+        vault = self._get_vault()
+        if not vault:
             return 0
-        return await self.vault.functions.balanceOf(
-            self.w3.to_checksum_address(user_address)
+        w3 = self._get_w3()
+        return await vault.functions.balanceOf(
+            w3.to_checksum_address(user_address)
         ).call()

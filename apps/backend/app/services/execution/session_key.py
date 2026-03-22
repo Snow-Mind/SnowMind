@@ -6,6 +6,8 @@ suppress logging output.
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -58,14 +60,41 @@ def _get_kms_client():
 
 
 def _get_legacy_aes_key() -> bytes:
-    """Backward-compatible env-key path for local tests/dev."""
-    raw = get_settings().SESSION_KEY_ENCRYPTION_KEY
-    if not raw:
-        raise RuntimeError("SESSION_KEY_ENCRYPTION_KEY is not configured")
-    key = bytes.fromhex(raw)
-    if len(key) != 32:
-        raise ValueError("SESSION_KEY_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)")
-    return key
+    """Return the 32-byte AES-256 key for local session-key encryption.
+
+    Priority:
+      1. ``SESSION_KEY_ENCRYPTION_KEY`` env var (64 hex chars → 32 bytes).
+      2. Auto-derived from ``SUPABASE_SERVICE_KEY`` via HMAC-SHA256 so
+         Railway deploys that forget to set the dedicated env var still
+         have a stable, deterministic encryption key.
+      3. RuntimeError if neither is available.
+    """
+    settings = get_settings()
+    raw = settings.SESSION_KEY_ENCRYPTION_KEY
+    if raw:
+        key = bytes.fromhex(raw)
+        if len(key) != 32:
+            raise ValueError("SESSION_KEY_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)")
+        return key
+
+    # Auto-derive from SUPABASE_SERVICE_KEY — deterministic, stable across restarts
+    supabase_key = settings.SUPABASE_SERVICE_KEY
+    if supabase_key:
+        derived = hmac.new(
+            key=supabase_key.encode("utf-8"),
+            msg=b"snowmind-session-key-encryption-v1",
+            digestmod=hashlib.sha256,
+        ).digest()
+        logger.warning(
+            "SESSION_KEY_ENCRYPTION_KEY not set — auto-derived from SUPABASE_SERVICE_KEY. "
+            "Set SESSION_KEY_ENCRYPTION_KEY in production for explicit control."
+        )
+        return derived  # 32 bytes from SHA-256
+
+    raise RuntimeError(
+        "Neither SESSION_KEY_ENCRYPTION_KEY nor SUPABASE_SERVICE_KEY is configured. "
+        "Cannot encrypt session keys."
+    )
 
 
 def _encode_envelope(ciphertext: bytes, nonce: bytes, encrypted_data_key: bytes) -> str:

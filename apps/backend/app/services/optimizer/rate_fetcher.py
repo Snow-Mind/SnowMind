@@ -25,6 +25,12 @@ from app.services.protocols.base import ProtocolRate
 
 logger = logging.getLogger("snowmind.rate_fetcher")
 
+# ── Response-level cache for rate fetches ────────────────────────────────────
+# Prevents Infura 429 storms when /rates is polled rapidly by the frontend.
+_rate_cache: dict[str, ProtocolRate] = {}
+_rate_cache_timestamp: float = 0.0
+_RATE_CACHE_TTL_SECONDS: float = 45.0  # Serve cached rates for 45s
+
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────
 
@@ -256,25 +262,57 @@ class RateFetcher:
         """
         Fetch from ALL active adapters with concurrency throttling.
 
+        Returns cached results if within the TTL window to prevent Infura 429
+        storms when the /rates endpoint is polled rapidly by the frontend.
+
         Uses an asyncio.Semaphore to limit concurrent RPC calls and prevent
         Infura 429 rate-limiting.  For Spark: passes yesterday's
         convertToAssets snapshot to the adapter.
         """
+        global _rate_cache, _rate_cache_timestamp
+
+        # Return cached rates if still fresh
+        now = time.time()
+        if _rate_cache and (now - _rate_cache_timestamp) < _RATE_CACHE_TTL_SECONDS:
+            logger.debug(
+                "Returning cached rates (age=%.0fs, ttl=%.0fs)",
+                now - _rate_cache_timestamp,
+                _RATE_CACHE_TTL_SECONDS,
+            )
+            return dict(_rate_cache)
+
         settings = self.settings
         semaphore = asyncio.Semaphore(settings.RPC_CONCURRENCY_LIMIT)
 
+        async def _do_fetch(pid: str) -> ProtocolRate:
+            """Execute a single adapter's get_rate() call."""
+            adapter = ALL_ADAPTERS[pid]
+            if pid == "spark":
+                yesterday_snapshot = self._get_spark_yesterday_snapshot()
+                return await adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
+            else:
+                return await adapter.get_rate()
+
         async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
-            """Run a single adapter fetch under the concurrency semaphore."""
+            """Run a single adapter fetch under the concurrency semaphore.
+
+            On 429 rate-limit errors, notifies the RPCManager to rotate
+            providers and retries once with the new provider.
+            """
             async with semaphore:
                 try:
-                    adapter = ALL_ADAPTERS[pid]
-                    if pid == "spark":
-                        yesterday_snapshot = self._get_spark_yesterday_snapshot()
-                        result = await adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
-                    else:
-                        result = await adapter.get_rate()
+                    result = await _do_fetch(pid)
                     return pid, result
                 except Exception as exc:
+                    err_str = str(exc)
+                    if "429" in err_str or "Too Many Requests" in err_str:
+                        from app.core.rpc import get_rpc_manager
+                        get_rpc_manager().report_rate_limit()
+                        try:
+                            result = await _do_fetch(pid)
+                            return pid, result
+                        except Exception as retry_exc:
+                            return pid, retry_exc
                     return pid, exc
 
         pids_to_fetch = [
@@ -301,6 +339,12 @@ class RateFetcher:
                 results[pid] = result
                 circuit_breaker.record_success(pid)
                 twap_buffer.add(result)
+
+        # Update response cache
+        if results:
+            _rate_cache.clear()
+            _rate_cache.update(results)
+            _rate_cache_timestamp = time.time()
 
         return results
 

@@ -349,9 +349,16 @@ async def store_account_session_key(
         "serializedPermission": req.serialized_permission,
         "sessionKeyAddress": req.session_key_address,
         "expiresAt": req.expires_at,
-        "allowedProtocols": req.allowed_protocols or ["aave_v3", "benqi", "spark", "euler_v2"],
+        "allowedProtocols": req.allowed_protocols or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
     }
-    key_id = store_session_key(db, account_id, session_key_data)
+    try:
+        key_id = store_session_key(db, account_id, session_key_data)
+    except ValueError as exc:
+        # Renewal guard: active key still has >24h remaining — this is OK
+        if "Renewal not needed" in str(exc) or "remaining" in str(exc):
+            logger.info("Session key store skipped for %s: %s", address, exc)
+            return {"success": True, "keyId": "", "message": str(exc)}
+        raise HTTPException(status_code=400, detail=str(exc))
     logger.info("Session key stored via /session-key endpoint for %s (key_id=%s)", address, key_id)
 
     # Optionally record initial allocation

@@ -38,42 +38,63 @@ _ERC20_ABI = [
 
 async def _get_idle_usdc(address: str) -> Decimal:
     """Read the on-chain USDC balance sitting idle in the smart account."""
-    try:
-        settings = get_settings()
-        w3 = get_shared_async_web3()
-        usdc = w3.eth.contract(
-            address=w3.to_checksum_address(settings.USDC_ADDRESS),
-            abi=_ERC20_ABI,
-        )
-        balance_wei = await usdc.functions.balanceOf(
-            w3.to_checksum_address(address)
-        ).call()
-        return Decimal(str(balance_wei)) / Decimal("1000000")
-    except Exception as exc:
-        logger.warning("Failed to read idle USDC for %s: %s", address, exc)
-        return Decimal("0")
+    for attempt in range(2):
+        try:
+            settings = get_settings()
+            w3 = get_shared_async_web3()
+            usdc = w3.eth.contract(
+                address=w3.to_checksum_address(settings.USDC_ADDRESS),
+                abi=_ERC20_ABI,
+            )
+            balance_wei = await usdc.functions.balanceOf(
+                w3.to_checksum_address(address)
+            ).call()
+            return Decimal(str(balance_wei)) / Decimal("1000000")
+        except Exception as exc:
+            err_str = str(exc)
+            if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
+                from app.core.rpc import get_rpc_manager
+                get_rpc_manager().report_rate_limit()
+                continue  # retry with rotated provider
+            logger.warning("Failed to read idle USDC for %s: %s", address, exc)
+            return Decimal("0")
+    return Decimal("0")
 
 
 async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal:
     """Read on-chain underlying balance for a protocol."""
-    try:
-        settings = get_settings()
-        adapter = get_adapter(protocol_id)
-        balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
-        return Decimal(str(balance_wei)) / Decimal("1000000")
-    except Exception as exc:
-        logger.warning("On-chain balance read failed for %s/%s: %s", protocol_id, address, exc)
-        return Decimal("0")
+    for attempt in range(2):
+        try:
+            settings = get_settings()
+            adapter = get_adapter(protocol_id)
+            balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
+            return Decimal(str(balance_wei)) / Decimal("1000000")
+        except Exception as exc:
+            err_str = str(exc)
+            if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
+                from app.core.rpc import get_rpc_manager
+                get_rpc_manager().report_rate_limit()
+                continue  # retry with rotated provider
+            logger.warning("On-chain balance read failed for %s/%s: %s", protocol_id, address, exc)
+            return Decimal("0")
+    return Decimal("0")
 
 
 async def _get_protocol_apy(protocol_id: str) -> Decimal:
     """Get current live APY for a protocol."""
-    try:
-        adapter = get_adapter(protocol_id)
-        rate = await adapter.get_rate()
-        return rate.apy
-    except Exception:
-        return Decimal("0")
+    for attempt in range(2):
+        try:
+            adapter = get_adapter(protocol_id)
+            rate = await adapter.get_rate()
+            return rate.apy
+        except Exception as exc:
+            err_str = str(exc)
+            if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
+                from app.core.rpc import get_rpc_manager
+                get_rpc_manager().report_rate_limit()
+                continue  # retry with rotated provider
+            return Decimal("0")
+    return Decimal("0")
 
 
 # ── GET /portfolio/{address} ──────────────────────────────
