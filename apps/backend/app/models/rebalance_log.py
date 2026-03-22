@@ -29,6 +29,7 @@ class RebalanceLogResponse(CamelModel):
     """Subset for frontend consumption."""
     id: UUID
     status: RebalanceStatus
+    skip_reason: str | None = None
     proposed_allocations: dict[str, Any] | None = None
     executed_allocations: dict[str, Any] | None = None
     apr_improvement: float | None = None

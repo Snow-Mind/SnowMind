@@ -36,7 +36,7 @@ function inferAction(entry: RebalanceLogEntry): ActionType {
 function primaryProtocol(entry: RebalanceLogEntry): string {
   const allocs = entry.executedAllocations || entry.proposedAllocations || {};
   const entries = Object.entries(allocs);
-  if (entries.length === 0) return "Unknown";
+  if (entries.length === 0) return "Monitoring";
   const top = entries.sort((a, b) => Number(b[1]) - Number(a[1]))[0];
   const cfg = PROTOCOL_CONFIG[top[0] as ProtocolId];
   return cfg?.name ?? top[0];
@@ -57,7 +57,9 @@ const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: s
 
 /** Derive verifiable reasoning for each agent action — Giza-style "Verifiable Decision-Making" */
 function deriveReasoning(entry: RebalanceLogEntry): string | null {
-  if (entry.status === "skipped") return "Rate difference below 5% threshold — no action needed.";
+  if (entry.status === "skipped") {
+    return entry.skipReason || "Monitoring complete — no action needed.";
+  }
   if (entry.status === "failed") return "Transaction reverted. Funds remain safe — agent will retry next cycle.";
   if (entry.aprImprovement != null && entry.aprImprovement > 0) {
     return `APR improved by ${(entry.aprImprovement * 100).toFixed(2)}%${entry.gasCostUsd ? ` · Gas: $${entry.gasCostUsd.toFixed(4)}` : ""} — net positive after costs.`;
@@ -138,15 +140,33 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
                   <div className="flex shrink-0 items-center gap-2">
                     <span
                       className={`flex items-center gap-1 text-[10px] ${
-                        isConfirmed ? "text-mint" : "text-amber-400"
+                        isConfirmed
+                          ? "text-mint"
+                          : entry.status === "skipped"
+                            ? "text-muted-foreground"
+                            : entry.status === "failed"
+                              ? "text-crimson"
+                              : "text-amber-400"
                       }`}
                     >
                       <span
                         className={`inline-block h-1.5 w-1.5 rounded-full ${
-                          isConfirmed ? "bg-mint" : "animate-pulse bg-amber-400"
+                          isConfirmed
+                            ? "bg-mint"
+                            : entry.status === "skipped"
+                              ? "bg-muted-foreground"
+                              : entry.status === "failed"
+                                ? "bg-crimson"
+                                : "animate-pulse bg-amber-400"
                         }`}
                       />
-                      {isConfirmed ? "Confirmed" : "Pending"}
+                      {isConfirmed
+                        ? "Confirmed"
+                        : entry.status === "skipped"
+                          ? "Skipped"
+                          : entry.status === "failed"
+                            ? "Failed"
+                            : "Pending"}
                     </span>
 
                     {/* Snowtrace link */}

@@ -171,12 +171,13 @@ def store_session_key(
     """
     # ── Renewal guard — reject if current key has >24h remaining ─────
     now = datetime.now(timezone.utc)
+    now_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     existing = (
         db.table("session_keys")
         .select("expires_at")
         .eq("account_id", str(account_id))
         .eq("is_active", True)
-        .gte("expires_at", now.isoformat())
+        .gte("expires_at", now_z)
         .order("created_at", desc=True)
         .limit(1)
         .execute()
@@ -210,10 +211,12 @@ def store_session_key(
     # Handle expiresAt as either ISO string or unix timestamp
     expires_raw = session_key_data.get("expiresAt") or session_key_data.get("expires_at")
     if isinstance(expires_raw, (int, float)):
-        from datetime import datetime, timezone
-        expires_at = datetime.fromtimestamp(expires_raw, tz=timezone.utc).isoformat()
+        expires_at = datetime.fromtimestamp(expires_raw, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
         expires_at = str(expires_raw) if expires_raw else None
+        # Normalize any +00:00 suffix to Z for consistent PostgREST queries
+        if expires_at and expires_at.endswith("+00:00"):
+            expires_at = expires_at.replace("+00:00", "Z")
 
     encrypted = encrypt_session_key(raw_key)
 
@@ -255,18 +258,36 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
 
     Returns ``None`` when no active (and non-expired) key exists.
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = (
         db.table("session_keys")
         .select("serialized_permission, expires_at, allowed_protocols")
         .eq("account_id", str(account_id))
         .eq("is_active", True)
-        .gte("expires_at", now_iso)
+        .gte("expires_at", now_z)
         .order("created_at", desc=True)
         .limit(1)
         .execute()
     )
     if not result.data:
+        # Diagnostic: check if there IS an active key that our filter missed
+        fallback = (
+            db.table("session_keys")
+            .select("id, expires_at, is_active")
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if fallback.data:
+            logger.warning(
+                "Session key lookup miss for %s: active key exists with "
+                "expires_at=%s but now_z=%s — possible timestamp format issue",
+                account_id,
+                fallback.data[0]["expires_at"],
+                now_z,
+            )
         return None
 
     row = result.data[0]
@@ -315,15 +336,15 @@ async def check_expiring_keys(db: Client) -> list[str]:
     Intended for daily scheduler checks — post-MVP can trigger notifications.
     """
     now = datetime.now(timezone.utc)
-    warning_cutoff = (now + timedelta(days=_EXPIRY_WARNING_DAYS)).isoformat()
-    now_iso = now.isoformat()
+    now_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    warning_cutoff = (now + timedelta(days=_EXPIRY_WARNING_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     result = (
         db.table("session_keys")
         .select("account_id, expires_at")
         .eq("is_active", True)
-        .gte("expires_at", now_iso)        # not yet expired
-        .lte("expires_at", warning_cutoff)  # but expiring soon
+        .gte("expires_at", now_z)            # not yet expired
+        .lte("expires_at", warning_cutoff)   # but expiring soon
         .execute()
     )
 

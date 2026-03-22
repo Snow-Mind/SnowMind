@@ -28,7 +28,7 @@ dist/
 # IDE
 .vscode/settings.json
 .idea/
-
+backend_logs.md
 # OS
 .DS_Store
 Thumbs.db

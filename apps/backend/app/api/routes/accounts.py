@@ -190,13 +190,13 @@ async def get_account(
     row = acct.data[0]
 
     # Fetch latest active session key metadata (not the encrypted key itself)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     sk = (
         db.table("session_keys")
         .select("key_address, is_active, expires_at, allowed_protocols, max_amount_per_tx, created_at")
         .eq("account_id", row["id"])
         .eq("is_active", True)
-        .gte("expires_at", now_iso)
+        .gte("expires_at", now_z)
         .order("created_at", desc=True)
         .limit(1)
         .execute()

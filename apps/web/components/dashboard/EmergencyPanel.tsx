@@ -233,7 +233,7 @@ export default function EmergencyPanel() {
           </div>
           <div className="text-left">
             <h2 className="text-sm font-medium text-arctic">
-              Emergency Withdrawal
+              Withdrawal
             </h2>
             <p className="text-xs text-muted-foreground">
               Two independent paths to recover your funds.

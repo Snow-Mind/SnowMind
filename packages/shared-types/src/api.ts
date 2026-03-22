@@ -67,6 +67,7 @@ export interface OptimizerPreviewResponse {
 export interface RebalanceLogEntry {
   id: string;
   status: string;
+  skipReason: string | null;
   proposedAllocations: Record<string, unknown> | null;
   executedAllocations: Record<string, unknown> | null;
   aprImprovement: number | null;
