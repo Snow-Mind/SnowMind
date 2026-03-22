@@ -708,7 +708,12 @@ class Rebalancer:
             logger.info("Execution service returned: %s", result)
             return result["txHash"]
         except httpx.HTTPStatusError as exc:
-            # Detect invalid session key errors and revoke so we don't retry forever.
+            # Detect DEFINITIVELY invalid session key errors and revoke.
+            # IMPORTANT: "validateUserOp" was removed — it's too broad.
+            # validateUserOp can fail for transient reasons (gas, nonce,
+            # bundler timeout, paymaster) that do NOT indicate a bad session
+            # key. Revoking on transient errors destroys user authorization
+            # and blocks all future rebalances until the user re-activates.
             err_msg = ""
             if exc.response is not None:
                 try:
@@ -716,13 +721,15 @@ class Rebalancer:
                 except Exception:
                     err_msg = exc.response.text
 
-            if (
+            # Only revoke on errors that definitively mean the session key
+            # itself is corrupt, expired, or for the wrong account.
+            is_definite_session_key_error = (
                 "serializedSessionKey" in err_msg
                 or "No signer" in err_msg
                 or "Session key/account mismatch" in err_msg
                 or "EnableNotApproved" in err_msg
-                or "validateUserOp" in err_msg
-            ):
+            )
+            if is_definite_session_key_error:
                 logger.warning(
                     "Invalid session key for %s — revoking",
                     smart_account_address,

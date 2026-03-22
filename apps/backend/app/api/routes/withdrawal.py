@@ -386,12 +386,13 @@ async def execute_withdrawal(
             result = await execution.execute_withdrawal(payload)
         except Exception as exc:
             err_msg = str(exc)
+            # Only revoke on definitively invalid session key errors.
+            # "validateUserOp" removed — too broad, catches transient failures.
             if (
                 "serializedSessionKey" in err_msg
                 or "No signer" in err_msg
                 or "Session key/account mismatch" in err_msg
                 or "EnableNotApproved" in err_msg
-                or "validateUserOp" in err_msg
             ):
                 revoke_session_key(db, UUID(account["id"]))
                 raise HTTPException(

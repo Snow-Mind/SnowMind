@@ -280,7 +280,18 @@ export async function executeRebalance({
     )
   }
 
-  const onchainOwner = await resolveKernelOwner(permissionAccount)
+  // Only resolve owner when needed (userTransfer requires the EOA destination).
+  // Standard rebalances (idle → protocol) have no userTransfer, so skip the
+  // expensive on-chain resolution that fails on ZeroDev v5.x permission accounts.
+  let onchainOwner = null
+  if (userTransfer) {
+    if (userTransfer.to) {
+      // Trust the backend-provided destination (backend calls are HMAC-authenticated)
+      onchainOwner = userTransfer.to
+    } else {
+      onchainOwner = await resolveKernelOwner(permissionAccount)
+    }
+  }
   const calls = []
 
   // ── WITHDRAWALS FIRST — ensure funds available before deposits ─────────────
@@ -333,6 +344,9 @@ export async function executeRebalance({
 
   // ── USER TRANSFER — send remaining funds to user's EOA (atomic with withdrawal) ──
   if (userTransfer && userTransfer.amountUSDC > 0) {
+    if (!onchainOwner) {
+      throw new Error("userTransfer requested but owner could not be resolved")
+    }
     if (userTransfer.to && userTransfer.to.toLowerCase() !== onchainOwner.toLowerCase()) {
       throw new Error(
         `User transfer destination mismatch: provided=${userTransfer.to} onchainOwner=${onchainOwner}`,
@@ -467,6 +481,7 @@ export async function executeRebalance({
 export async function executeWithdrawal({
   serializedPermission,
   smartAccountAddress,
+  ownerAddress,        // backend-provided EOA owner (trusted, HMAC-authenticated)
   agentFeeAmount,      // raw 6-decimal integer string
   isFullWithdrawal,
   contracts,           // { AAVE_POOL, BENQI_POOL, SPARK_VAULT, EULER_VAULT, SILO_SAVUSD_VAULT, SILO_SUSDP_VAULT, USDC, TREASURY }
@@ -489,7 +504,12 @@ export async function executeWithdrawal({
     )
   }
 
-  const onchainOwner = await resolveKernelOwner(permissionAccount)
+  // Use ownerAddress from backend (trusted, from accounts table) if provided.
+  // Fall back to on-chain resolution only as a last resort.
+  let onchainOwner = ownerAddress || null
+  if (!onchainOwner) {
+    onchainOwner = await resolveKernelOwner(permissionAccount)
+  }
   const calls = []
 
   // 1) Redeem from Aave (MAX withdraw) — ONLY if user has aTokens

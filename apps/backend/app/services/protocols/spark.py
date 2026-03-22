@@ -217,11 +217,17 @@ class SparkAdapter(BaseProtocolAdapter):
             # (values < 10^12), new ones use 1e18 scale (values > 10^12).
             # If yesterday is old scale, skip to fallback.
             if yesterday_snapshot < Decimal("1000000000000"):
+                # Old snapshot was stored at 1e6 scale; scale it up to 1e18
+                # so we can compute a reasonable APY during the transition day.
+                scaled_yesterday = yesterday_snapshot * Decimal("1000000000000")
                 logger.info(
                     "Spark snapshot scale mismatch: yesterday=%s (1e6 scale) "
-                    "vs today=%s (1e18 scale) — using fallback APY",
-                    yesterday_snapshot, today_value,
+                    "→ scaled to %s (1e18) vs today=%s — computing APY from scaled value",
+                    yesterday_snapshot, scaled_yesterday, today_value,
                 )
+                if scaled_yesterday > 0 and today_value > scaled_yesterday:
+                    daily_rate = (today_value - scaled_yesterday) / scaled_yesterday
+                    gross_apy = daily_rate * Decimal("365")
             else:
                 # Primary: 24h delta from DB snapshot (both at 1e18 scale)
                 daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
