@@ -89,6 +89,31 @@ class Rebalancer:
             logger.warning("Failed to read idle USDC for %s: %s", smart_account_address, exc)
             return Decimal("0")
 
+    async def _discover_onchain_balances(
+        self,
+        smart_account_address: str,
+        protocol_ids: set[str],
+    ) -> dict[str, Decimal]:
+        """Scan on-chain balances across all protocols to discover existing positions.
+
+        Used when the allocations DB table is empty but the user may have
+        deployed funds directly from the frontend (e.g. during onboarding).
+        Returns a dict of protocol_id → USDC value for positions > $0.50.
+        """
+        discovered: dict[str, Decimal] = {}
+        for pid in protocol_ids:
+            try:
+                adapter = get_adapter(pid)
+                if adapter is None:
+                    continue
+                balance_wei = await adapter.get_balance(smart_account_address)
+                balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                if balance_usd > Decimal("0.50"):
+                    discovered[pid] = balance_usd
+            except Exception as exc:
+                logger.debug("On-chain balance check for %s/%s failed: %s", smart_account_address, pid, exc)
+        return discovered
+
     # â”€â”€ Full pipeline (cron entry-point) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def check_and_rebalance(
@@ -189,6 +214,36 @@ class Rebalancer:
             amt = Decimal(str(row["amount_usdc"]))
             current[row["protocol_id"]] = amt
             total_usd += amt
+
+        # 4a. On-chain balance discovery — if allocations table is empty,
+        # scan all enabled protocols for existing positions. This handles
+        # the case where the frontend deployed funds directly but the
+        # allocation was never recorded in the DB.
+        if not current:
+            discovered = await self._discover_onchain_balances(
+                smart_account_address, set(allowed_rates.keys()),
+            )
+            if discovered:
+                logger.info(
+                    "Discovered on-chain positions for %s (not in DB): %s",
+                    smart_account_address,
+                    {pid: f"${float(amt):.2f}" for pid, amt in discovered.items()},
+                )
+                # Sync discovered positions to DB
+                for pid, amt in discovered.items():
+                    try:
+                        db.table("allocations").upsert(
+                            {
+                                "account_id": account_id,
+                                "protocol_id": pid,
+                                "amount_usdc": str(amt.quantize(Decimal("0.000001"))),
+                            },
+                            on_conflict="account_id,protocol_id",
+                        ).execute()
+                    except Exception as exc:
+                        logger.warning("Failed to sync allocation for %s/%s: %s", account_id, pid, exc)
+                current = discovered
+                total_usd = sum(discovered.values())
 
         # Check on-chain idle USDC balance (not yet deployed to any protocol)
         idle_usdc = await self._get_idle_usdc_balance(smart_account_address)

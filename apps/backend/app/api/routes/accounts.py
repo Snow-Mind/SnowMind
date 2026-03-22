@@ -53,6 +53,12 @@ class RegisterAccountRequest(BaseModel):
         description="Optional session-key blob to encrypt & store",
     )
 
+    initial_allocation: dict | None = Field(
+        None,
+        alias="initialAllocation",
+        description="Optional {protocolId: amountUsdc} from frontend initial deployment",
+    )
+
 
 # ── POST /accounts  AND  /accounts/register ───────────────
 
@@ -100,6 +106,25 @@ async def _do_register(
     # Optionally store session key
     if req.session_key_data:
         store_session_key(db, account["id"], req.session_key_data)
+
+    # Optionally record initial allocation from frontend deployment
+    if req.initial_allocation:
+        from decimal import Decimal
+        for protocol_id, amount_str in req.initial_allocation.items():
+            try:
+                amount = Decimal(str(amount_str))
+                if amount > Decimal("0.01"):
+                    db.table("allocations").upsert(
+                        {
+                            "account_id": account["id"],
+                            "protocol_id": protocol_id,
+                            "amount_usdc": str(amount.quantize(Decimal("0.000001"))),
+                        },
+                        on_conflict="account_id,protocol_id",
+                    ).execute()
+                    logger.info("Initial allocation: %s/%s = $%s", address, protocol_id, amount)
+            except Exception as exc:
+                logger.warning("Failed to record allocation %s/%s: %s", address, protocol_id, exc)
 
     # Fire-and-forget: trigger immediate rebalance so idle USDC gets deployed
     if req.session_key_data:
@@ -263,6 +288,88 @@ async def revoke_account_session_key_post(
 ):
     """POST alias for session-key revocation (frontend compat)."""
     return await _do_revoke(address, db)
+
+
+# ── POST /accounts/{address}/session-key ── store/renew ──
+
+
+class StoreSessionKeyRequest(BaseModel):
+    """Request body for storing a session key (used for retry/renewal)."""
+    serialized_permission: str = Field(..., alias="serializedPermission")
+    session_key_address: str = Field(..., alias="sessionKeyAddress")
+    expires_at: int | str = Field(..., alias="expiresAt")
+    allowed_protocols: list[str] | None = Field(None, alias="allowedProtocols")
+    initial_allocation: dict | None = Field(
+        None,
+        alias="initialAllocation",
+        description="Optional: {protocolId: amountUsdc} to seed allocations table",
+    )
+    model_config = {"populate_by_name": True}
+
+
+@router.post("/{address}/session-key")
+@limiter.limit("10/minute")
+async def store_account_session_key(
+    request: Request,
+    address: str,
+    req: StoreSessionKeyRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Store or renew a session key for an existing account.
+
+    Also optionally records the initial allocation so the rebalancer
+    can see existing on-chain positions from frontend deployment.
+    """
+    address = validate_eth_address(address)
+    acct = (
+        db.table("accounts")
+        .select("id")
+        .eq("address", address)
+        .limit(1)
+        .execute()
+    )
+    if not acct.data:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    account_id = acct.data[0]["id"]
+
+    # Store session key
+    session_key_data = {
+        "serializedPermission": req.serialized_permission,
+        "sessionKeyAddress": req.session_key_address,
+        "expiresAt": req.expires_at,
+        "allowedProtocols": req.allowed_protocols or ["aave_v3", "benqi", "spark", "euler_v2"],
+    }
+    key_id = store_session_key(db, account_id, session_key_data)
+    logger.info("Session key stored via /session-key endpoint for %s (key_id=%s)", address, key_id)
+
+    # Optionally record initial allocation
+    if req.initial_allocation:
+        for protocol_id, amount_str in req.initial_allocation.items():
+            try:
+                from decimal import Decimal
+                amount = Decimal(str(amount_str))
+                if amount > Decimal("0.01"):
+                    db.table("allocations").upsert(
+                        {
+                            "account_id": account_id,
+                            "protocol_id": protocol_id,
+                            "amount_usdc": str(amount.quantize(Decimal("0.000001"))),
+                        },
+                        on_conflict="account_id,protocol_id",
+                    ).execute()
+                    logger.info(
+                        "Initial allocation recorded: %s/%s = $%s",
+                        address, protocol_id, amount,
+                    )
+            except Exception as exc:
+                logger.warning("Failed to record allocation %s/%s: %s", address, protocol_id, exc)
+
+    # Trigger immediate rebalance attempt
+    asyncio.create_task(_trigger_initial_rebalance(account_id, address))
+
+    return {"success": True, "keyId": key_id}
 
 
 # ── PUT /accounts/{address}/diversification-preference ────

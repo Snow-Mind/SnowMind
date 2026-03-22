@@ -159,6 +159,24 @@ export const api = {
       { method: "POST" },
     ),
 
+  storeSessionKey: (
+    address: string,
+    data: {
+      serializedPermission: string;
+      sessionKeyAddress: string;
+      expiresAt: number;
+      allowedProtocols?: string[];
+      initialAllocation?: Record<string, string>;
+    },
+  ) =>
+    request<{ success: boolean; keyId: string }>(
+      `/api/v1/accounts/${encodeURIComponent(address)}/session-key`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
+
   // Account detail (includes session key status)
   getAccountDetail: (address: string) =>
     request<AccountDetailResponse>(

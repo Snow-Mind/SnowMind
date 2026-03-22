@@ -14,10 +14,13 @@ import {
   PROTOCOL_CONFIG,
   SESSION_KEY_SELECTORS,
   ACTIVE_PROTOCOLS,
+  CONTRACTS,
 } from "@/lib/constants";
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSessionKey } from "@/hooks/useSessionKey";
+import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { createSmartAccount, grantAndSerializeSessionKey } from "@/lib/zerodev";
 import { toast } from "sonner";
 
 function hoursUntil(isoDate: string): number {
@@ -54,14 +57,63 @@ function getAuthorizedActions(): AuthorizedAction[] {
 export default function SessionKeyStatus() {
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [granting, setGranting] = useState(false);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { data: sk, isLoading, refetch } = useSessionKey(smartAccountAddress ?? undefined);
+  const { wallets } = useWallets();
   const authorized = getAuthorizedActions();
 
+  const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const isActive = sk?.isActive ?? false;
   const hoursLeft = sk?.expiresAt ? hoursUntil(sk.expiresAt) : 0;
   const daysLeft = Math.floor(hoursLeft / 24);
   const isExpiringSoon = hoursLeft <= 48;
+
+  async function handleGrantSessionKey() {
+    if (!wallet || !smartAccountAddress) return;
+    setGranting(true);
+    try {
+      const walletClient = await toViemAccount({ wallet });
+      const { kernelAccount, kernelClient } = await createSmartAccount(walletClient);
+
+      const { serializedPermission, sessionKeyAddress, expiresAt } =
+        await grantAndSerializeSessionKey(
+          kernelAccount,
+          kernelClient,
+          {
+            AAVE_POOL: CONTRACTS.AAVE_POOL,
+            BENQI_POOL: CONTRACTS.BENQI_POOL,
+            SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+            EULER_VAULT: CONTRACTS.EULER_VAULT,
+            SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+            SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+            USDC: CONTRACTS.USDC,
+            TREASURY: CONTRACTS.TREASURY,
+          },
+          {
+            maxAmountUSDC: 10000,
+            durationDays: 30,
+            maxOpsPerDay: 20,
+            userEOA: wallet.address as `0x${string}`,
+          },
+        );
+
+      await api.storeSessionKey(smartAccountAddress, {
+        serializedPermission,
+        sessionKeyAddress,
+        expiresAt,
+        allowedProtocols: ACTIVE_PROTOCOLS as unknown as string[],
+      });
+
+      toast.success("Session key granted — agent activated");
+      refetch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to grant session key";
+      toast.error(message);
+    } finally {
+      setGranting(false);
+    }
+  }
 
   async function handleRevoke() {
     if (!smartAccountAddress) return;
@@ -111,12 +163,31 @@ export default function SessionKeyStatus() {
           <div className="flex-1">
             <h2 className="text-sm font-medium text-[#1A1715]">Session Key</h2>
             <p className="text-xs text-[#8A837C]">
-              No session key granted yet. Set up your smart account to enable autonomous optimization.
+              No active session key. Grant one to enable autonomous optimization.
             </p>
           </div>
           <span className="rounded-full border border-[#DC2626]/30 bg-[#DC2626]/10 px-2 py-0.5 text-xs text-[#DC2626]">
             Not Granted
           </span>
+        </div>
+        <div className="mt-4">
+          <button
+            onClick={handleGrantSessionKey}
+            disabled={granting || !wallet}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#E84142] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#E84142]/90 disabled:opacity-50"
+          >
+            {granting ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Granting Session Key…
+              </>
+            ) : (
+              <>
+                <Shield className="h-4 w-4" />
+                Activate Agent
+              </>
+            )}
+          </button>
         </div>
       </div>
     );
@@ -214,9 +285,17 @@ export default function SessionKeyStatus() {
 
       {/* Actions */}
       <div className="mt-5 flex gap-2">
-        <button className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#E84142]/10 px-3 py-2 text-xs font-medium text-[#E84142] transition-colors hover:bg-[#E84142]/20">
-          <RefreshCw className="h-3 w-3" />
-          {isExpiringSoon ? "Renew in <48h" : "Renew Key"}
+        <button
+          onClick={handleGrantSessionKey}
+          disabled={granting}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#E84142]/10 px-3 py-2 text-xs font-medium text-[#E84142] transition-colors hover:bg-[#E84142]/20 disabled:opacity-50"
+        >
+          {granting ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3 w-3" />
+          )}
+          {granting ? "Granting…" : isExpiringSoon ? "Renew in <48h" : "Renew Key"}
         </button>
         {!showRevokeConfirm ? (
           <button

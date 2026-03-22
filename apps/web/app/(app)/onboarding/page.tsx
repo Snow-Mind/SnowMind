@@ -442,6 +442,9 @@ export default function OnboardingPage() {
           expiresAt: sessionKeyResult.expiresAt,
           allowedProtocols: Array.from(effectiveSelectedProtocols),
         },
+        initialAllocation: deployedProtocol
+          ? { [deployedProtocol]: depositAmount }
+          : undefined,
       });
 
       // Phase 4: Done — optimizer will detect idle USDC and deploy optimally

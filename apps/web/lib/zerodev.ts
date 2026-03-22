@@ -163,21 +163,34 @@ export async function createSmartAccount(walletClient: WalletClientLike) {
     index: 0n,                            // ← CRITICAL: BigInt 0, not 0
   })
 
-  const paymasterClient = createZeroDevPaymasterClient({
-    chain: CHAIN,
-    transport: http(PAYMASTER_URL),
-  })
+  // Address derivation is local and always succeeds.
+  // Bundler/paymaster client creation calls ZeroDev RPC — may fail (400, credits, rate limit).
+  // We separate them so the address is available even if bundler is down.
+  let kernelClient
+  try {
+    const paymasterClient = createZeroDevPaymasterClient({
+      chain: CHAIN,
+      transport: http(PAYMASTER_URL),
+    })
 
-  const kernelClient = createKernelAccountClient({
-    account: kernelAccount,
-    chain: CHAIN,
-    bundlerTransport: http(BUNDLER_URL),
-    paymaster: {
-      getPaymasterData(userOperation) {
-        return paymasterClient.sponsorUserOperation({ userOperation })
+    kernelClient = createKernelAccountClient({
+      account: kernelAccount,
+      chain: CHAIN,
+      bundlerTransport: http(BUNDLER_URL),
+      paymaster: {
+        getPaymasterData(userOperation) {
+          return paymasterClient.sponsorUserOperation({ userOperation })
+        },
       },
-    },
-  })
+    })
+  } catch (err) {
+    console.error("[ZeroDev] Failed to create bundler/paymaster client:", err)
+    throw new Error(
+      `Smart account address derived (${kernelAccount.address}) but ZeroDev bundler is unavailable. ` +
+      `Check your ZeroDev project credits and configuration. ` +
+      `Original error: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
 
   return {
     kernelAccount,

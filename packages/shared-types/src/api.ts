@@ -16,6 +16,7 @@ export interface RegisterAccountRequest {
     expiresAt: number;
     allowedProtocols?: string[];
   };
+  initialAllocation?: Record<string, string>;
 }
 
 // --- Responses ---
