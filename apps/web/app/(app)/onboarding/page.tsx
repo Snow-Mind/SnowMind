@@ -449,6 +449,7 @@ export default function OnboardingPage() {
           SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
           USDC: CONTRACTS.USDC,
           TREASURY: CONTRACTS.TREASURY,
+          REGISTRY: CONTRACTS.REGISTRY,
         },
         {
           maxAmountUSDC: Math.max(parsedAmount * 2, 50_000),

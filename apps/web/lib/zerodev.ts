@@ -127,6 +127,19 @@ export const ERC4626_VAULT_ABI = [
   },
 ] as const
 
+// SnowMindRegistry ABI — logRebalance (on-chain audit trail for rebalance ops)
+const REGISTRY_ABI = [
+  {
+    name: "logRebalance", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "fromProtocol", type: "address" },
+      { name: "toProtocol",   type: "address" },
+      { name: "amount",       type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const
+
 type CallPolicyPermission = NonNullable<Parameters<typeof toCallPolicy>[0]["permissions"]>[number]
 type WalletClientLike = Parameters<typeof signerToEcdsaValidator>[1]["signer"]
 type KernelAccountLike = Awaited<ReturnType<typeof createKernelAccount>>
@@ -247,6 +260,7 @@ export async function grantAndSerializeSessionKey(
     SILO_SUSDP_VAULT:  `0x${string}`
     USDC:         `0x${string}`
     TREASURY:     `0x${string}`
+    REGISTRY?:    `0x${string}`
   },
   config: {
     maxAmountUSDC:  number   // max USDC per single tx e.g. 10000
@@ -274,8 +288,10 @@ export async function grantAndSerializeSessionKey(
   // Build permissions array — Spark entries added conditionally
   const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as `0x${string}`
 
+  // Guard: TREASURY must be a valid 42-char hex address (not empty string '')
+  const hasTreasury = contracts.TREASURY && contracts.TREASURY.length >= 42 && contracts.TREASURY !== ZERO_ADDR
   const treasuryTransferPermissions: CallPolicyPermission[] =
-    contracts.TREASURY !== ZERO_ADDR
+    hasTreasury
       ? [
           {
             target: contracts.USDC,
@@ -290,8 +306,9 @@ export async function grantAndSerializeSessionKey(
         ]
       : []
 
+  const hasUserEOA = config.userEOA && config.userEOA.length >= 42 && config.userEOA !== ZERO_ADDR
   const userTransferPermissions: CallPolicyPermission[] =
-    config.userEOA !== ZERO_ADDR
+    hasUserEOA
       ? [
           {
             target: contracts.USDC,
@@ -547,6 +564,19 @@ export async function grantAndSerializeSessionKey(
     // Two separate entries because ZeroDev doesn't support OR-conditions on args
     ...userTransferPermissions,
   ]
+
+  // ── Registry logRebalance permission (optional — only when REGISTRY is deployed) ──
+  const hasRegistry = contracts.REGISTRY && contracts.REGISTRY.length >= 42
+    && contracts.REGISTRY !== ZERO_ADDR
+  if (hasRegistry) {
+    permissions.push({
+      target: contracts.REGISTRY as `0x${string}`,
+      valueLimit: 0n,
+      abi: REGISTRY_ABI,
+      functionName: "logRebalance",
+      args: [null, null, null],  // fromProtocol, toProtocol, amount — any
+    })
+  }
 
   const callPolicy = toCallPolicy({
     policyVersion: CallPolicyVersion.V0_0_4,

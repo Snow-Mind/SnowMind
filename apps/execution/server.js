@@ -108,6 +108,23 @@ function validateWithdrawalBody(body) {
   return errors
 }
 
+// ── Deep error extractor — surfaces buried revert reasons from bundler errors ──
+function extractErrorComponents(err) {
+  const components = {
+    message: err?.message?.slice(0, 500) || "Unknown",
+    shortMessage: err?.shortMessage?.slice(0, 300) || undefined,
+    details: err?.details?.slice(0, 500) || undefined,
+    causeMessage: err?.cause?.message?.slice(0, 300) || undefined,
+    causeDetails: err?.cause?.details?.slice(0, 300) || undefined,
+    metaMessages: err?.metaMessages?.map((m) => m.slice(0, 200)) || undefined,
+    code: err?.code || undefined,
+    // Walk nested causes (bundler wraps errors deeply)
+    deepCause: err?.cause?.cause?.message?.slice(0, 300) || undefined,
+  }
+  // Remove undefined keys for cleaner logs
+  return Object.fromEntries(Object.entries(components).filter(([, v]) => v !== undefined))
+}
+
 app.post("/execute-rebalance", async (req, res) => {
   const startMs = Date.now()
   const validationErrors = validateRebalanceBody(req.body)
@@ -121,17 +138,22 @@ app.post("/execute-rebalance", async (req, res) => {
       action: "rebalance_executed",
       smartAccountAddress: req.body.smartAccountAddress,
       txHash: result.txHash,
+      deposits: req.body.deposits?.length || 0,
+      withdrawals: req.body.withdrawals?.length || 0,
       durationMs: Date.now() - startMs,
       timestamp: new Date().toISOString(),
     }))
     res.json(result)
   } catch (err) {
+    const errComponents = extractErrorComponents(err)
     console.error(JSON.stringify({
       level: "error",
       action: "rebalance_failed",
       smartAccountAddress: req.body.smartAccountAddress,
-      error: err.message,
-      code: err.code || "UNKNOWN",
+      ...errComponents,
+      deposits: req.body.deposits?.map((d) => d.protocol) || [],
+      withdrawals: req.body.withdrawals?.map((w) => w.protocol) || [],
+      registryAddr: req.body.contracts?.REGISTRY || "NOT_SET",
       durationMs: Date.now() - startMs,
       timestamp: new Date().toISOString(),
     }))
@@ -158,12 +180,12 @@ app.post("/execute/withdrawal", async (req, res) => {
     }))
     res.json(result)
   } catch (err) {
+    const errComponents = extractErrorComponents(err)
     console.error(JSON.stringify({
       level: "error",
       action: "withdrawal_failed",
       smartAccountAddress: req.body.smartAccountAddress,
-      error: err.message,
-      code: err.code || "UNKNOWN",
+      ...errComponents,
       durationMs: Date.now() - startMs,
       timestamp: new Date().toISOString(),
     }))

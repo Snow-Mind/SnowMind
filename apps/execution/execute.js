@@ -398,22 +398,29 @@ export async function executeRebalance({
   // Log each withdrawal once. If there are deposits, pair with the first
   // deposit target so the registry records the flow direction. Previous code
   // used a nested loop that created N×M false entries.
-  const firstDepositAddr = deposits.length > 0
-    ? resolveContractKey(deposits[0].protocol, contracts)
-    : null
-  for (const w of withdrawals) {
-    const from = resolveContractKey(w.protocol, contracts)
-    const to = firstDepositAddr || from  // fallback to self if no deposits
-    if (from && to) {
-      calls.push({
-        to: contracts.REGISTRY,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: REGISTRY_ABI,
-          functionName: "logRebalance",
-          args: [from, to, parseUnits(String(w.amountUSDC), 6)],
-        }),
-      })
+  // GUARD: Skip logRebalance when REGISTRY is empty/not deployed — the session
+  // key call policy may not include Registry permissions. Rebalance must not
+  // fail due to an optional audit log call.
+  const registryValid = contracts.REGISTRY && contracts.REGISTRY.length >= 42
+    && contracts.REGISTRY !== "0x0000000000000000000000000000000000000000"
+  if (registryValid) {
+    const firstDepositAddr = deposits.length > 0
+      ? resolveContractKey(deposits[0].protocol, contracts)
+      : null
+    for (const w of withdrawals) {
+      const from = resolveContractKey(w.protocol, contracts)
+      const to = firstDepositAddr || from  // fallback to self if no deposits
+      if (from && to) {
+        calls.push({
+          to: contracts.REGISTRY,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: REGISTRY_ABI,
+            functionName: "logRebalance",
+            args: [from, to, parseUnits(String(w.amountUSDC), 6)],
+          }),
+        })
+      }
     }
   }
 
@@ -497,6 +504,17 @@ export async function executeRebalance({
   if (!calls.length) {
     throw new Error("No executable calls generated for rebalance")
   }
+
+  // Log the call targets for debugging session key / policy mismatches
+  console.log(JSON.stringify({
+    level: "info",
+    action: "rebalance_calls_built",
+    smartAccountAddress,
+    permissionAccountAddress,
+    callCount: calls.length,
+    callTargets: calls.map((c) => c.to),
+    timestamp: new Date().toISOString(),
+  }))
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })

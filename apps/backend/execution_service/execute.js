@@ -365,21 +365,26 @@ export async function executeRebalance({
   // ── REGISTRY LOG — log each withdrawal once ────────────────────────
   // Pair each withdrawal with the first deposit target as representative
   // destination. Previous nested loop created N×M false entries.
-  const firstDepositAddr = deposits.length > 0
-    ? resolveContractKey(deposits[0].protocol, contracts)
-    : null
-  for (const w of withdrawals) {
-    const from = resolveContractKey(w.protocol, contracts)
-    const to = firstDepositAddr || from  // fallback to self if no deposits
-    if (from && to) {
-      calls.push({
-        to: contracts.REGISTRY,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: REGISTRY_ABI, functionName: "logRebalance",
-          args: [from, to, parseUnits(String(w.amountUSDC), 6)],
-        }),
-      })
+  // GUARD: Skip logRebalance when REGISTRY is empty/not deployed.
+  const registryValid = contracts.REGISTRY && contracts.REGISTRY.length >= 42
+    && contracts.REGISTRY !== "0x0000000000000000000000000000000000000000"
+  if (registryValid) {
+    const firstDepositAddr = deposits.length > 0
+      ? resolveContractKey(deposits[0].protocol, contracts)
+      : null
+    for (const w of withdrawals) {
+      const from = resolveContractKey(w.protocol, contracts)
+      const to = firstDepositAddr || from  // fallback to self if no deposits
+      if (from && to) {
+        calls.push({
+          to: contracts.REGISTRY,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: REGISTRY_ABI, functionName: "logRebalance",
+            args: [from, to, parseUnits(String(w.amountUSDC), 6)],
+          }),
+        })
+      }
     }
   }
 
