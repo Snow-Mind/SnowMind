@@ -195,12 +195,16 @@ export default function AppLayout({
     (a) => Number(a.amountUsdc) > 0,
   ) ?? false;
   const hasActiveSessionKey = sessionKey?.isActive ?? false;
-  const hasHydrated = usePortfolioStore((s) => s._hasHydrated);
+  // Client-ready signal: fires after Zustand persist has loaded from localStorage.
+  // useEffect runs after microtasks, so store state is guaranteed to reflect
+  // persisted values by the time clientReady becomes true.
+  const [clientReady, setClientReady] = useState(false);
+  useEffect(() => { setClientReady(true); }, []);
 
   // Clear stale storeActivated flag ONLY when real data proves no activation
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
-  // Require hydration + real API data (both queries finished AND smartAccount resolved)
-  const dataLoaded = hasHydrated && !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
+  // Require clientReady + real API data (both queries finished AND smartAccount resolved)
+  const dataLoaded = clientReady && !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
   useEffect(() => {
     if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasFunds) {
       setAgentActivated(false);
@@ -216,23 +220,19 @@ export default function AppLayout({
     }
   }, [ready, authenticated, router]);
 
-  // Redirect FRESH users (no stored smart account) to onboarding —
-  // only after Zustand hydration to avoid false positives on refresh
+  // Redirect new users (no stored smart account) to onboarding.
+  // Gated on clientReady to prevent false redirect during Zustand hydration.
   useEffect(() => {
-    if (!hasHydrated) return;
-    if (
-      smartAccount.setupStep === "creating" &&
-      !smartAccount.address &&
-      pathname !== "/onboarding"
-    ) {
+    if (!clientReady) return;
+    const storedAddr = usePortfolioStore.getState().smartAccountAddress;
+    if (!storedAddr && pathname !== "/onboarding") {
       router.replace("/onboarding");
     }
-  }, [hasHydrated, smartAccount.setupStep, smartAccount.address, pathname, router]);
+  }, [clientReady, pathname, router]);
 
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
-  // Do NOT treat disabled queries (no smartAccountAddress yet) as "loaded".
-  const dataReady = hasHydrated && (storeActivated || (!!smartAccount.address && !portfolioLoading && !sessionKeyLoading));
+  const dataReady = clientReady && (storeActivated || (!!smartAccount.address && !portfolioLoading && !sessionKeyLoading));
   useEffect(() => {
     if (!dataReady) return;
     if (!isAgentActive && pathname === "/dashboard") {
@@ -255,8 +255,6 @@ export default function AppLayout({
     }
   }, [portfolio, isAgentActive, pathname, router]);
 
-
-
   // Don't render until auth is ready
   if (!ready) {
     return (
@@ -268,8 +266,8 @@ export default function AppLayout({
 
   if (!authenticated) return null;
 
-  // Show loading spinner while determining routing (waiting for hydration + data)
-  if (!hasHydrated || (!storeActivated && !isAgentActive && pathname === "/dashboard" && !dataReady)) {
+  // Dashboard-specific loading: wait for hydration to determine routing
+  if (pathname === "/dashboard" && (!clientReady || (!storeActivated && !isAgentActive && !dataReady))) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />

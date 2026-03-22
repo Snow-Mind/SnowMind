@@ -22,17 +22,13 @@ interface SmartAccountState {
 }
 
 /**
- * Giza pattern: createAgent(eoa) only creates the deterministic smart account.
- * Session key granting + protocol approvals happen ONLY during activation
- * (in the onboarding page's handleActivate).
- * This prevents race conditions and duplicate bundler calls.
- *
- * CRITICAL: We wait for Zustand hydration before auto-initializing to prevent
- * re-creating the smart account on page refresh (which would trigger MetaMask).
+ * Giza pattern: Restore smart account from localStorage on refresh.
+ * NEVER auto-create — that triggers MetaMask popups unexpectedly.
+ * Smart account creation is ONLY done via initializeAccount(), which
+ * the onboarding page calls explicitly.
  */
 export function useSmartAccount(wallet: ConnectedWallet | null) {
   const storedAddress = usePortfolioStore((s) => s.smartAccountAddress) as Address | null;
-  const hasHydrated = usePortfolioStore((s) => s._hasHydrated);
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount);
 
@@ -88,21 +84,14 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     }
   }, [wallet, setSmartAccountAddress]);
 
-  // Auto-initialize ONLY after Zustand hydration confirms no stored address.
-  // This prevents re-creating the smart account (and triggering MetaMask) on
-  // page refresh when the address is in localStorage but hasn't loaded yet.
-  useEffect(() => {
-    if (!hasHydrated || !wallet || state.setupStep !== "idle") return;
-    // Hydration complete — if store has no address, this is a genuinely new user
-    const currentStored = usePortfolioStore.getState().smartAccountAddress;
-    if (!currentStored) {
-      initializeAccount();
-    }
-  }, [hasHydrated, wallet, state.setupStep, initializeAccount]);
+  // NO auto-init. Smart account creation only happens via explicit
+  // initializeAccount() call from the onboarding page.
+  // This prevents MetaMask popups on page refresh / reconnect.
 
-  // Sync state when storedAddress becomes available after Zustand hydration
+  // Sync state when storedAddress becomes available after Zustand hydration.
+  // This is the primary path for returning users on page refresh.
   useEffect(() => {
-    if (storedAddress && !state.address && (state.setupStep === "idle" || state.setupStep === "creating")) {
+    if (storedAddress && !state.address) {
       setState((prev) => ({
         ...prev,
         address: storedAddress as Address,
@@ -111,9 +100,10 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
       }));
       initializingRef.current = false;
     }
-  }, [storedAddress, state.address, state.setupStep]);
+  }, [storedAddress, state.address]);
 
   const retry = useCallback(() => {
+    initializingRef.current = false;
     setState({
       address: null,
       isDeployed: false,

@@ -264,17 +264,19 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Auto-trigger deployment when account address is derived
+  // Auto-trigger deployment when on account step with wallet connected.
+  // useSmartAccount no longer auto-creates — handleAccountDeploy calls
+  // createSmartAccount directly, so no pre-existing address is needed.
   useEffect(() => {
-    if (isAccountReady && deployPhase === "idle" && formStep === "account" && !deployGuardRef.current) {
+    if (formStep === "account" && wallet && !deployGuardRef.current && deployPhase === "idle") {
       handleAccountDeploy();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAccountReady, deployPhase, formStep]);
+  }, [formStep, wallet, deployPhase]);
 
   // Deploy smart account on-chain & approve all protocols (Signature 1)
   const handleAccountDeploy = async () => {
-    if (!wallet || !smartAccountAddress) return;
+    if (!wallet) return;
     if (deployGuardRef.current) return;
     deployGuardRef.current = true;
     setDeployPhase("deploying");
@@ -293,8 +295,8 @@ export default function OnboardingPage() {
       kernelClientRef.current = kernelClient;
       derivedAddressRef.current = derivedAddr;
 
-      // Update store if address drifted
-      if (derivedAddr.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+      // Always set the derived address in store (covers new users + address drift)
+      if (!smartAccountAddress || derivedAddr.toLowerCase() !== smartAccountAddress.toLowerCase()) {
         setSmartAccountAddress(derivedAddr);
       }
 

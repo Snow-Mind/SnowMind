@@ -521,13 +521,14 @@ class Rebalancer:
                     proposed=result_allocations,
                 )
 
-        # 8. Delta check — skip if total movement is below $1 (bypassed by FORCED/EMERGENCY)
+        # 8. Delta check — skip if total movement is below $1 (bypassed by FORCED/EMERGENCY
+        #    and initial deployments where idle USDC has no counterpart in current)
         all_protocols = set(current.keys()) | set(result_allocations.keys())
         total_movement = sum(
             abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
             for pid in all_protocols
         ) / Decimal("2")
-        if global_flag == RebalanceFlag.NONE and total_movement < Decimal("1"):
+        if global_flag == RebalanceFlag.NONE and not is_initial_deployment and total_movement < Decimal("1"):
             return await self._log(
                 db,
                 account_id,
