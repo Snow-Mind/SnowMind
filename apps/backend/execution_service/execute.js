@@ -19,8 +19,18 @@ const CHAIN_ID = 43114
 const CHAIN = avalanche
 const ENTRYPOINT = getEntryPoint("0.7")
 const ZERODEV_ID = process.env.ZERODEV_PROJECT_ID
-const BUNDLER_URL = process.env.BUNDLER_RPC_URL || `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
-const PAYMASTER_URL = process.env.PAYMASTER_RPC_URL || `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
+
+// ZeroDev SDK calls proprietary RPC methods (zd_getUserOperationGasPrice, etc.)
+// that ONLY work with ZeroDev's bundler. Never point these at Pimlico/Alchemy.
+const ZERODEV_RPC = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
+const BUNDLER_URL = ZERODEV_RPC
+const PAYMASTER_URL = ZERODEV_RPC
+
+// Server-side Node.js doesn't send an Origin header automatically.
+// ZeroDev's domain allowlist needs it to verify the request source.
+const ZERODEV_FETCH_OPTIONS = {
+  headers: { Origin: "https://www.snowmind.xyz" },
+}
 
 const EXPLORER_BASE = "https://snowtrace.io"
 
@@ -223,7 +233,7 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
   })
 
   const paymasterClient = options.withPaymaster
-    ? createZeroDevPaymasterClient({ chain: CHAIN, transport: http(PAYMASTER_URL) })
+    ? createZeroDevPaymasterClient({ chain: CHAIN, transport: http(PAYMASTER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }) })
     : null
 
   const permissionAccount = await deserializePermissionAccount(
@@ -236,7 +246,7 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
   const clientConfig = {
     account: permissionAccount,
     chain: CHAIN,
-    bundlerTransport: http(BUNDLER_URL),
+    bundlerTransport: http(BUNDLER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
   }
 
   if (paymasterClient) {
