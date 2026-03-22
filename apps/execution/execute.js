@@ -195,6 +195,27 @@ function isLikelyPaymasterError(err) {
   return text.includes("paymaster") || text.includes("sponsoruseroperation") || text.includes("pm_")
 }
 
+/**
+ * Detect if a validateUserOp revert is likely caused by paymaster/gas issues
+ * rather than a genuine call-policy violation. Paymaster gas estimation failures
+ * can produce "validateUserOp reverted" errors that don't contain the word
+ * "paymaster". Retrying WITHOUT a paymaster rules this out.
+ */
+function isValidateUserOpRevert(err) {
+  const text = [
+    err?.shortMessage,
+    err?.message,
+    err?.details,
+    err?.cause?.message,
+    ...(Array.isArray(err?.metaMessages) ? err.metaMessages : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+
+  return text.includes("validateuserop") && text.includes("revert")
+}
+
 async function getKernelClient(serializedPermission, options = { withPaymaster: true }) {
   const publicClient = createPublicClient({
     chain: CHAIN,
@@ -520,10 +541,36 @@ export async function executeRebalance({
     const txHash = await kernelClient.sendTransaction({ calls })
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
   } catch (err) {
+    // Retry 1: explicit paymaster error — try without paymaster
     if (isLikelyPaymasterError(err)) {
+      console.log(JSON.stringify({
+        level: "warn", action: "paymaster_error_retry",
+        smartAccountAddress, error: err?.shortMessage?.slice(0, 200),
+        timestamp: new Date().toISOString(),
+      }))
       const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
       const txHash = await noPaymasterClient.sendTransaction({ calls })
       return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
+    }
+    // Retry 2: validateUserOp revert — may be caused by paymaster gas
+    // estimation issues. Try once without paymaster to rule it out.
+    if (isValidateUserOpRevert(err)) {
+      console.log(JSON.stringify({
+        level: "warn", action: "validateUserOp_revert_retry",
+        smartAccountAddress, error: err?.shortMessage?.slice(0, 200),
+        timestamp: new Date().toISOString(),
+      }))
+      try {
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const txHash = await noPaymasterClient.sendTransaction({ calls })
+        return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
+      } catch (retryErr) {
+        // Both attempts failed — throw the ORIGINAL error with more context
+        throw new Error(
+          formatExecutionError(err)
+          + ` [retry without paymaster also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}]`
+        )
+      }
     }
     throw new Error(formatExecutionError(err))
   }
@@ -706,6 +753,23 @@ export async function executeWithdrawal({
         explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
         owner: onchainOwner,
         callCount: calls.length,
+      }
+    }
+    if (isValidateUserOpRevert(err)) {
+      try {
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const txHash = await noPaymasterClient.sendTransaction({ calls })
+        return {
+          txHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+          owner: onchainOwner,
+          callCount: calls.length,
+        }
+      } catch (retryErr) {
+        throw new Error(
+          formatExecutionError(err)
+          + ` [retry without paymaster also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}]`
+        )
       }
     }
     throw new Error(formatExecutionError(err))

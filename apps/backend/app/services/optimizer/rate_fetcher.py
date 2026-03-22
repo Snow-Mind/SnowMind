@@ -430,7 +430,7 @@ class RateFetcher:
 
     async def save_spark_daily_snapshot(self) -> None:
         """
-        Save daily Spark convertToAssets(1e6) snapshot for APY calculation.
+        Save daily Spark convertToAssets(1e18) snapshot for APY calculation.
 
         Should be called once per day by the scheduler.
         """

@@ -2,7 +2,7 @@
 Spark Savings adapter — ERC-4626 vault on Avalanche C-Chain (spUSDC).
 
 APY Source:      convertToAssets(1e6) delta vs 24h-ago snapshot × 365
-Effective APY:   gross_apy × 0.90 (only 90% deployed, 10% instant-redemption buffer)
+Effective APY:   gross_apy × 1.0 (convertToAssets already includes deployment ratio)
 
 AVALANCHE-SPECIFIC CHANGES (PSM3 architecture):
 - Avalanche uses PSM3, NOT Ethereum's DssLitePsm/UsdsPsmWrapper.
@@ -36,7 +36,11 @@ logger = logging.getLogger("snowmind.protocols.spark")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-DEPLOYMENT_RATIO = Decimal("0.90")  # Spark V2: only 90% of deposits deployed
+# NOTE: DEPLOYMENT_RATIO is 1.0 because convertToAssets() already reflects
+# the effective depositor yield AFTER the 90/10 split (90% deployed, 10% buffer).
+# Applying 0.90 on top would double-count and under-report the APY.
+# See: https://docs.spark.fi/user-guides/earning-savings/spusdc
+DEPLOYMENT_RATIO = Decimal("1.0")
 DEFAULT_EXPECTED_HOLD_DAYS = 30
 
 # Minimum PSM3 totalAssets below which we consider deposits unsafe (USDC 6 dec).
@@ -189,10 +193,11 @@ class SparkAdapter(BaseProtocolAdapter):
         Fallback: When no DB snapshot exists yet, uses share-price-growth estimation
                   (same pattern as Euler/Silo — observes convertToAssets change over time).
 
-        effective_apy = gross_apy × 0.90
+        effective_apy = gross_apy × 1.0  (convertToAssets already reflects the
+                        effective depositor yield after the 90/10 split)
 
         Avalanche PSM3 has NO deposit fee (no tin()), so effective APY is simply
-        the deployed APY after applying the 90% deployment ratio.
+        the convertToAssets-derived APY (no additional adjustment needed).
 
         If PSM3 totalAssets is near-zero, effective_apy is set to 0 to prevent
         new deposits into an illiquid PSM.
@@ -212,27 +217,27 @@ class SparkAdapter(BaseProtocolAdapter):
 
         # Calculate gross APY — prefer 24h DB snapshot, fall back to share-price-growth
         gross_apy = Decimal("0")
+        use_snapshot = False
+
         if yesterday_snapshot is not None and yesterday_snapshot > 0:
             # Guard against scale mismatch: old snapshots used 1e6 scale
             # (values < 10^12), new ones use 1e18 scale (values > 10^12).
-            # If yesterday is old scale, skip to fallback.
             if yesterday_snapshot < Decimal("1000000000000"):
-                # Old snapshot was stored at 1e6 scale; scale it up to 1e18
-                # so we can compute a reasonable APY during the transition day.
-                scaled_yesterday = yesterday_snapshot * Decimal("1000000000000")
+                # Old snapshot was stored at 1e6 scale. Scaling up by 1e12
+                # loses ~12 digits of precision, which when annualized (×365)
+                # inflates APY by ~44% (e.g. 3.75% → 5.39%). Skip to fallback.
                 logger.info(
                     "Spark snapshot scale mismatch: yesterday=%s (1e6 scale) "
-                    "→ scaled to %s (1e18) vs today=%s — computing APY from scaled value",
-                    yesterday_snapshot, scaled_yesterday, today_value,
+                    "vs today=%s (1e18 scale) — skipping to share-price fallback",
+                    yesterday_snapshot, today_value,
                 )
-                if scaled_yesterday > 0 and today_value > scaled_yesterday:
-                    daily_rate = (today_value - scaled_yesterday) / scaled_yesterday
-                    gross_apy = daily_rate * Decimal("365")
             else:
                 # Primary: 24h delta from DB snapshot (both at 1e18 scale)
                 daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
                 gross_apy = daily_rate * Decimal("365")
-        else:
+                use_snapshot = True
+
+        if not use_snapshot:
             # Fallback: short-term share-price-growth estimation
             # Same pattern as Euler/Silo cached APY — observes price change over ≥60s
             now = time.time()
@@ -255,7 +260,8 @@ class SparkAdapter(BaseProtocolAdapter):
                 self._last_share_price_time = now
             gross_apy = self._cached_apy
 
-        # Apply 90% deployment ratio (Spark V2: 10% held as instant redemption buffer)
+        # convertToAssets already reflects the effective depositor yield
+        # (90% deployed yields, 10% buffer), so DEPLOYMENT_RATIO is 1.0.
         deployed_apy = gross_apy * DEPLOYMENT_RATIO
 
         # Check PSM3 liquidity — if pool is near-empty, effective APY = 0
