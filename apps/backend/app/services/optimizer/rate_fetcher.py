@@ -402,7 +402,7 @@ class RateFetcher:
 
     def _get_spark_yesterday_snapshot(self) -> Decimal | None:
         """
-        Get yesterday's Spark convertToAssets(1e6) value from DB.
+        Get yesterday's Spark convertToAssets(1e18) value from DB.
 
         Used for Spark APY calculation: gross_apy = (today - yesterday) / yesterday × 365
         """

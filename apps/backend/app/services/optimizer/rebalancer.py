@@ -963,10 +963,23 @@ class Rebalancer:
                 float(fee_breakdown["fee_usd"]), treasury, smart_account_address,
             )
 
-        # Build user transfer payload (receiver resolved on-chain by execution service).
+        # Build user transfer payload — send USDC to user's EOA.
+        # Look up owner_address from accounts table so the execution service
+        # doesn't need on-chain resolution (which fails on ZeroDev v5.x).
         user_transfer = None
         if fee_breakdown["net_withdrawal_usd"] > Decimal("0.01"):
+            owner_row = (
+                db.table("accounts")
+                .select("owner_address")
+                .eq("id", account_id)
+                .limit(1)
+                .execute()
+            )
+            owner_addr = owner_row.data[0]["owner_address"] if owner_row.data else None
+            if not owner_addr:
+                raise ValueError(f"No owner_address found for account {account_id}")
             user_transfer = {
+                "to": owner_addr,
                 "amountUSDC": float(fee_breakdown["net_withdrawal_usd"]),
             }
 

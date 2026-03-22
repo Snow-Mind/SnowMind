@@ -357,6 +357,7 @@ async def execute_withdrawal(
         payload = {
             "serializedPermission": session_key,
             "smartAccountAddress": address,
+            "ownerAddress": account.get("owner_address", ""),
             "withdrawAmount": str(withdraw_raw),
             "agentFeeAmount": str(agent_fee_raw),
             "isFullWithdrawal": req.is_full_withdrawal,

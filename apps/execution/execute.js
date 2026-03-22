@@ -319,7 +319,18 @@ export async function executeRebalance({
     )
   }
 
-  const onchainOwner = await resolveKernelOwner(permissionAccount)
+  // Only resolve owner when needed (userTransfer requires the EOA destination).
+  // Standard rebalances (idle → protocol) have no userTransfer, so skip the
+  // expensive on-chain resolution that fails on ZeroDev v5.x permission accounts.
+  let onchainOwner = null
+  if (userTransfer) {
+    if (userTransfer.to) {
+      // Trust the backend-provided destination (backend calls are HMAC-authenticated)
+      onchainOwner = userTransfer.to
+    } else {
+      onchainOwner = await resolveKernelOwner(permissionAccount)
+    }
+  }
   const calls = []
 
   for (const { protocol, amountUSDC, qiTokenAmount, shareBalance } of withdrawals) {
@@ -367,6 +378,9 @@ export async function executeRebalance({
   }
 
   if (userTransfer && userTransfer.amountUSDC > 0) {
+    if (!onchainOwner) {
+      throw new Error("userTransfer requested but owner could not be resolved")
+    }
     if (userTransfer.to && userTransfer.to.toLowerCase() !== onchainOwner.toLowerCase()) {
       throw new Error(`User transfer destination mismatch: provided=${userTransfer.to} onchainOwner=${onchainOwner}`)
     }
@@ -500,6 +514,7 @@ export async function executeRebalance({
 export async function executeWithdrawal({
   serializedPermission,
   smartAccountAddress,
+  ownerAddress,
   agentFeeAmount,
   isFullWithdrawal,
   contracts,
@@ -521,7 +536,12 @@ export async function executeWithdrawal({
     )
   }
 
-  const onchainOwner = await resolveKernelOwner(permissionAccount)
+  // Use ownerAddress from backend (trusted, from accounts table) if provided.
+  // Fall back to on-chain resolution only as a last resort.
+  let onchainOwner = ownerAddress || null
+  if (!onchainOwner) {
+    onchainOwner = await resolveKernelOwner(permissionAccount)
+  }
   const calls = []
 
   // Aave: only withdraw if user has aTokens (withdraw(maxUint256) reverts with 0 balance)

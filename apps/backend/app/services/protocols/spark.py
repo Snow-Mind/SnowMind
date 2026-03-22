@@ -199,13 +199,12 @@ class SparkAdapter(BaseProtocolAdapter):
         """
         vault = self._get_vault_contract()
 
-        # Read current share value: convertToAssets(1e6) = 1 USDC worth of shares
-        today_value_raw = await vault.functions.convertToAssets(1_000_000).call()
-        today_value = Decimal(str(today_value_raw))
-
-        # Also read high-precision share price for fallback APY estimation
+        # Read high-precision share price: convertToAssets(1e18) for both
+        # primary APY calculation and fallback estimation.
+        # Using 1e18 instead of 1e6 eliminates integer rounding errors.
         high_prec_raw = await vault.functions.convertToAssets(SHARE_PRICE_QUERY_AMOUNT).call()
-        current_price = Decimal(str(high_prec_raw)) / SHARE_PRICE_QUERY_DECIMAL
+        today_value = Decimal(str(high_prec_raw))
+        current_price = today_value / SHARE_PRICE_QUERY_DECIMAL
 
         # Read total assets for TVL
         total_assets_raw = await vault.functions.totalAssets().call()
@@ -214,9 +213,19 @@ class SparkAdapter(BaseProtocolAdapter):
         # Calculate gross APY — prefer 24h DB snapshot, fall back to share-price-growth
         gross_apy = Decimal("0")
         if yesterday_snapshot is not None and yesterday_snapshot > 0:
-            # Primary: 24h delta from DB snapshot
-            daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
-            gross_apy = daily_rate * Decimal("365")
+            # Guard against scale mismatch: old snapshots used 1e6 scale
+            # (values < 10^12), new ones use 1e18 scale (values > 10^12).
+            # If yesterday is old scale, skip to fallback.
+            if yesterday_snapshot < Decimal("1000000000000"):
+                logger.info(
+                    "Spark snapshot scale mismatch: yesterday=%s (1e6 scale) "
+                    "vs today=%s (1e18 scale) — using fallback APY",
+                    yesterday_snapshot, today_value,
+                )
+            else:
+                # Primary: 24h delta from DB snapshot (both at 1e18 scale)
+                daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
+                gross_apy = daily_rate * Decimal("365")
         else:
             # Fallback: short-term share-price-growth estimation
             # Same pattern as Euler/Silo cached APY — observes price change over ≥60s
@@ -415,10 +424,12 @@ class SparkAdapter(BaseProtocolAdapter):
 
     async def get_convert_to_assets_value(self) -> int:
         """
-        Read current convertToAssets(1e6) value.
+        Read current convertToAssets(1e18) value.
 
         This is stored daily as a snapshot for APY calculation.
-        Returns raw integer (6 decimal USDC value of 1 USDC worth of shares).
+        Returns raw integer at 18-digit precision for accurate APY computation.
+        Using 1e18 instead of 1e6 eliminates integer rounding errors that
+        caused ~1% relative APY error at low yield levels.
         """
         vault = self._get_vault_contract()
-        return await vault.functions.convertToAssets(1_000_000).call()
+        return await vault.functions.convertToAssets(SHARE_PRICE_QUERY_AMOUNT).call()
