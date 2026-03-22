@@ -160,8 +160,8 @@ export default function AppLayout({
   const pathname = usePathname();
   const { authenticated, ready, logout, activeWallet, eoaAddress } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
-  const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(smartAccount.address ?? undefined);
-  const { data: sessionKey, isLoading: sessionKeyLoading } = useSessionKey(smartAccount.address ?? undefined);
+  const { data: portfolio, isLoading: portfolioLoading, error: portfolioError } = usePortfolio(smartAccount.address ?? undefined);
+  const { data: sessionKey, isLoading: sessionKeyLoading, error: sessionKeyError } = useSessionKey(smartAccount.address ?? undefined);
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [showDeposit, setShowDeposit] = useState(false);
@@ -204,12 +204,13 @@ export default function AppLayout({
   // Clear stale storeActivated flag ONLY when real data proves no activation
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
   // Require clientReady + real API data (both queries finished AND smartAccount resolved)
+  // NEVER clear on query errors — transient 500s/CORS failures must not deactivate agent
   const dataLoaded = clientReady && !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
   useEffect(() => {
-    if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasFunds) {
+    if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasFunds && !sessionKeyError && !portfolioError) {
       setAgentActivated(false);
     }
-  }, [dataLoaded, storeActivated, hasActiveSessionKey, hasFunds, setAgentActivated]);
+  }, [dataLoaded, storeActivated, hasActiveSessionKey, hasFunds, setAgentActivated, sessionKeyError, portfolioError]);
 
   const isAgentActive = storeActivated || hasActiveSessionKey || hasFunds;
 
@@ -232,13 +233,15 @@ export default function AppLayout({
 
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
+  // Never redirect when queries errored — transient failures must not disrupt UX.
   const dataReady = clientReady && (storeActivated || (!!smartAccount.address && !portfolioLoading && !sessionKeyLoading));
   useEffect(() => {
     if (!dataReady) return;
+    if (sessionKeyError || portfolioError) return;
     if (!isAgentActive && pathname === "/dashboard") {
       router.replace("/onboarding");
     }
-  }, [dataReady, isAgentActive, pathname, router]);
+  }, [dataReady, isAgentActive, pathname, router, sessionKeyError, portfolioError]);
 
   // Redirect portfolio to dashboard (removed page)
   useEffect(() => {
