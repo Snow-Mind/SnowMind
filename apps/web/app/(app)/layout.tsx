@@ -127,15 +127,6 @@ function TopBar({
                   )}
                   {isAgentActive && (
                     <button
-                      onClick={() => { setAccountOpen(false); router.push("/settings"); }}
-                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
-                    >
-                      <Settings className="h-3.5 w-3.5 text-[#8A837C]" />
-                      Settings
-                    </button>
-                  )}
-                  {isAgentActive && (
-                    <button
                       onClick={() => { setAccountOpen(false); onEmergencyWithdraw(); }}
                       className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#DC2626] transition-colors hover:bg-[#DC2626]/5"
                     >
@@ -569,6 +560,7 @@ async function readAllProtocolBalances(
     siloSusdpUsdc,
     // Raw values for on-chain redeem calls
     qiBalance: qiBalance as bigint,
+    aaveBalance: aaveBalance as bigint,
     sparkShares: sparkShares as bigint,
     eulerShares: eulerShares as bigint,
     siloSavusdShares: siloSavusdShares as bigint,
@@ -623,7 +615,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || (balances.aaveBalance ?? 0n) > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -634,6 +626,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
           balances.eulerShares,
           balances.siloSavusdShares,
           balances.siloSusdpShares,
+          balances.aaveBalance ?? 0n,
         );
       }
 
@@ -811,7 +804,7 @@ function AgentDetailsModal({
       const { kernelClient } = await createSmartAccount(viemAccount);
 
       // Step 1: Redeem from ALL protocols in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || (balances.aaveBalance ?? 0n) > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -822,6 +815,7 @@ function AgentDetailsModal({
           balances.eulerShares,
           balances.siloSavusdShares,
           balances.siloSusdpShares,
+          balances.aaveBalance ?? 0n,
         );
       }
 

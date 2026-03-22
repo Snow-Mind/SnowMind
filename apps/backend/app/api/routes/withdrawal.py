@@ -314,6 +314,12 @@ async def execute_withdrawal(
         benqi_qi_balance = 0
         spark_share_balance = 0
         euler_share_balance = 0
+        aave_atoken_balance = 0
+        try:
+            aave_adapter = get_adapter("aave_v3")
+            aave_atoken_balance = int(await aave_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Aave aToken balance for %s: %s", address, exc)
         try:
             benqi_adapter = get_adapter("benqi")
             benqi_qi_balance = int(await benqi_adapter.get_shares(address))
@@ -365,6 +371,7 @@ async def execute_withdrawal(
                 "TREASURY": settings.TREASURY_ADDRESS,
             },
             "balances": {
+                "aaveATokenBalance": str(aave_atoken_balance),
                 "benqiQiTokenBalance": str(benqi_qi_balance),
                 "sparkShareBalance": str(spark_share_balance),
                 "eulerShareBalance": str(euler_share_balance),

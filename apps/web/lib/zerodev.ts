@@ -758,10 +758,11 @@ export async function emergencyWithdrawAll(
   eulerShareBalance: bigint = 0n, // ERC-4626 shares
   siloSavusdShareBalance: bigint = 0n, // ERC-4626 shares
   siloSusdpShareBalance: bigint = 0n,  // ERC-4626 shares
+  aaveATokenBalance: bigint = 0n,      // Aave aUSDC balance — skip if 0
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const calls = [
-    // Withdraw all from Aave (MAX_UINT = full balance)
-    {
+    // Withdraw all from Aave (MAX_UINT = full balance) — ONLY if user has aTokens
+    ...(aaveATokenBalance > 0n ? [{
       to: contracts.AAVE_POOL,
       value: 0n,
       data: encodeFunctionData({
@@ -769,7 +770,7 @@ export async function emergencyWithdrawAll(
         functionName: "withdraw",
         args: [contracts.USDC, maxUint256, smartAccountAddress],
       }),
-    },
+    }] : []),
     // Redeem all from Benqi (exact qiToken balance)
     ...(benqiQiTokenBalance > 0n ? [{
       to: contracts.BENQI_POOL,
@@ -821,6 +822,10 @@ export async function emergencyWithdrawAll(
       }),
     }] : []),
   ]
+
+  if (calls.length === 0) {
+    throw new Error("No protocol positions to withdraw from")
+  }
 
   const txHash = await kernelClient.sendTransaction({ calls })
   return { txHash, explorerUrl: EXPLORER.tx(txHash) }

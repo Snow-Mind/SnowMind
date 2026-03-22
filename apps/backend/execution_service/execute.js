@@ -492,16 +492,19 @@ export async function executeWithdrawal({
   const onchainOwner = await resolveKernelOwner(permissionAccount)
   const calls = []
 
-  // 1) Redeem from Aave first (MAX withdraw all USDC to smart account)
-  calls.push({
-    to: contracts.AAVE_POOL,
-    value: 0n,
-    data: encodeFunctionData({
-      abi: AAVE_ABI,
-      functionName: "withdraw",
-      args: [contracts.USDC, maxUint256, smartAccountAddress],
-    }),
-  })
+  // 1) Redeem from Aave (MAX withdraw) — ONLY if user has aTokens
+  const aaveATokenBalance = BigInt(balances?.aaveATokenBalance || "0")
+  if (aaveATokenBalance > 0n) {
+    calls.push({
+      to: contracts.AAVE_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: AAVE_ABI,
+        functionName: "withdraw",
+        args: [contracts.USDC, maxUint256, smartAccountAddress],
+      }),
+    })
+  }
 
   // 2) Redeem Benqi by qiToken shares (exact), if non-zero
   const benqiQiTokenBalance = BigInt(balances?.benqiQiTokenBalance || "0")

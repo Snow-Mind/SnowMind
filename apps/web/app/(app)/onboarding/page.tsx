@@ -37,7 +37,6 @@ import {
   createSmartAccount,
   approveAllProtocols,
   grantAndSerializeSessionKey,
-  deployInitialToProtocol,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
@@ -76,8 +75,6 @@ const ERC20_ABI = [
 type ActivationPhase =
   | "idle"
   | "transferring-usdc"
-  | "creating-client"
-  | "approving-protocols"
   | "granting-session-key"
   | "registering-backend"
   | "done"
@@ -86,13 +83,14 @@ type ActivationPhase =
 const PHASE_LABELS: Record<ActivationPhase, string> = {
   idle: "",
   "transferring-usdc": "Transferring USDC to smart account…",
-  "creating-client": "Connecting to your smart account…",
-  "approving-protocols": "Deploying smart account & setting approvals…",
   "granting-session-key": "Granting agent permissions…",
   "registering-backend": "Registering with optimizer…",
   done: "Agent activated — optimizer will deploy funds shortly!",
   error: "Activation failed",
 };
+
+// Deployment sub-steps (Account step)
+type DeployPhase = "idle" | "deploying" | "deployed" | "error";
 
 // Multi-step form: 1) Account  2) Strategy  3) Deposit  4) Activate
 type FormStep = "account" | "strategy" | "deposit" | "activate";
@@ -133,12 +131,22 @@ export default function OnboardingPage() {
   const isAccountReady = smartAccount.setupStep === "ready" && !!smartAccountAddress;
   const [formStep, setFormStep] = useState<FormStep>(isAccountReady ? "strategy" : "account");
 
-  // Keep formStep in sync with account readiness
+  // Account deployment state (Sig 1: deploy + approve) — declared before useEffect that references it
+  const [deployPhase, setDeployPhase] = useState<DeployPhase>("idle");
+  const [deployError, setDeployError] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const kernelAccountRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const kernelClientRef = useRef<any>(null);
+  const derivedAddressRef = useRef<string | null>(null);
+  const deployGuardRef = useRef(false);
+
+  // Keep formStep in sync with account readiness — only advance after deployment
   useEffect(() => {
-    if (isAccountReady && formStep === "account") {
+    if (isAccountReady && deployPhase === "deployed" && formStep === "account") {
       setFormStep("strategy");
     }
-  }, [isAccountReady, formStep]);
+  }, [isAccountReady, deployPhase, formStep]);
 
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
@@ -249,7 +257,68 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Giza-style activation: single atomic flow with granular progress
+  // Auto-trigger deployment when account address is derived
+  useEffect(() => {
+    if (isAccountReady && deployPhase === "idle" && formStep === "account" && !deployGuardRef.current) {
+      handleAccountDeploy();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAccountReady, deployPhase, formStep]);
+
+  // Deploy smart account on-chain & approve all protocols (Signature 1)
+  const handleAccountDeploy = async () => {
+    if (!wallet || !smartAccountAddress) return;
+    if (deployGuardRef.current) return;
+    deployGuardRef.current = true;
+    setDeployPhase("deploying");
+    setDeployError(null);
+
+    try {
+      const viemAccount = await toViemAccount({ wallet });
+      const {
+        kernelAccount,
+        kernelClient,
+        smartAccountAddress: derivedAddr,
+      } = await createSmartAccount(viemAccount);
+
+      // Store for use in activate step
+      kernelAccountRef.current = kernelAccount;
+      kernelClientRef.current = kernelClient;
+      derivedAddressRef.current = derivedAddr;
+
+      // Update store if address drifted
+      if (derivedAddr.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+        setSmartAccountAddress(derivedAddr);
+      }
+
+      // Deploy account on-chain + approve USDC for all protocols
+      await approveAllProtocols(kernelClient, {
+        USDC: CONTRACTS.USDC,
+        AAVE_POOL: CONTRACTS.AAVE_POOL,
+        BENQI_POOL: CONTRACTS.BENQI_POOL,
+        SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+        EULER_VAULT: CONTRACTS.EULER_VAULT,
+        SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+        SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+      });
+
+      setDeployPhase("deployed");
+      toast.success("Smart account deployed & protocols approved!");
+    } catch (err) {
+      deployGuardRef.current = false;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("User denied") || msg.includes("User rejected")) {
+        setDeployPhase("idle");
+        toast.error("Deployment cancelled — you can retry.");
+      } else {
+        setDeployPhase("error");
+        setDeployError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
+        toast.error("Deployment failed — you can retry.");
+      }
+    }
+  };
+
+  // Giza-style activation: ERC-20 transfer + session key + register (Signature 2)
   const handleActivate = async () => {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
     if (activateGuardRef.current) return;
@@ -257,26 +326,27 @@ export default function OnboardingPage() {
     setActivating(true);
 
     const effectiveSelectedProtocols = selectedProtocols;
-
     const amountWei = parseUnits(depositAmount, 6);
 
     try {
-      // Phase 0: Derive canonical smart account first to prevent stale-address drift.
-      setActivationPhase("creating-client");
-      const viemAccount = await toViemAccount({ wallet });
-      const {
-        kernelAccount,
-        kernelClient,
-        smartAccountAddress: derivedSmartAccountAddress,
-      } = await createSmartAccount(viemAccount);
+      // Re-derive kernel account/client if refs are stale (e.g. page refresh)
+      let kernelAccount = kernelAccountRef.current;
+      let kernelClient = kernelClientRef.current;
+      let derivedAddr = derivedAddressRef.current ?? smartAccountAddress;
 
-      if (derivedSmartAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
-        setSmartAccountAddress(derivedSmartAccountAddress);
-        setFormStep("activate");
+      if (!kernelAccount || !kernelClient) {
+        const viemAccount = await toViemAccount({ wallet });
+        const result = await createSmartAccount(viemAccount);
+        kernelAccount = result.kernelAccount;
+        kernelClient = result.kernelClient;
+        derivedAddr = result.smartAccountAddress;
+
+        if (derivedAddr.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+          setSmartAccountAddress(derivedAddr);
+        }
       }
 
-      // Phase 1: Transfer USDC from EOA wallet → canonical smart account
-      // On retry after partial failure, the smart account may already hold USDC.
+      // Phase 1: Transfer USDC from EOA wallet → smart account
       // Check existing balance and only transfer the shortfall to prevent double-deposits.
       setActivationPhase("transferring-usdc");
 
@@ -289,7 +359,7 @@ export default function OnboardingPage() {
         address: CONTRACTS.USDC as `0x${string}`,
         abi: ERC20_ABI,
         functionName: "balanceOf",
-        args: [derivedSmartAccountAddress as `0x${string}`],
+        args: [derivedAddr as `0x${string}`],
       }) as bigint;
 
       const shortfall = amountWei > existingBalance ? amountWei - existingBalance : 0n;
@@ -331,7 +401,7 @@ export default function OnboardingPage() {
           data: encodeFunctionData({
             abi: ERC20_ABI,
             functionName: "transfer",
-            args: [derivedSmartAccountAddress as `0x${string}`, shortfall],
+            args: [derivedAddr as `0x${string}`, shortfall],
           }),
         });
 
@@ -341,73 +411,7 @@ export default function OnboardingPage() {
         toast.success("Smart account already funded — skipping transfer.");
       }
 
-      // Phase 2: Deploy smart account on-chain & approve USDC for all protocols
-      // This is the first UserOp — it triggers Kernel deployment via the EntryPoint
-      // and sets max USDC approvals so the optimizer can deposit into any protocol.
-      setActivationPhase("approving-protocols");
-      await approveAllProtocols(kernelClient, {
-        USDC: CONTRACTS.USDC,
-        AAVE_POOL: CONTRACTS.AAVE_POOL,
-        BENQI_POOL: CONTRACTS.BENQI_POOL,
-        SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-        EULER_VAULT: CONTRACTS.EULER_VAULT,
-        SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-        SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-      });
-      toast.success("Smart account deployed on-chain!");
-
-      // Phase 2b: Immediate initial deployment via sudo path (guarantees non-idle start)
-      // even if backend session-key automation takes time or fails validation.
-      const liveRates = protocolRates ?? await api.getCurrentRates();
-      const candidateProtocols = liveRates
-        .filter((r) => {
-          const normalizedProtocolId = normalizeProtocolId(r.protocolId);
-          if (!normalizedProtocolId) return false;
-          return effectiveSelectedProtocols.has(r.protocolId) || effectiveSelectedProtocols.has(normalizedProtocolId);
-        })
-        .filter((r) => r.isActive && !r.isComingSoon)
-        .filter((r) => ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"].includes(r.protocolId))
-        .sort((a, b) => b.currentApy - a.currentApy)
-        .map((r) => r.protocolId as "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc");
-
-      const deploymentCandidates = candidateProtocols;
-
-      if (!deploymentCandidates.length) {
-        throw new Error("No active protocol available for initial deployment")
-      }
-
-      let deployedProtocol: string | null = null;
-      let lastDeployError: string | null = null;
-      for (const protocolId of deploymentCandidates) {
-        try {
-          await deployInitialToProtocol(
-            kernelClient,
-            derivedSmartAccountAddress,
-            {
-              AAVE_POOL: CONTRACTS.AAVE_POOL,
-              BENQI_POOL: CONTRACTS.BENQI_POOL,
-              SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-              EULER_VAULT: CONTRACTS.EULER_VAULT,
-              SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-              SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-              USDC: CONTRACTS.USDC,
-            },
-            protocolId,
-            depositAmount,
-          );
-          deployedProtocol = protocolId;
-          break;
-        } catch (deployErr) {
-          lastDeployError = deployErr instanceof Error ? deployErr.message : String(deployErr);
-        }
-      }
-
-      if (!deployedProtocol) {
-        throw new Error(lastDeployError || "Initial deployment failed on all candidate protocols")
-      }
-      toast.success(`Initial funds deployed to ${deployedProtocol}`);
-
-      // Phase 3: Grant session key
+      // Phase 2: Grant session key
       setActivationPhase("granting-session-key");
       const sessionKeyResult = await grantAndSerializeSessionKey(
         kernelAccount,
@@ -430,10 +434,10 @@ export default function OnboardingPage() {
         },
       );
 
-      // Phase 4: Register account with session key
+      // Phase 3: Register account with backend — optimizer will deploy funds
       setActivationPhase("registering-backend");
       await api.registerAccount({
-        smartAccountAddress: derivedSmartAccountAddress,
+        smartAccountAddress: derivedAddr,
         ownerAddress: wallet.address,
         diversificationPreference: diversificationPref,
         sessionKeyData: {
@@ -442,17 +446,11 @@ export default function OnboardingPage() {
           expiresAt: sessionKeyResult.expiresAt,
           allowedProtocols: Array.from(effectiveSelectedProtocols),
         },
-        initialAllocation: deployedProtocol
-          ? { [deployedProtocol]: depositAmount }
-          : undefined,
       });
-
-      // Phase 4: Done — optimizer will detect idle USDC and deploy optimally
-      // (no hardcoded protocol deposit; rebalancer picks the best allocation)
 
       // Best-effort diversification preference save
       try {
-        await api.saveDiversificationPreference(derivedSmartAccountAddress, diversificationPref);
+        await api.saveDiversificationPreference(derivedAddr, diversificationPref);
       } catch { /* non-critical — default is balanced */ }
 
       setActivationPhase("done");
@@ -605,7 +603,7 @@ export default function OnboardingPage() {
               {isAccountReady && (
                 <>
                   <p className="text-xs text-[#8A837C]">
-                    Your self-custodial smart account is live on Avalanche.
+                    Your self-custodial smart account address on Avalanche.
                   </p>
                   <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
                     <code className="flex-1 truncate font-mono text-xs text-[#1A1715]">
@@ -630,6 +628,57 @@ export default function OnboardingPage() {
                     )}
                   </div>
 
+                  {/* Deployment progress */}
+                  {deployPhase === "deploying" && (
+                    <div className="flex items-center gap-3 rounded-lg bg-[#F5F0EB] p-4">
+                      <Loader2 className="h-5 w-5 animate-spin text-[#E84142]" />
+                      <div>
+                        <p className="text-sm font-medium text-[#1A1715]">
+                          Deploying account on-chain…
+                        </p>
+                        <p className="text-xs text-[#8A837C]">
+                          Approve the transaction in your wallet to deploy your smart account and approve protocol access.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {deployPhase === "error" && (
+                    <div className="space-y-3">
+                      <div className="rounded-lg bg-[#DC2626]/5 border border-[#DC2626]/20 p-4">
+                        <p className="text-sm font-medium text-[#DC2626]">Deployment failed</p>
+                        {deployError && (
+                          <p className="mt-1 text-xs text-[#5C5550]">{deployError}</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => {
+                          deployGuardRef.current = false;
+                          setDeployPhase("idle");
+                          setDeployError(null);
+                          handleAccountDeploy();
+                        }}
+                        className="flex items-center gap-2 rounded-lg border border-[#E84142]/30 px-4 py-2 text-sm font-medium text-[#E84142] hover:bg-[#E84142]/5"
+                      >
+                        Retry Deployment
+                      </button>
+                    </div>
+                  )}
+
+                  {deployPhase === "deployed" && (
+                    <div className="flex items-center gap-3 rounded-lg bg-[#059669]/5 border border-[#059669]/20 p-4">
+                      <CheckCircle2 className="h-5 w-5 text-[#059669]" />
+                      <div>
+                        <p className="text-sm font-medium text-[#059669]">
+                          Account deployed & protocols approved
+                        </p>
+                        <p className="text-xs text-[#8A837C]">
+                          Your smart account is live on Avalanche with all protocol approvals set.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex items-center gap-2 rounded-lg border border-[#E8E2DA] bg-[#EDE8E3]/30 px-3 py-2.5">
                       <Shield className="h-4 w-4 text-[#E84142] shrink-0" />
@@ -641,13 +690,15 @@ export default function OnboardingPage() {
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => setFormStep("strategy")}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031]"
-                  >
-                    Continue
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
+                  {deployPhase === "deployed" && (
+                    <button
+                      onClick={() => setFormStep("strategy")}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031]"
+                    >
+                      Continue
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  )}
                 </>
               )}
             </motion.div>
@@ -916,8 +967,8 @@ export default function OnboardingPage() {
                   </div>
 
                   <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                    {(["transferring-usdc", "creating-client", "approving-protocols", "granting-session-key", "registering-backend"] as const).map((phase) => {
-                      const allPhases = ["transferring-usdc", "creating-client", "approving-protocols", "granting-session-key", "registering-backend"] as const;
+                    {(["transferring-usdc", "granting-session-key", "registering-backend"] as const).map((phase) => {
+                      const allPhases = ["transferring-usdc", "granting-session-key", "registering-backend"] as const;
                       const phaseIndex = allPhases.indexOf(phase);
                       const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                       const isDone = currentIndex > phaseIndex || activationPhase === "done";
@@ -925,11 +976,8 @@ export default function OnboardingPage() {
 
                       const icons: Record<string, typeof Shield> = {
                         "transferring-usdc": Wallet,
-                        "creating-client": Zap,
-                        "approving-protocols": CheckCircle2,
                         "granting-session-key": Shield,
                         "registering-backend": ArrowRight,
-                        "deploying-funds": Wallet,
                       };
                       const Icon = icons[phase];
 
@@ -1050,7 +1098,7 @@ export default function OnboardingPage() {
                       className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                     >
                       <Zap className="h-4 w-4" />
-                      Deposit &amp; Activate Agent
+                      Deposit &amp; Activate
                     </button>
                   </div>
                 </div>
