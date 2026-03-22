@@ -103,11 +103,8 @@ async def _do_register(
     account = result.data[0]
     logger.info("Account registered/updated: %s", address)
 
-    # Optionally store session key
-    if req.session_key_data:
-        store_session_key(db, account["id"], req.session_key_data)
-
-    # Optionally record initial allocation from frontend deployment
+    # Record initial allocation FIRST (idempotent, must not be blocked by
+    # a session-key storage failure).
     if req.initial_allocation:
         from decimal import Decimal
         for protocol_id, amount_str in req.initial_allocation.items():
@@ -126,8 +123,21 @@ async def _do_register(
             except Exception as exc:
                 logger.warning("Failed to record allocation %s/%s: %s", address, protocol_id, exc)
 
-    # Fire-and-forget: trigger immediate rebalance so idle USDC gets deployed
+    # Store session key (may fail on KMS/encryption — non-fatal for account
+    # creation since the user can re-grant from the dashboard).
+    session_key_stored = False
     if req.session_key_data:
+        try:
+            store_session_key(db, account["id"], req.session_key_data)
+            session_key_stored = True
+        except Exception as exc:
+            logger.error(
+                "Session key storage failed for %s (user can re-grant): %s",
+                address, exc,
+            )
+
+    # Fire-and-forget: trigger immediate rebalance so idle USDC gets deployed
+    if session_key_stored:
         asyncio.create_task(_trigger_initial_rebalance(account["id"], address))
 
     return AccountResponse(

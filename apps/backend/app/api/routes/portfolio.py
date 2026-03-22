@@ -1,5 +1,6 @@
 """Portfolio state and rebalance history endpoints."""
 
+import asyncio
 import logging
 from decimal import Decimal
 
@@ -133,40 +134,62 @@ async def get_portfolio(
             )
         )
 
-    # Check on-chain protocol balances for active protocols not in DB
-    for pid in ACTIVE_ADAPTERS:
-        onchain_balance = await _get_protocol_balance(address, pid)
+    # ── Parallel on-chain reads: protocol balances + idle USDC + APYs ──────
+    # This eliminates sequential RPC latency (was ~13 serial calls → one gather).
+    protocol_ids = list(ACTIVE_ADAPTERS.keys())
+
+    balance_tasks = [_get_protocol_balance(address, pid) for pid in protocol_ids]
+    apy_tasks = [_get_protocol_apy(pid) for pid in protocol_ids]
+    idle_task = _get_idle_usdc(address)
+
+    # Run all RPC calls concurrently
+    results = await asyncio.gather(*balance_tasks, *apy_tasks, idle_task)
+    n = len(protocol_ids)
+    onchain_balances = dict(zip(protocol_ids, results[:n]))
+    live_apys = dict(zip(protocol_ids, results[n:2*n]))
+    idle_usdc = results[2*n]
+
+    # Reconcile DB allocations against on-chain reality:
+    #   - If on-chain > 0 and DB differs significantly → use on-chain
+    #   - If on-chain > 0 and not in DB → add as discovered allocation
+    #   - If on-chain ≈ 0 but DB > 0 → zero out the stale DB entry
+    for pid in protocol_ids:
+        onchain_balance = onchain_balances[pid]
+        existing = next((a for a in allocations if a.protocol_id == pid), None)
+
         if onchain_balance > Decimal("0.01"):
-            existing = next((a for a in allocations if a.protocol_id == pid), None)
             if existing:
-                # Prefer on-chain balance if significantly different from DB
                 if abs(onchain_balance - existing.amount_usdc) > Decimal("0.5"):
                     total_deposited -= existing.amount_usdc
                     existing.amount_usdc = onchain_balance
                     total_deposited += onchain_balance
             else:
-                # Protocol balance found on-chain but not in DB (direct deposit)
-                live_apy = await _get_protocol_apy(pid)
                 allocations.append(
                     AllocationResponse(
                         protocol_id=pid,
                         name=_NAMES.get(pid, pid),
                         amount_usdc=onchain_balance,
                         allocation_pct=Decimal("0"),
-                        current_apy=live_apy,
+                        current_apy=live_apys.get(pid, Decimal("0")),
                     )
                 )
                 total_deposited += onchain_balance
+        else:
+            if existing and existing.amount_usdc > Decimal("0.01"):
+                total_deposited -= existing.amount_usdc
+                original_db_deposits -= existing.amount_usdc
+                existing.amount_usdc = Decimal("0")
 
-    # Fetch live APY for all protocol allocations (overwrite stale DB values)
+    # Remove zero-balance allocations so they don't clutter the response
+    allocations = [a for a in allocations if a.amount_usdc > Decimal("0.01")]
+
+    # Apply live APYs (already fetched in parallel above)
     for alloc in allocations:
-        if alloc.protocol_id in ACTIVE_ADAPTERS:
-            live_apy = await _get_protocol_apy(alloc.protocol_id)
-            if live_apy > Decimal("0"):
-                alloc.current_apy = live_apy
+        apy = live_apys.get(alloc.protocol_id, Decimal("0"))
+        if apy > Decimal("0"):
+            alloc.current_apy = apy
 
-    # Read on-chain idle USDC balance (not yet deployed to any protocol)
-    idle_usdc = await _get_idle_usdc(address)
+    # Add idle USDC if present
     if idle_usdc > Decimal("0.01"):
         total_deposited += idle_usdc
         allocations.append(

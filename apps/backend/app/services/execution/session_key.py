@@ -44,10 +44,11 @@ def _kms_key_id_or_none() -> str | None:
 
 @lru_cache
 def _get_kms_client():
-    """Create and cache an AWS KMS client."""
-    key_id = _kms_key_id_or_none()
-    if not key_id:
-        raise RuntimeError("KMS_KEY_ID must be configured for session key encryption")
+    """Create and cache an AWS KMS client.
+
+    Returns the client object; callers must handle authentication errors
+    at call-time (e.g. ``NoCredentialsError`` from ``generate_data_key``).
+    """
     region = (
         os.getenv("AWS_REGION")
         or os.getenv("AWS_DEFAULT_REGION")
@@ -92,38 +93,51 @@ def _decode_envelope(encrypted: str) -> tuple[bytes, bytes, bytes]:
     )
 
 
+def _encrypt_local_aes(raw_key: str) -> str:
+    """Encrypt using local AES-256-GCM with SESSION_KEY_ENCRYPTION_KEY."""
+    key = _get_legacy_aes_key()
+    nonce = os.urandom(_NONCE_BYTES)
+    aes = AESGCM(key)
+    ct = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
+    return base64.b64encode(nonce + ct).decode("ascii")
+
+
 def encrypt_session_key(raw_key: str) -> str:
-    """Encrypt *raw_key* using AWS KMS envelope encryption.
+    """Encrypt *raw_key* using AWS KMS envelope encryption with local fallback.
 
-    Process:
-      1) KMS generates an ephemeral AES-256 data key.
-      2) AES-GCM encrypts the serialized permission with that data key.
-      3) Store ciphertext + nonce + KMS-encrypted data key.
+    Strategy:
+      1) If KMS_KEY_ID is configured, attempt KMS envelope encryption.
+      2) If KMS fails (missing credentials, network, etc.), fall back to
+         local AES-256-GCM using SESSION_KEY_ENCRYPTION_KEY.
+      3) If KMS_KEY_ID is NOT set, use local AES directly.
 
-    Returns a compact versioned envelope string.
+    Returns a compact versioned envelope string (KMS) or base64 blob (local).
     """
     key_id = _kms_key_id_or_none()
     if not key_id:
-        # Backward-compat fallback for tests/local runs.
-        key = _get_legacy_aes_key()
+        return _encrypt_local_aes(raw_key)
+
+    try:
+        kms = _get_kms_client()
+        data_key = kms.generate_data_key(KeyId=key_id, KeySpec="AES_256")
+        plaintext_key = data_key["Plaintext"]
+        encrypted_data_key = data_key["CiphertextBlob"]
+
         nonce = os.urandom(_NONCE_BYTES)
-        aes = AESGCM(key)
-        ct = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
-        return base64.b64encode(nonce + ct).decode("ascii")
+        aes = AESGCM(plaintext_key)
+        ciphertext = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
 
-    kms = _get_kms_client()
-    data_key = kms.generate_data_key(KeyId=key_id, KeySpec="AES_256")
-    plaintext_key = data_key["Plaintext"]
-    encrypted_data_key = data_key["CiphertextBlob"]
+        # Best-effort cleanup of plaintext data key from local scope.
+        del plaintext_key
 
-    nonce = os.urandom(_NONCE_BYTES)
-    aes = AESGCM(plaintext_key)
-    ciphertext = aes.encrypt(nonce, raw_key.encode("utf-8"), None)
-
-    # Best-effort cleanup of plaintext data key from local scope.
-    del plaintext_key
-
-    return _encode_envelope(ciphertext, nonce, encrypted_data_key)
+        return _encode_envelope(ciphertext, nonce, encrypted_data_key)
+    except Exception as exc:
+        logger.warning(
+            "KMS envelope encryption failed (%s), falling back to local AES: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return _encrypt_local_aes(raw_key)
 
 
 def decrypt_session_key(encrypted: str) -> str:
