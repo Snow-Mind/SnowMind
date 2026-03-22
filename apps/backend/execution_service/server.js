@@ -13,6 +13,7 @@ const recentNonces = new Map()
 const REQUIRED_ENV = [
   "ZERODEV_PROJECT_ID",
   "AVALANCHE_RPC_URL",
+  "INTERNAL_SERVICE_KEY",
 ]
 
 const missing = REQUIRED_ENV.filter((key) => !process.env[key])

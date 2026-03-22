@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.services.optimizer.rebalancer import Rebalancer
 from app.services.optimizer.rate_fetcher import RateFetcher
+from app.services.protocols import ALL_ADAPTERS
 from app.services.monitoring import (
     check_paymaster_balance,
     scheduler_watchdog,
@@ -382,20 +383,95 @@ class SnowMindScheduler:
     # ── Balance reconciliation ───────────────────────────────────────────────
 
     async def _reconcile_balances(self) -> None:
-        """Verify DB allocation records match on-chain reality daily."""
+        """Verify DB allocation records match on-chain reality daily.
+
+        Alerts on any discrepancy above the configured threshold.
+        This is the single most important control for detecting
+        unauthorized fund movement or accounting bugs.
+        """
+        from decimal import Decimal
+        from app.services.monitoring import send_telegram_alert, send_sentry_alert
+
+        settings = get_settings()
+        threshold = Decimal(str(settings.RECONCILIATION_ALERT_THRESHOLD_USD))
         accounts = (
             self.db.table("accounts")
             .select("id, address")
             .eq("is_active", True)
             .execute()
         )
+        total_discrepancies = 0
         for acct in (accounts.data or []):
             try:
-                await self.rebalancer._get_current_allocations(
-                    acct["id"], acct["address"],
+                # Read DB allocations
+                alloc_rows = (
+                    self.db.table("allocations")
+                    .select("protocol_id, amount_usdc")
+                    .eq("account_id", acct["id"])
+                    .execute()
                 )
+                db_allocs = {
+                    row["protocol_id"]: Decimal(str(row["amount_usdc"]))
+                    for row in (alloc_rows.data or [])
+                }
+
+                # Read on-chain balances
+                on_chain = await self.rebalancer._discover_onchain_balances(
+                    acct["address"],
+                    set(db_allocs.keys()) | set(ALL_ADAPTERS.keys()),
+                )
+
+                # Compare
+                all_protocols = set(db_allocs.keys()) | set(on_chain.keys())
+                for pid in all_protocols:
+                    db_val = db_allocs.get(pid, Decimal("0"))
+                    chain_val = on_chain.get(pid, Decimal("0"))
+                    diff = abs(db_val - chain_val)
+                    if diff > threshold:
+                        total_discrepancies += 1
+                        msg = (
+                            f"RECONCILIATION MISMATCH: {acct['address'][:10]}.../{pid}: "
+                            f"DB=${float(db_val):.2f} vs On-chain=${float(chain_val):.2f} "
+                            f"(diff=${float(diff):.2f})"
+                        )
+                        logger.warning(msg)
+
+                        # Update DB to match on-chain (source of truth)
+                        if chain_val > Decimal("0.50"):
+                            # Compute allocation_pct relative to total on-chain value
+                            # (approximate — reconciliation may not know total; use 0 as placeholder)
+                            self.db.table("allocations").upsert(
+                                {
+                                    "account_id": acct["id"],
+                                    "protocol_id": pid,
+                                    "amount_usdc": str(chain_val.quantize(Decimal("0.000001"))),
+                                    "allocation_pct": "0.0000",  # Updated by next rebalance cycle
+                                },
+                                on_conflict="account_id,protocol_id",
+                            ).execute()
+                        elif db_val > Decimal("0") and chain_val < Decimal("0.50"):
+                            self.db.table("allocations").delete().eq(
+                                "account_id", acct["id"]
+                            ).eq("protocol_id", pid).execute()
+
             except Exception as e:
                 logger.error("Reconciliation failed for %s: %s", acct["id"], e)
+                total_discrepancies += 1
+
+        if total_discrepancies > 0:
+            alert_msg = (
+                f"Daily reconciliation found {total_discrepancies} discrepancies "
+                f"across {len(accounts.data or [])} accounts. "
+                f"DB has been updated to match on-chain values."
+            )
+            logger.warning(alert_msg)
+            await send_telegram_alert(alert_msg)
+            send_sentry_alert(alert_msg)
+        else:
+            logger.info(
+                "Daily reconciliation: %d accounts checked, all balances match",
+                len(accounts.data or []),
+            )
 
 
 # ── Graceful shutdown ────────────────────────────────────────────────────────

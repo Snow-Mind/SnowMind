@@ -258,6 +258,44 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
+        # ── 4c. Portfolio value circuit breaker ──────────────────────
+        # Compare current on-chain value to last recorded value.
+        # If portfolio dropped >10% between scheduler ticks, halt and alert.
+        # This catches exploits, oracle failures, or protocol depegs in real-time.
+        try:
+            prev_row = (
+                db.table("rebalance_logs")
+                .select("proposed_allocations")
+                .eq("account_id", account_id)
+                .eq("status", "executed")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if prev_row.data and prev_row.data[0].get("proposed_allocations"):
+                prev_allocs = prev_row.data[0]["proposed_allocations"]
+                prev_total = sum(
+                    Decimal(str(v)) for v in prev_allocs.values()
+                )
+                if prev_total > Decimal("1"):
+                    drop_pct = (prev_total - total_usd) / prev_total
+                    drop_threshold = Decimal(str(self.settings.PORTFOLIO_VALUE_DROP_PCT))
+                    if drop_pct > drop_threshold:
+                        from app.services.monitoring import send_telegram_alert, send_sentry_alert
+                        msg = (
+                            f"CIRCUIT BREAKER: Portfolio value dropped {float(drop_pct * 100):.1f}% "
+                            f"for account {account_id}. "
+                            f"Previous: ${float(prev_total):.2f}, Current: ${float(total_usd):.2f}. "
+                            f"Halting rebalance — manual investigation required."
+                        )
+                        logger.critical(msg)
+                        await send_telegram_alert(msg)
+                        send_sentry_alert(msg)
+                        return await self._log(db, account_id, "halted",
+                                               reason=msg)
+        except Exception as exc:
+            logger.warning("Portfolio circuit breaker check failed: %s — proceeding", exc)
+
         # 4b. Guarded launch — enforce platform-wide deposit cap
         has_existing_positions = any(v > Decimal("1") for v in current.values())
         if not has_existing_positions and idle_usdc > Decimal("1"):
@@ -552,6 +590,52 @@ class Rebalancer:
                     reason=f"Profitability gate: daily gain ${float(daily_gain):.4f} < gas ${float(gas_cost):.4f}",
                     proposed=result_allocations,
                 )
+
+        # 8c. Max single rebalance value — cap per-operation movement
+        max_rebalance = Decimal(str(self.settings.MAX_SINGLE_REBALANCE_USD))
+        if total_movement > max_rebalance:
+            from app.services.monitoring import send_telegram_alert, send_sentry_alert
+            msg = (
+                f"Rebalance value limit exceeded for {account_id}: "
+                f"${float(total_movement):.2f} > ${float(max_rebalance):.2f} cap. "
+                f"Blocking rebalance — manual review required."
+            )
+            logger.critical(msg)
+            await send_telegram_alert(msg)
+            send_sentry_alert(msg)
+            return await self._log(
+                db, account_id, "halted",
+                reason=msg,
+                proposed=result_allocations,
+            )
+
+        # 8d. Idempotency guard — prevent double-execution on retries.
+        # If a rebalance with the exact same target was executed in the last 60 min, skip.
+        try:
+            recent_logs = (
+                db.table("rebalance_logs")
+                .select("proposed_allocations, created_at")
+                .eq("account_id", account_id)
+                .eq("status", "executed")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if recent_logs.data:
+                last_executed = recent_logs.data[0]
+                last_ts = datetime.fromisoformat(last_executed["created_at"])
+                if datetime.now(timezone.utc) - last_ts < timedelta(minutes=60):
+                    last_proposed = last_executed.get("proposed_allocations") or {}
+                    proposed_str = {k: str(v.quantize(Decimal("0.01"))) for k, v in result_allocations.items()}
+                    last_str = {k: str(Decimal(str(v)).quantize(Decimal("0.01"))) for k, v in last_proposed.items()}
+                    if proposed_str == last_str:
+                        return await self._log(
+                            db, account_id, "skipped",
+                            reason="Idempotency: identical rebalance executed within 60 min",
+                            proposed=result_allocations,
+                        )
+        except Exception as exc:
+            logger.warning("Idempotency guard check failed: %s — proceeding", exc)
 
         # 9. Execute
         try:

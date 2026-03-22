@@ -126,6 +126,9 @@ class Settings(BaseSettings):
 
     # ── Guarded Launch ─────────────────────────────────────
     MAX_TOTAL_PLATFORM_DEPOSIT_USD: float = 50000.0  # $50K beta cap
+    MAX_SINGLE_REBALANCE_USD: float = 25000.0  # Max value movable in one rebalance
+    PORTFOLIO_VALUE_DROP_PCT: float = 0.10  # 10% — halt if value drops this much between runs
+    RECONCILIATION_ALERT_THRESHOLD_USD: float = 1.0  # $1 discrepancy triggers alert
 
     # ── Fees ──────────────────────────────────────────────
     AGENT_FEE_RATE: float = 0.10        # 10% of profit on withdrawal

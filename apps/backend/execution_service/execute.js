@@ -455,17 +455,33 @@ export async function executeRebalance({
     }
   }
 
-  const depositTargets = new Set(deposits.map((d) => d.protocol))
-  for (const protocol of depositTargets) {
+  // Approve exact amounts per protocol — never use infinite approvals.
+  // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
+  const depositAmountsPerProtocol = new Map()
+  for (const { protocol, amountUSDC } of deposits) {
+    const prev = depositAmountsPerProtocol.get(protocol) || 0n
+    depositAmountsPerProtocol.set(protocol, prev + parseUnits(String(amountUSDC), 6))
+  }
+  for (const [protocol, totalAmount] of depositAmountsPerProtocol) {
     const spender = resolveContractKey(protocol, contracts)
     if (spender) {
+      // ERC-20 approve race-condition protection: set to 0 first, then exact amount
       calls.push({
         to: contracts.USDC,
         value: 0n,
         data: encodeFunctionData({
           abi: ERC20_ABI,
           functionName: "approve",
-          args: [spender, maxUint256],
+          args: [spender, 0n],
+        }),
+      })
+      calls.push({
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [spender, totalAmount],
         }),
       })
     }

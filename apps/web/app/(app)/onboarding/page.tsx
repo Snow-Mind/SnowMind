@@ -317,7 +317,8 @@ export default function OnboardingPage() {
         setSmartAccountAddress(derivedAddr);
       }
 
-      // Deploy account on-chain + approve USDC for all protocols
+      // Deploy account on-chain + approve USDC for all protocols.
+      // Use platform beta cap ($50K) to match the session key call policy limit.
       await approveAllProtocols(kernelClient, {
         USDC: CONTRACTS.USDC,
         AAVE_POOL: CONTRACTS.AAVE_POOL,
@@ -326,7 +327,7 @@ export default function OnboardingPage() {
         EULER_VAULT: CONTRACTS.EULER_VAULT,
         SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
         SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-      });
+      }, 50_000);
 
       setDeployPhase("deployed");
       toast.success("Smart account deployed & protocols approved!");
@@ -455,7 +456,7 @@ export default function OnboardingPage() {
           EULER_VAULT: CONTRACTS.EULER_VAULT,
           SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
           SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-        });
+        }, Math.max(parsedAmount * 2, 50_000));
         toast.success("Smart account deployed!");
       }
 

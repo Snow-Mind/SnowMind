@@ -213,11 +213,17 @@ export async function createSmartAccount(walletClient: WalletClientLike) {
 }
 
 // ── 2. Approve all protocols in ONE batched UserOp ───────────────────────────
+// maxAmountUSDC caps the ERC-20 allowance to match the session key call policy limit.
+// Never use maxUint256 — a compromised protocol could drain unbounded funds.
+// Default of 50,000 matches the platform beta deposit cap.
 
 export async function approveAllProtocols(
   kernelClient: KernelClientLike,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}` }
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}` },
+  maxAmountUSDC: number = 50_000,
 ): Promise<{ txHash: string; explorerUrl: string }> {
+
+  const approvalAmount = parseUnits(maxAmountUSDC.toString(), 6)
 
   const approvalCalls = [
     contracts.AAVE_POOL,
@@ -234,7 +240,7 @@ export async function approveAllProtocols(
       data: encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "approve",
-        args: [spender, maxUint256],
+        args: [spender, approvalAmount],
       }),
     }))
 
@@ -678,7 +684,7 @@ export async function deployInitialToProtocol(
     data: encodeFunctionData({
       abi: ERC20_ABI,
       functionName: "approve",
-      args: [spender, maxUint256],
+      args: [spender, amount],   // exact amount — no infinite approvals
     }),
   })
 
