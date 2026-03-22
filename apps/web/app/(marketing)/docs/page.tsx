@@ -100,7 +100,7 @@ const SAFETY_FEATURES = [
   },
   {
     title: "Concentration Limits",
-    description: "Maximum 60% allocation to any single protocol — enforced by MILP constraints.",
+    description: "Maximum 15% of any protocol's TVL — enforced by the waterfall allocator.",
   },
 ] as const;
 
@@ -115,7 +115,7 @@ const FAQ = [
   },
   {
     q: "How does the optimizer decide where to put my funds?",
-    a: "SnowMind solves a Mixed-Integer Linear Programming (MILP) problem that maximizes risk-adjusted yield: return − λ × risk. The optimizer respects hard constraints like max 60% per protocol and minimum $500 per position.",
+    a: "SnowMind uses a waterfall allocator that ranks protocols by TWAP-smoothed APY and fills from top to bottom. Each protocol is capped at 15% of its TVL to prevent market impact. Your diversification preference (Max Yield, Balanced, or Diversified) controls how funds are spread across protocols.",
   },
   {
     q: "What are session keys?",

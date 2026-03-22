@@ -1,15 +1,15 @@
-"""MILP solver for optimal yield allocation using PuLP (CBC backend).
+"""Shared optimizer types, utilities, and legacy MILP solver.
 
-Two-tier routing:
-    * Below SPLIT_THRESHOLD ($10 000): pick_best_protocol() — 100 % to highest APY,
-        no MILP overhead.
-    * At/above SPLIT_THRESHOLD: solve() — pure-yield MILP whose diversification is
-        controlled by max_protocols / max_allocation_pct from DIVERSIFICATION_CONFIGS.
+The LIVE allocation algorithm is a waterfall (APY-ranked greedy fill):
+    - rebalancer.py  → compute_allocation() from allocator.py
+    - /simulate       → waterfall_allocate() from waterfall_allocator.py
 
-MILP formulation:
-    MAXIMIZE  Σ(x_i × apy_i)
-    subject to 6 constraint families (budget, max-alloc %, max-alloc $,
-    min-alloc, min-protocols, max-protocols, big-M linkage).
+This module provides shared data classes (OptimizerInput, OptimizerOutput,
+ProtocolInput) and helpers (compute_delta, compute_weighted_apy,
+is_rebalance_worth_it, pick_best_protocol) used across the optimizer.
+
+The solve() MILP function below is DEPRECATED / DEAD CODE — kept for
+reference only. It is not called by any live code path.
 """
 
 import logging
@@ -33,9 +33,9 @@ SPLIT_THRESHOLD = Decimal("10000")          # Below this, always single-protocol
 DIVERSIFICATION_CONFIGS: dict[str, dict] = {
     # max_yield: 100 % in single best protocol (uses pick_best_protocol)
     "max_yield":   {"max_protocols": 1, "max_allocation_pct": Decimal("1.0")},
-    # balanced: MILP splits across ≤ 2 protocols, 60 % cap each
+    # balanced: split across ≤ 2 protocols, 60 % cap each
     "balanced":    {"max_protocols": 2, "max_allocation_pct": Decimal("0.60")},
-    # diversified: MILP spreads across ≤ 4 protocols, 40 % cap each
+    # diversified: spread across ≤ 4 protocols, 40 % cap each
     "diversified": {"max_protocols": 4, "max_allocation_pct": Decimal("0.40")},
 }
 
@@ -82,12 +82,12 @@ class OptimizerInput:
 
 @dataclass
 class OptimizerOutput:
-    """Result of a MILP solve."""
+    """Result of an allocation computation (waterfall or legacy MILP)."""
 
     allocations: dict[str, Decimal]  # protocol_id → USD amount
     expected_apy: Decimal  # Weighted average APY
     risk_score: Decimal  # Weighted average risk
-    objective_value: Decimal  # MILP objective function value
+    objective_value: Decimal  # Objective function value
     solve_time_ms: float  # timing — not financial, stays float
     status: str  # "optimal" | "feasible" | "infeasible"
     is_rebalance_needed: bool
@@ -176,7 +176,7 @@ def pick_best_protocol(inp: OptimizerInput) -> OptimizerOutput:
     """Simple mode: allocate 100 % to the protocol with the highest APY.
 
     Used when total_amount_usd < SPLIT_THRESHOLD or when the user's
-    diversification_preference is 'max_yield'.  Skips MILP entirely.
+    diversification_preference is 'max_yield'.
     """
     available = [p for p in inp.protocols if p.is_available]
     if not available:
@@ -221,11 +221,11 @@ def pick_best_protocol(inp: OptimizerInput) -> OptimizerOutput:
     )
 
 
-# ── Fallback (MILP failure) ────────────────────────────────────────────────────
+# ── Fallback (allocation failure) ──────────────────────────────────────────────
 
 
 def fallback_equal_split(inp: OptimizerInput) -> OptimizerOutput:
-    """If MILP fails, equally split between best 2 protocols by APY."""
+    """Fallback: equally split between best 2 protocols by APY."""
     available = sorted(
         (p for p in inp.protocols if p.is_available),
         key=lambda p: p.apy,
@@ -277,7 +277,7 @@ def fallback_equal_split(inp: OptimizerInput) -> OptimizerOutput:
     )
 
 
-# ── Core MILP solver ─────────────────────────────────────────────────────────
+# ── Legacy MILP solver (DEPRECATED — not used in live code paths) ────────────
 
 
 def solve(inp: OptimizerInput) -> OptimizerOutput:
@@ -347,7 +347,7 @@ def solve(inp: OptimizerInput) -> OptimizerOutput:
     solve_ms = (time.time() - t0) * 1000
 
     if prob.status != pulp.constants.LpStatusOptimal:
-        logger.warning("MILP status=%d — falling back to equal split", prob.status)
+        logger.warning("Legacy MILP status=%d — falling back to equal split", prob.status)
         result = fallback_equal_split(inp)
         result.solve_time_ms = solve_ms
         result.status = "feasible" if prob.status == 0 else "infeasible"
@@ -379,7 +379,7 @@ def solve(inp: OptimizerInput) -> OptimizerOutput:
         weighted_apy,
         current_apy,
     )
-    logger.info("MILP solved in %.1fms: %s", solve_ms, reason)
+    logger.info("Legacy MILP solved in %.1fms: %s", solve_ms, reason)
 
     obj_val = pulp.value(prob.objective)
     return OptimizerOutput(

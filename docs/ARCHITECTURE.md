@@ -2,7 +2,7 @@
 
 ## System Overview
 
-SnowMind is an autonomous, non-custodial AI yield optimizer on Avalanche C-Chain. Users deposit stablecoins into their own ZeroDev Kernel v3.1 smart account. A Python FastAPI backend continuously solves a MILP optimization problem and rebalances funds across Avalanche lending protocols to maximize risk-adjusted yield.
+SnowMind is an autonomous, non-custodial AI yield optimizer on Avalanche C-Chain. Users deposit stablecoins into their own ZeroDev Kernel v3.1 smart account. A Python FastAPI backend continuously runs a waterfall (APY-ranked greedy) allocator and rebalances funds across Avalanche lending protocols to maximize yield.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -13,7 +13,7 @@ SnowMind is an autonomous, non-custodial AI yield optimizer on Avalanche C-Chain
                    │ HTTPS (REST/JSON)
 ┌──────────────────▼─────────────────────────────────────────┐
 │  BACKEND (FastAPI · Railway)                               │
-│  Rate Fetcher → MILP Solver → Rebalance Engine             │
+│  Rate Fetcher → Waterfall Allocator → Rebalance Engine      │
 │  Session Key Manager → Pimlico Bundler → On-chain          │
 │  Supabase (PostgreSQL) for state persistence               │
 └──────────────────┬─────────────────────────────────────────┘
@@ -94,40 +94,35 @@ Permission = 1 Signer + N Policies + 1 Action
 
 ---
 
-## MILP Optimizer
+## Waterfall Allocator
 
-### The Optimization Problem
+### The Allocation Algorithm
+
+The optimizer uses a **waterfall (APY-ranked greedy fill)** algorithm:
 
 ```
-MAXIMIZE:  Σ(allocation_i × apy_i) − λ × Σ(allocation_i × risk_i)
-
-SUBJECT TO:
-  Σ allocation_i = total_deposit            (1) Budget constraint
-  allocation_i  ≤ 0.60 × total              (2) Max 60% per protocol
-  allocation_i  ≥ $500 OR allocation_i = 0   (3) Min position or zero
-  active_protocols ≥ 2                       (4) Diversification
-  allocation_i  ∈ {0} ∪ [MIN, MAX]           (5) Binary: in or out
+1. Rank all healthy protocols by effective TWAP APY (highest first)
+2. For each protocol in ranked order:
+   - Cap = min(15% of protocol TVL, user exposure cap)
+   - Allocate min(remaining_funds, cap)
+3. Park any remainder in the base layer (Spark — fixed-rate floor)
+4. If remaining > 0 after all protocols: hold idle in smart account
 ```
 
-Where:
-- `apy_i` = TWAP-smoothed supply rate from protocol `i`
-- `risk_i` = Static risk score (Aave = 2, Benqi = 3, Euler = 5)
-- `λ` = Risk aversion parameter (varies by user preference)
-
-### Solver
-
-- **Engine**: PuLP (Python) with CBC backend
-- **Solve time**: < 1 second for 4-5 protocols
-- **Variables**: `allocation_i` (continuous) + `active_i` (binary indicator)
+Constraints enforced:
+- **15% TVL cap** per protocol (prevents market impact)
+- **Diversification preference** controls max protocols and per-protocol cap
+- **Beat margin**: only rebalance if APY improvement exceeds threshold
+- **Profitability gate**: daily yield gain must exceed gas cost (bypassed for initial deployments)
 
 ### Rebalancing Decision Gate
 
 A rebalance only executes when **ALL** conditions are met:
 
-1. `|proposed_allocation_i - current_allocation_i| > 5%` for at least one protocol
-2. `cost_adjusted_apr_improvement > 0` (net positive after gas)
-3. `time_since_last_rebalance > 6 hours`
-4. `twap_confirmation >= 2 consecutive reads` (anti-flash-loan)
+1. `|proposed_allocation_i - current_allocation_i| > $1` in total movement
+2. APY improvement exceeds beat margin (0.1%)
+3. `daily_yield_gain > gas_cost` (bypassed for initial deployment — idle earns 0%)
+4. `time_since_last_rebalance > 6 hours`
 5. `no_rate_anomaly` (all rates < 25% APY, cross-validated with DefiLlama)
 
 ---
@@ -235,9 +230,9 @@ Layer 2: TWAP + Cross-Validation (off-chain)
          → 15-min smoothed rates, DefiLlama cross-check
          → 25% APY sanity cap
 
-Layer 3: MILP Hard Constraints (off-chain)
-         → 60% max per protocol
-         → Min 2 active protocols
+Layer 3: Allocator Constraints (off-chain)
+         → 15% TVL cap per protocol
+         → Profitability gate (daily gain > gas)
          → Net-positive gas gate
 
 Layer 4: Application Security (off-chain)
@@ -280,7 +275,7 @@ Never stored in plaintext. Decrypted only in-memory when building a UserOperatio
 
 ## Key Design Decisions
 
-1. **MILP over heuristics**: Competitors (ZYF.AI, Sail) use greedy or simulated annealing — no global optimality guarantee. MILP finds the provably optimal allocation.
+1. **Waterfall over MILP**: Simple APY-ranked greedy fill is transparent, auditable, and deterministic. For 4-6 protocols on a single chain, a waterfall allocator is optimal and avoids MILP solver complexity and floating-point rounding edge cases.
 
 2. **Kernel v3.1 over Safe**: Native ERC-7579 (no adapter overhead), latest EntryPoint v0.7, 6M+ accounts deployed.
 

@@ -42,7 +42,7 @@ If the SnowMind backend is fully compromised and the attacker gains access to th
 
 ### On-Chain Safety Constraints
 
-- **60% concentration cap**: MILP hard constraint prevents over-allocation to any single protocol
+- **15% TVL cap**: Allocator constraint prevents over-allocation to any single protocol's liquidity pool
 - **Minimum 2 active protocols**: Diversification is enforced mathematically
 - **6-hour cooldown**: Minimum time between rebalances prevents rapid cycling
 - **Net-positive gate**: Rebalance only executes if improvement exceeds gas costs

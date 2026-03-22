@@ -127,7 +127,7 @@ class Rebalancer:
           2. Validate rates â€” halt if any anomaly
           3. Compute risk scores per protocol
           4. Get current allocations from DB
-          5. Run MILP solver
+          5. Run waterfall allocator
           6. Check if rebalance is needed (delta + yield gate)
           7. Check time since last rebalance (> 6 h)
           8. If all conditions met â†’ execute
@@ -533,7 +533,12 @@ class Rebalancer:
             )
 
         # 8b. Profitability gate — skip if daily gain does not cover gas + fees
-        if global_flag == RebalanceFlag.NONE and total_usd > 0:
+        #     Bypass for initial deployments: idle USDC at 0% → any protocol is
+        #     better than idle regardless of deposit size. Gas is paymaster-sponsored.
+        has_existing_protocol_positions = any(v > Decimal("1") for v in current.values())
+        is_initial_deployment = not has_existing_protocol_positions and idle_usdc > Decimal("0.01")
+
+        if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
             daily_gain = apy_improvement * total_usd / Decimal("365")
             gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
             if daily_gain < gas_cost:

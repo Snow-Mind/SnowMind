@@ -180,7 +180,7 @@ class RateValidator:
     ) -> dict[str, Decimal] | None:
         """
         Run all validations. Returns TWAP-smoothed rates if all pass, None to halt.
-        Uses TWAP rates for MILP input — NOT raw spot rates.
+        Uses TWAP rates for allocator input — NOT raw spot rates.
         """
         twap_rates = {}
 
@@ -216,7 +216,7 @@ class RateValidator:
             )
 
         if len(twap_rates) < 2:
-            logger.warning("Less than 2 valid protocols — cannot run MILP")
+            logger.warning("Less than 2 valid protocols — cannot run allocator")
             return None
 
         return twap_rates

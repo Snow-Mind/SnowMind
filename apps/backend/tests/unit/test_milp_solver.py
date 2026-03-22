@@ -1,4 +1,4 @@
-"""Unit tests for the MILP solver.
+"""Unit tests for the optimizer shared types and legacy MILP solver.
 
 Tests cover:
     1. Equal APY → 50/50 split
@@ -9,8 +9,8 @@ Tests cover:
     6. is_rebalance_worth_it: delta < 5% → False
     7. is_rebalance_worth_it: delta > 5% + yield improvement → True
     8. pick_best_protocol → 100 % to highest APY
-    9. solve() with balanced config (max_protocols=2, 60% cap)
- 10. solve() with diversified config (max_protocols=4, 40% cap)
+    9. solve() with balanced config (max_protocols=2, 60% cap) [legacy]
+ 10. solve() with diversified config (max_protocols=4, 40% cap) [legacy]
  11. two-tier routing threshold: <$10K uses pick_best_protocol path
 """
 

@@ -1,10 +1,10 @@
 """Waterfall allocator — priority-ordered fill with TVL caps and a base layer.
 
-Replaces the MILP solver for active allocation decisions. Sorts protocols by APY
-descending, fills each up to min(user_exposure_cap, 15% of protocol TVL), and
-parks any remainder in the base layer (Spark on mainnet) as the stable yield floor.
+Sorts protocols by APY descending, fills each up to
+min(user_exposure_cap, 15% of protocol TVL), and parks any remainder in
+the base layer (Spark on mainnet) as the stable yield floor.
 
-The MILP solver (milp_solver.py) is kept for future yield-curve modeling.
+Used by the /simulate endpoint. The live rebalancer uses allocator.py.
 """
 
 import logging

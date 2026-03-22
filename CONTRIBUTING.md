@@ -90,7 +90,7 @@ uv run pytest tests/ -v
 uv run pytest tests/ -v --cov=app --cov-report=term-missing
 
 # Run specific test file
-uv run pytest tests/unit/test_milp_solver.py -v
+uv run pytest tests/unit/test_waterfall_allocator.py -v
 ```
 
 ### Frontend
