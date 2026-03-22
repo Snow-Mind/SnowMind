@@ -111,15 +111,15 @@ function validateWithdrawalBody(body) {
 // ── Deep error extractor — surfaces buried revert reasons from bundler errors ──
 function extractErrorComponents(err) {
   const components = {
-    message: err?.message?.slice(0, 500) || "Unknown",
-    shortMessage: err?.shortMessage?.slice(0, 300) || undefined,
-    details: err?.details?.slice(0, 500) || undefined,
-    causeMessage: err?.cause?.message?.slice(0, 300) || undefined,
-    causeDetails: err?.cause?.details?.slice(0, 300) || undefined,
-    metaMessages: err?.metaMessages?.map((m) => m.slice(0, 200)) || undefined,
+    message: err?.message?.slice(0, 2000) || "Unknown",
+    shortMessage: err?.shortMessage?.slice(0, 500) || undefined,
+    details: err?.details?.slice(0, 2000) || undefined,
+    causeMessage: err?.cause?.message?.slice(0, 500) || undefined,
+    causeDetails: err?.cause?.details?.slice(0, 1000) || undefined,
+    metaMessages: err?.metaMessages?.map((m) => m.slice(0, 500)) || undefined,
     code: err?.code || undefined,
     // Walk nested causes (bundler wraps errors deeply)
-    deepCause: err?.cause?.cause?.message?.slice(0, 300) || undefined,
+    deepCause: err?.cause?.cause?.message?.slice(0, 500) || undefined,
   }
   // Remove undefined keys for cleaner logs
   return Object.fromEntries(Object.entries(components).filter(([, v]) => v !== undefined))

@@ -579,7 +579,7 @@ export async function grantAndSerializeSessionKey(
   }
 
   const callPolicy = toCallPolicy({
-    policyVersion: CallPolicyVersion.V0_0_4,
+    policyVersion: CallPolicyVersion.V0_0_5,
     permissions,
   })
 

@@ -537,6 +537,27 @@ export async function executeRebalance({
     timestamp: new Date().toISOString(),
   }))
 
+  // Pre-flight: check if smart account is deployed (helps diagnose session key issues)
+  const publicClient = createPublicClient({ chain: CHAIN, transport: http(process.env.AVALANCHE_RPC_URL) })
+  try {
+    const code = await publicClient.getBytecode({ address: smartAccountAddress })
+    const isDeployed = code && code !== "0x" && code.length > 2
+    console.log(JSON.stringify({
+      level: "info", action: "preflight_check",
+      smartAccountAddress,
+      accountDeployed: isDeployed,
+      callCount: calls.length,
+      callTargets: calls.map((c) => c.to),
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (preflightErr) {
+    console.log(JSON.stringify({
+      level: "warn", action: "preflight_check_failed",
+      smartAccountAddress, error: preflightErr?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
@@ -548,9 +569,16 @@ export async function executeRebalance({
         smartAccountAddress, error: err?.shortMessage?.slice(0, 200),
         timestamp: new Date().toISOString(),
       }))
-      const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
-      const txHash = await noPaymasterClient.sendTransaction({ calls })
-      return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
+      try {
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const txHash = await noPaymasterClient.sendTransaction({ calls })
+        return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
+      } catch (paymasterRetryErr) {
+        throw new Error(
+          formatExecutionError(err)
+          + ` [paymaster retry also failed: ${paymasterRetryErr?.shortMessage || paymasterRetryErr?.message || "unknown"}]`
+        )
+      }
     }
     // Retry 2: validateUserOp revert — may be caused by paymaster gas
     // estimation issues. Try once without paymaster to rule it out.
@@ -746,13 +774,20 @@ export async function executeWithdrawal({
     }
   } catch (err) {
     if (isLikelyPaymasterError(err)) {
-      const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
-      const txHash = await noPaymasterClient.sendTransaction({ calls })
-      return {
-        txHash,
-        explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
-        owner: onchainOwner,
-        callCount: calls.length,
+      try {
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const txHash = await noPaymasterClient.sendTransaction({ calls })
+        return {
+          txHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+          owner: onchainOwner,
+          callCount: calls.length,
+        }
+      } catch (paymasterRetryErr) {
+        throw new Error(
+          formatExecutionError(err)
+          + ` [paymaster retry also failed: ${paymasterRetryErr?.shortMessage || paymasterRetryErr?.message || "unknown"}]`
+        )
       }
     }
     if (isValidateUserOpRevert(err)) {

@@ -75,6 +75,7 @@ const ERC20_ABI = [
 type ActivationPhase =
   | "idle"
   | "transferring-usdc"
+  | "deploying-account"
   | "granting-session-key"
   | "registering-backend"
   | "done"
@@ -83,6 +84,7 @@ type ActivationPhase =
 const PHASE_LABELS: Record<ActivationPhase, string> = {
   idle: "",
   "transferring-usdc": "Transferring USDC to smart account…",
+  "deploying-account": "Deploying smart account on-chain…",
   "granting-session-key": "Granting agent permissions…",
   "registering-backend": "Registering with optimizer…",
   done: "Agent activated — optimizer will deploy funds shortly!",
@@ -433,6 +435,28 @@ export default function OnboardingPage() {
         toast.success("USDC transferred to smart account!");
       } else {
         toast.success("Smart account already funded — skipping transfer.");
+      }
+
+      // Phase 1b: Ensure smart account is deployed on-chain
+      // If handleAccountDeploy was skipped (returning user) or failed silently,
+      // the account might not be deployed. Session key UserOps require the
+      // account to exist on-chain for reliable validateUserOp.
+      const accountCode = await publicClient.getBytecode({
+        address: derivedAddr as `0x${string}`,
+      });
+      if (!accountCode || accountCode === "0x" || accountCode.length <= 2) {
+        setActivationPhase("deploying-account");
+        console.log("[Onboarding] Smart account not deployed — deploying via approveAllProtocols");
+        await approveAllProtocols(kernelClient, {
+          USDC: CONTRACTS.USDC,
+          AAVE_POOL: CONTRACTS.AAVE_POOL,
+          BENQI_POOL: CONTRACTS.BENQI_POOL,
+          SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+          EULER_VAULT: CONTRACTS.EULER_VAULT,
+          SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+          SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+        });
+        toast.success("Smart account deployed!");
       }
 
       // Phase 2: Grant session key
@@ -1005,8 +1029,8 @@ export default function OnboardingPage() {
                   </div>
 
                   <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                    {(["transferring-usdc", "granting-session-key", "registering-backend"] as const).map((phase) => {
-                      const allPhases = ["transferring-usdc", "granting-session-key", "registering-backend"] as const;
+                    {(["transferring-usdc", "deploying-account", "granting-session-key", "registering-backend"] as const).map((phase) => {
+                      const allPhases = ["transferring-usdc", "deploying-account", "granting-session-key", "registering-backend"] as const;
                       const phaseIndex = allPhases.indexOf(phase);
                       const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                       const isDone = currentIndex > phaseIndex || activationPhase === "done";
@@ -1014,6 +1038,7 @@ export default function OnboardingPage() {
 
                       const icons: Record<string, typeof Shield> = {
                         "transferring-usdc": Wallet,
+                        "deploying-account": Shield,
                         "granting-session-key": Shield,
                         "registering-backend": ArrowRight,
                       };
