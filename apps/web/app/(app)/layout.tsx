@@ -37,7 +37,7 @@ import {
 
 import { useWallets, toViemAccount } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
-import { createSmartAccount, BENQI_ABI, emergencyWithdrawAll } from "@/lib/zerodev";
+import { createSmartAccount, emergencyWithdrawAll } from "@/lib/zerodev";
 
 function TopBar({
   smartAccountAddress,
@@ -341,7 +341,7 @@ const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
-type DepositStep = "idle" | "transferring" | "deploying" | "done";
+type DepositStep = "idle" | "transferring" | "done";
 
 function DepositModal({ onClose }: { onClose: () => void }) {
   const [amount, setAmount] = useState("");
@@ -385,6 +385,9 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       const [account] = await walletClient.getAddresses();
       const amountWei = parseUnits(parsedAmount.toString(), 6);
 
+      // Transfer USDC from EOA → smart account as idle balance.
+      // The optimizer will deploy it to the optimal protocol in the next cycle.
+      // This avoids a second MetaMask signature and lets the agent choose the best protocol.
       const transferHash = await walletClient.sendTransaction({
         account,
         to: CONTRACTS.USDC,
@@ -394,18 +397,7 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
 
-      setStep("deploying");
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
-
-      await kernelClient.sendTransaction({
-        calls: [
-          { to: CONTRACTS.USDC, value: 0n, data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "approve", args: [CONTRACTS.BENQI_POOL, amountWei] }) },
-          { to: CONTRACTS.BENQI_POOL, value: 0n, data: encodeFunctionData({ abi: BENQI_ABI, functionName: "mint", args: [amountWei] }) },
-        ],
-      });
-
-      toast.success("Deposited! Now earning yield.");
+      toast.success("Deposited! The optimizer will deploy your funds shortly.");
       setStep("done");
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
       setTimeout(onClose, 1500);
@@ -434,7 +426,7 @@ function DepositModal({ onClose }: { onClose: () => void }) {
             placeholder="0"
             value={amount}
             onChange={(e) => { setAmount(e.target.value); if (step === "done") setStep("idle"); }}
-            disabled={step === "transferring" || step === "deploying"}
+            disabled={step === "transferring"}
             className="w-full bg-transparent text-4xl font-semibold text-[#1A1715] placeholder:text-[#D4CEC7] focus:outline-none disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
           <span className="text-2xl font-medium text-[#B8B0A8] whitespace-nowrap">USDC</span>
@@ -456,12 +448,12 @@ function DepositModal({ onClose }: { onClose: () => void }) {
         {/* Deposit button */}
         <button
           onClick={handleDeposit}
-          disabled={!isValidAmount || !wallet || step === "transferring" || step === "deploying"}
+          disabled={!isValidAmount || !wallet || step === "transferring"}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
         >
-          {(step === "transferring" || step === "deploying") && <Loader2 className="h-4 w-4 animate-spin" />}
+          {step === "transferring" && <Loader2 className="h-4 w-4 animate-spin" />}
           {step === "done" && <CheckCircle2 className="h-4 w-4" />}
-          {step === "idle" ? "Deposit" : step === "transferring" ? "Transferring…" : step === "deploying" ? "Deploying to protocol…" : "Done!"}
+          {step === "idle" ? "Deposit" : step === "transferring" ? "Transferring…" : "Done!"}
         </button>
       </div>
     </div>

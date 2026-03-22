@@ -604,14 +604,19 @@ export async function grantAndSerializeSessionKey(
     policies:      [callPolicy, gasPolicy, rateLimitPolicy, timestampPolicy],
   })
 
-  // Create permission account using the user's kernel account as base
-  const paymasterClient = createZeroDevPaymasterClient({
-    chain: CHAIN, transport: http(PAYMASTER_URL),
-  })
+  // Validate sudo validator exists BEFORE creating the permission account
+  const sudoValidator = kernelAccount.kernelPluginManager?.sudoValidator
+  if (!sudoValidator) {
+    throw new Error("Missing sudo validator on kernel account; cannot approve permission plugin")
+  }
 
+  // Create permission account with sudo + regular plugins.
+  // The SDK's internal plugin manager spreads the permission validator's methods
+  // (including getPluginSerializationParams) onto the kernelPluginManager,
+  // which is required for serializePermissionAccount to work correctly.
   const permissionAccount = await createKernelAccount(publicClient, {
     plugins: {
-      sudo:    kernelAccount.kernelPluginManager?.sudoValidator,
+      sudo:    sudoValidator,
       regular: permissionPlugin,
     },
     entryPoint:    ENTRYPOINT,
@@ -619,39 +624,15 @@ export async function grantAndSerializeSessionKey(
     index: 0n,
   })
 
-  const permissionClient = createKernelAccountClient({
-    account: permissionAccount,
-    chain: CHAIN,
-    bundlerTransport: http(BUNDLER_URL),
-    paymaster: {
-      getPaymasterData(userOperation) {
-        return paymasterClient.sponsorUserOperation({ userOperation })
-      },
-    },
-  })
-
-  const sudoValidator = kernelAccount.kernelPluginManager?.sudoValidator
-  if (!sudoValidator) {
-    throw new Error("Missing sudo validator on kernel account; cannot approve permission plugin")
-  }
-
-  // Explicitly produce the plugin enable signature from the sudo context.
-  // This avoids kernel-side EnableNotApproved reverts during validateUserOp.
-  const enableSignature = await permissionAccount.kernelPluginManager.getPluginEnableSignature(
-    permissionAccount.address,
-    permissionPlugin,
-  )
-
-  // CRITICAL: Serialize WITH the ephemeral session private key embedded so the
-  // backend execution service can reconstruct the signer via deserializePermissionAccount.
-  // The key is ephemeral, policy-constrained, and time-limited.
+  // Standard ZeroDev serialization pattern (matches official examples):
+  // - The SDK internally generates the enable signature via the sudo validator
+  //   (triggers a wallet signature popup for the user)
+  // - The session private key is embedded in the blob so the execution service
+  //   can reconstruct the signer via deserializePermissionAccount
+  // - The key is ephemeral, policy-constrained, and time-limited
   const serializedPermission = await serializePermissionAccount(
-    permissionClient.account,
+    permissionAccount,
     sessionPrivateKey,
-    enableSignature,
-    undefined,
-    permissionPlugin,
-    true,
   )
 
   return {
