@@ -264,15 +264,30 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Auto-trigger deployment when on account step with wallet connected.
-  // useSmartAccount no longer auto-creates — handleAccountDeploy calls
-  // createSmartAccount directly, so no pre-existing address is needed.
+  // Hydration guard — Zustand persist loads from localStorage as a microtask.
+  // By the time this useEffect fires, the store has the correct persisted values.
+  // This prevents false-positive "new user" detection during SSR→client hydration.
+  const [clientReady, setClientReady] = useState(false);
+  useEffect(() => { setClientReady(true); }, []);
+
+  // Auto-trigger deployment ONLY for genuinely new users (no stored smart account).
+  // MUST wait for clientReady to avoid firing before Zustand hydration completes
+  // — otherwise returning users get a MetaMask popup on every app launch.
   useEffect(() => {
-    if (formStep === "account" && wallet && !deployGuardRef.current && deployPhase === "idle") {
+    if (!clientReady || !wallet || deployGuardRef.current || deployPhase !== "idle" || formStep !== "account") return;
+    // After hydration, check the actual persisted store value
+    const storedAddr = usePortfolioStore.getState().smartAccountAddress;
+    if (storedAddr) {
+      // Returning user — skip deploy, jump to strategy
+      setDeployPhase("deployed");
+      deployGuardRef.current = true;
+      setFormStep("strategy");
+    } else {
+      // Genuinely new user — deploy smart account
       handleAccountDeploy();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formStep, wallet, deployPhase]);
+  }, [clientReady, wallet, deployPhase, formStep]);
 
   // Deploy smart account on-chain & approve all protocols (Signature 1)
   const handleAccountDeploy = async () => {

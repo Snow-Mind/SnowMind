@@ -758,17 +758,23 @@ class Rebalancer:
         withdrawals: list[tuple[str, Decimal]] = []  # (protocol_id, usd_amount)
         deposits: list[tuple[str, Decimal]] = []
 
+        # Dust threshold for individual moves — intentionally low ($0.01)
+        # because all strategic gating (beat margin, delta check, profitability)
+        # already happened in steps 6-8b above. This is only to avoid zero-value
+        # calls to the execution service.
+        _MOVE_DUST = Decimal("0.01")
+
         for protocol_id, target_usd in target_allocations.items():
             current_usd = current.get(protocol_id, Decimal("0"))
             delta = target_usd - current_usd
-            if delta < Decimal("-1"):
+            if delta < -_MOVE_DUST:
                 withdrawals.append((protocol_id, abs(delta)))
-            elif delta > Decimal("1"):
+            elif delta > _MOVE_DUST:
                 deposits.append((protocol_id, delta))
 
         # Check for protocols being fully exited (in current but not in target)
         for protocol_id, current_usd in current.items():
-            if protocol_id not in target_allocations and current_usd > Decimal("1"):
+            if protocol_id not in target_allocations and current_usd > _MOVE_DUST:
                 withdrawals.append((protocol_id, current_usd))
 
         if not withdrawals and not deposits:

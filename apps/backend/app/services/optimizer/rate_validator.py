@@ -29,7 +29,7 @@ class RateValidator:
     """
 
     TWAP_WINDOW_SECONDS = 900        # 15 minutes
-    DEFILLAMA_DIVERGENCE_THRESHOLD = Decimal("0.15")  # 15% — allows normal DeFi Llama data lag
+    DEFILLAMA_DIVERGENCE_THRESHOLD = Decimal("0.15")  # 15% default for lending pools
     VELOCITY_SPIKE_THRESHOLD = Decimal("0.25")        # 25% jump between reads
     SANITY_MAX_APY = Decimal("0.25")                  # 25% APY — flag anything above
     MAX_SINGLE_MOVE_PCT = Decimal("0.30")             # Doc: cap single rebalance at 30%
@@ -40,6 +40,17 @@ class RateValidator:
         "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",   # Benqi USDC
         "euler_v2": "e1db168e-7c9d-4285-9d3f-ba83a9ecf105",  # Euler V2 Avalanche USDC
         "spark":   "e96cbd55-a0a0-446a-89ba-ada6e2991d50",   # Spark Savings Avalanche USDC
+    }
+
+    # Vault-style protocols (convertToAssets / share-price based APY) have
+    # naturally higher divergence from DefiLlama because their on-chain rate
+    # is a point-in-time daily delta while DefiLlama averages over longer
+    # periods.  Use a wider threshold for these to avoid false halts.
+    _PROTOCOL_DIVERGENCE_OVERRIDES: dict[str, Decimal] = {
+        "spark":             Decimal("0.35"),  # 35% — DSR-style, daily governance-set rate
+        "euler_v2":          Decimal("0.25"),  # 25% — ERC-4626 vault
+        "silo_savusd_usdc":  Decimal("0.30"),  # 30% — Silo vault
+        "silo_susdp_usdc":   Decimal("0.30"),  # 30% — Silo vault
     }
 
     def __init__(self):
@@ -155,15 +166,19 @@ class RateValidator:
         if defillama_apy == 0:
             return True
 
+        threshold = self._PROTOCOL_DIVERGENCE_OVERRIDES.get(
+            protocol_id, self.DEFILLAMA_DIVERGENCE_THRESHOLD
+        )
         divergence = abs(on_chain_apy - defillama_apy) / defillama_apy
-        if divergence > self.DEFILLAMA_DIVERGENCE_THRESHOLD:
-            logger.error(
+        if divergence > threshold:
+            logger.warning(
                 "DefiLlama divergence on %s: on-chain=%.2f%% DefiLlama=%.2f%% "
-                "divergence=%.1f%% — HALTING",
+                "divergence=%.1f%% > threshold=%.0f%% — skipping this cycle",
                 protocol_id,
                 float(on_chain_apy * 100),
                 float(defillama_apy * 100),
                 float(divergence * 100),
+                float(threshold * 100),
             )
             return False
 

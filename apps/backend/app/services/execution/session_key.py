@@ -85,10 +85,12 @@ def _get_legacy_aes_key() -> bytes:
             msg=b"snowmind-session-key-encryption-v1",
             digestmod=hashlib.sha256,
         ).digest()
-        logger.warning(
-            "SESSION_KEY_ENCRYPTION_KEY not set — auto-derived from SUPABASE_SERVICE_KEY. "
-            "Set SESSION_KEY_ENCRYPTION_KEY in production for explicit control."
-        )
+        if not getattr(_get_encryption_key, "_warned", False):
+            logger.warning(
+                "SESSION_KEY_ENCRYPTION_KEY not set — auto-derived from SUPABASE_SERVICE_KEY. "
+                "Set SESSION_KEY_ENCRYPTION_KEY in production for explicit control."
+            )
+            _get_encryption_key._warned = True  # type: ignore[attr-defined]
         return derived  # 32 bytes from SHA-256
 
     raise RuntimeError(
