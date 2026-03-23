@@ -613,6 +613,16 @@ export async function grantAndSerializeSessionKey(
     throw new Error("Missing sudo validator on kernel account; cannot approve permission plugin")
   }
 
+  // Diagnostic: log the wallet address that will sign the enable hash.
+  // This MUST match the owner stored in the on-chain ECDSA validator module
+  // at 0x845ADb2C711129d4f3966735eD98a9F09fC4cE57.
+  const sudoSignerAddress = (sudoValidator as any)?.account?.address
+    ?? (sudoValidator as any)?.signer?.address
+    ?? "unknown"
+  console.log("[ZeroDev] Enable signature will be signed by:", sudoSignerAddress)
+  console.log("[ZeroDev] Session key address:", sessionKeyAccount.address)
+  console.log("[ZeroDev] Smart account address:", kernelAccount.address)
+
   // Create permission account with sudo + regular plugins.
   // The SDK's internal plugin manager spreads the permission validator's methods
   // (including getPluginSerializationParams) onto the kernelPluginManager,

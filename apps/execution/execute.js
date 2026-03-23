@@ -285,7 +285,71 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     timestamp: new Date().toISOString(),
   }))
 
+  // ── Diagnostic: verify on-chain state before building UserOp ──
+  // Query the ECDSA validator module for the stored owner to compare with
+  // the wallet address that signed the enable hash during serialization.
+  const ECDSA_VALIDATOR_MODULE = "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57"
+  try {
+    const [storedOwner, currentNonce] = await Promise.all([
+      publicClient.readContract({
+        address: ECDSA_VALIDATOR_MODULE,
+        abi: [{
+          name: "ecdsaValidatorStorage",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ type: "address" }],
+          outputs: [{ type: "address" }],
+        }],
+        functionName: "ecdsaValidatorStorage",
+        args: [permissionAccount.address],
+      }),
+      publicClient.readContract({
+        address: permissionAccount.address,
+        abi: [{
+          name: "currentNonce",
+          type: "function",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [{ type: "uint32" }],
+        }],
+        functionName: "currentNonce",
+      }),
+    ])
+
+    // Inspect kernel plugin manager for enable signature presence
+    const kpm = permissionAccount.kernelPluginManager
+    const hasPluginEnableSig = typeof kpm?.getPluginEnableSignature === "function"
+    const activeMode = kpm?.activeValidatorMode ?? "unknown"
+    const hasRegular = !!kpm?.regularValidator
+    const hasSudo = !!kpm?.sudoValidator
+
+    console.log(JSON.stringify({
+      level: "info",
+      action: "onchain_state_diagnostic",
+      smartAccount: permissionAccount.address,
+      ecdsaValidatorOwner: storedOwner,
+      currentNonce: Number(currentNonce),
+      pluginManager: {
+        activeMode,
+        hasRegular,
+        hasSudo,
+        hasPluginEnableSig,
+      },
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (diagErr) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "onchain_diagnostic_failed",
+      error: diagErr?.message?.slice(0, 300),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
   const clientConfig = {
+    // SDK 5.4.x migration: client is required for on-chain reads during
+    // UserOp construction (enable mode state checks, gas estimation, etc.)
+    client: publicClient,
     account: permissionAccount,
     chain: CHAIN,
     bundlerTransport: http(BUNDLER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
@@ -310,6 +374,7 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
 
   return {
     client,
+    publicClient,
     permissionAccount,
     permissionAccountAddress: permissionAccount.address,
   }
@@ -389,7 +454,7 @@ export async function executeRebalance({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
-  const { client: kernelClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
+  const { client: kernelClient, publicClient: execPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
     { withPaymaster: true },
@@ -615,9 +680,8 @@ export async function executeRebalance({
   }))
 
   // Pre-flight: check if smart account is deployed (helps diagnose session key issues)
-  const publicClient = createPublicClient({ chain: CHAIN, transport: http(process.env.AVALANCHE_RPC_URL) })
   try {
-    const code = await publicClient.getBytecode({ address: smartAccountAddress })
+    const code = await execPublicClient.getBytecode({ address: smartAccountAddress })
     const isDeployed = code && code !== "0x" && code.length > 2
     console.log(JSON.stringify({
       level: "info", action: "preflight_check",
@@ -696,7 +760,7 @@ export async function executeWithdrawal({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
-  const { client: kernelClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
+  const { client: kernelClient, publicClient: wdPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
     { withPaymaster: true },
