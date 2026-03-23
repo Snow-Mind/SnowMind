@@ -24,7 +24,7 @@ import {
 } from "viem"
 import { avalanche } from "viem/chains"
 import { privateKeyToAccount } from "viem/accounts"
-import { recoverTypedDataAddress } from "viem"
+import { recoverTypedDataAddress, recoverMessageAddress } from "viem"
 
 const CHAIN_ID = 43114
 const CHAIN = avalanche
@@ -797,6 +797,7 @@ export async function executeRebalance({
     let backendValidationId = "none"
     let backendSelectorDataHash = "none"
     let backendDomain = "none"
+    let eip191RecoveredSigner = "not_computed"
 
     if (enableSig && enableDataHex && regularValidator && sdkNonce !== null) {
       try {
@@ -851,6 +852,18 @@ export async function executeRebalance({
           ...backendTypedData,
           signature: enableSig,
         })
+
+        // HYPOTHESIS CHECK: If Privy uses personal_sign (EIP-191) instead of
+        // eth_signTypedData_v4 (EIP-712), recovering via EIP-191 should give
+        // the correct owner address.
+        try {
+          eip191RecoveredSigner = await recoverMessageAddress({
+            message: { raw: backendTypedDataHash },
+            signature: enableSig,
+          })
+        } catch (e) {
+          eip191RecoveredSigner = `error: ${e?.message?.slice(0, 200)}`
+        }
       } catch (e) {
         backendRecoveredSigner = `error: ${e?.message?.slice(0, 200)}`
       }
@@ -896,6 +909,10 @@ export async function executeRebalance({
       backendRecoveredSigner,
       ecdsaOwner,
       backendSignerMatchesOwner,
+      eip191RecoveredSigner,
+      eip191MatchesOwner: typeof eip191RecoveredSigner === "string" && typeof ecdsaOwner === "string"
+        ? eip191RecoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
+        : false,
       actionSelector: action?.selector ?? "null",
       actionAddress: action?.address ?? "null",
       actionHookAddress: action?.hook?.address ?? "none",

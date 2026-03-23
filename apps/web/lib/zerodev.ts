@@ -29,6 +29,8 @@ import {
   parseUnits,
   keccak256,
   hashTypedData,
+  recoverTypedDataAddress,
+  recoverMessageAddress,
   type PublicClient,
 } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
@@ -677,6 +679,40 @@ export async function grantAndSerializeSessionKey(
     console.log("[ZeroDev] Frontend nonce:", typedData.message.nonce)
     console.log("[ZeroDev] Frontend selectorDataHash:", keccak256(typedData.message.selectorData))
     console.log("[ZeroDev] Frontend domain:", JSON.stringify(typedData.domain))
+
+    // CRITICAL: Recover the actual signer from the enable signature.
+    // If this does NOT match sudoSignerAddress (0x97950...), then the Privy
+    // wallet's signing key does not correspond to its reported address.
+    const frontendRecoveredSigner = await recoverTypedDataAddress({
+      ...typedData,
+      signature: enableSig,
+    })
+    console.log("[ZeroDev] Frontend recoveredSigner (EIP-712):", frontendRecoveredSigner)
+    console.log("[ZeroDev] Frontend signerMatchesOwner:", frontendRecoveredSigner.toLowerCase() === sudoSignerAddress.toLowerCase())
+
+    // HYPOTHESIS CHECK: If Privy's toViemAccount uses personal_sign (EIP-191)
+    // instead of eth_signTypedData_v4 (EIP-712), then recovering with EIP-191
+    // format should give the correct signer address.
+    const tdHash = hashTypedData(typedData)
+    const eip191Recovered = await recoverMessageAddress({
+      message: { raw: tdHash as `0x${string}` },
+      signature: enableSig,
+    })
+    console.log("[ZeroDev] Frontend recoveredSigner (EIP-191):", eip191Recovered)
+    console.log("[ZeroDev] EIP-191 matches owner?:", eip191Recovered.toLowerCase() === sudoSignerAddress.toLowerCase())
+
+    if (frontendRecoveredSigner.toLowerCase() !== sudoSignerAddress.toLowerCase()) {
+      console.error(
+        "[ZeroDev] SIGNER MISMATCH! The Privy wallet signed with key",
+        frontendRecoveredSigner,
+        "but sudoValidator reports address",
+        sudoSignerAddress,
+        "— this will cause EnableNotApproved on-chain.",
+        eip191Recovered.toLowerCase() === sudoSignerAddress.toLowerCase()
+          ? "*** EIP-191 MATCHES! Privy is using personal_sign instead of signTypedData ***"
+          : "EIP-191 also does not match — unknown signing issue"
+      )
+    }
   } catch (e) {
     console.log("[ZeroDev] Could not compute typedDataHash:", (e as Error)?.message?.slice(0, 200))
   }
