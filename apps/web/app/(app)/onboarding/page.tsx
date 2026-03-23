@@ -506,6 +506,7 @@ export default function OnboardingPage() {
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
           expiresAt: sessionKeyResult.expiresAt,
           allowedProtocols: Array.from(effectiveSelectedProtocols),
+          force: true,
         });
       } catch {
         // Non-critical — the register endpoint also tries to store it

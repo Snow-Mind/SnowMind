@@ -170,6 +170,7 @@ export const api = {
       expiresAt: number;
       allowedProtocols?: string[];
       initialAllocation?: Record<string, string>;
+      force?: boolean;
     },
   ) =>
     request<{ success: boolean; keyId: string }>(

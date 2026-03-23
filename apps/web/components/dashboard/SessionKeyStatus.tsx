@@ -103,6 +103,7 @@ export default function SessionKeyStatus() {
         sessionKeyAddress,
         expiresAt,
         allowedProtocols: ACTIVE_PROTOCOLS as unknown as string[],
+        force: true,
       });
 
       toast.success("Session key granted — agent activated");

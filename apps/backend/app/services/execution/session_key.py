@@ -202,6 +202,8 @@ def store_session_key(
     db: Client,
     account_id: UUID,
     session_key_data: dict,
+    *,
+    force: bool = False,
 ) -> str:
     """Encrypt and persist a session key for *account_id*.
 
@@ -212,33 +214,36 @@ def store_session_key(
 
     Renewal guard: rejects the request if the current active key still has
     more than 24 hours until expiry to prevent unnecessary key churn.
+    Pass ``force=True`` to bypass the renewal guard (e.g. after a signing fix
+    that invalidates the old session key's on-chain enable signature).
 
     Returns the UUID of the new ``session_keys`` row.
     """
     # ── Renewal guard — reject if current key has >24h remaining ─────
-    now = datetime.now(timezone.utc)
-    now_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    existing = (
-        db.table("session_keys")
-        .select("expires_at")
-        .eq("account_id", str(account_id))
-        .eq("is_active", True)
-        .gte("expires_at", now_z)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    if existing.data:
-        existing_expires = datetime.fromisoformat(existing.data[0]["expires_at"])
-        # Ensure timezone-aware comparison
-        if existing_expires.tzinfo is None:
-            existing_expires = existing_expires.replace(tzinfo=timezone.utc)
-        remaining = existing_expires - now
-        if remaining > timedelta(hours=24):
-            raise ValueError(
-                f"Active session key still has {remaining.total_seconds() / 3600:.1f}h remaining "
-                f"(>24h). Renewal not needed yet."
-            )
+    if not force:
+        now = datetime.now(timezone.utc)
+        now_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        existing = (
+            db.table("session_keys")
+            .select("expires_at")
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .gte("expires_at", now_z)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            existing_expires = datetime.fromisoformat(existing.data[0]["expires_at"])
+            # Ensure timezone-aware comparison
+            if existing_expires.tzinfo is None:
+                existing_expires = existing_expires.replace(tzinfo=timezone.utc)
+            remaining = existing_expires - now
+            if remaining > timedelta(hours=24):
+                raise ValueError(
+                    f"Active session key still has {remaining.total_seconds() / 3600:.1f}h remaining "
+                    f"(>24h). Renewal not needed yet."
+                )
     # Accept both frontend camelCase and direct snake_case fields
     raw_key = (
         session_key_data.get("serializedPermission")

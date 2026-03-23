@@ -310,6 +310,7 @@ class StoreSessionKeyRequest(BaseModel):
     session_key_address: str = Field(..., alias="sessionKeyAddress")
     expires_at: int | str = Field(..., alias="expiresAt")
     allowed_protocols: list[str] | None = Field(None, alias="allowedProtocols")
+    force: bool = Field(False, description="Bypass renewal guard and always store the new session key")
     initial_allocation: dict | None = Field(
         None,
         alias="initialAllocation",
@@ -354,7 +355,7 @@ async def store_account_session_key(
         "allowedProtocols": req.allowed_protocols or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
     }
     try:
-        key_id = store_session_key(db, account_id, session_key_data)
+        key_id = store_session_key(db, account_id, session_key_data, force=req.force)
     except ValueError as exc:
         # Renewal guard: active key still has >24h remaining — this is OK
         if "Renewal not needed" in str(exc) or "remaining" in str(exc):
