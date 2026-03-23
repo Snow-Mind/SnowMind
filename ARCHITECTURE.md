@@ -93,7 +93,7 @@ Euler and Silo vaults are opt-in: fully active in the optimizer but not enabled 
 - **Type**: Lending pool with floating utilization-based APY
 - **Interface**: `supply(asset, amount, onBehalfOf, referralCode)` / `withdraw(asset, amount, to)`
 - **APY Source**: `getReserveData(USDC).currentLiquidityRate` → RAY (1e27) → annualized
-- **TVL Cap**: 15% of total USDC supplied (prevents market impact)
+- **TVL Cap**: 7.5% of total USDC supplied (prevents market impact)
 - **Risk Score**: 10/10 — battle-tested since 2020, $10B+ TVL globally
 - **Health checks**: Reserve flags (is_active, is_frozen, is_paused), utilization rate, exploit detection
 
@@ -102,7 +102,7 @@ Euler and Silo vaults are opt-in: fully active in the optimizer but not enabled 
 - **Type**: Compound V2 fork with floating utilization-based APY
 - **Interface**: `mint(amount)` / `redeem(qiTokenAmount)`
 - **APY Source**: `supplyRatePerTimestamp()` → annualized (use `exchangeRateStored()` for balance, NOT `exchangeRateCurrent()`)
-- **TVL Cap**: 15% of total USDC supplied
+- **TVL Cap**: 7.5% of total USDC supplied
 - **Risk Score**: 9/10 — established on Avalanche since 2021
 - **Health checks**: Comptroller pause flags (mintGuardianPaused, redeemGuardianPaused), utilization, exploit detection
 
@@ -177,7 +177,7 @@ There is no default "base layer." Every protocol competes on effective APY. The 
 
 ### Why This Works
 
-Spark almost always ranks lower and absorbs overflow — giving it the same practical effect as the old "base layer" design, but without the artificial bias. ERC-4626 vaults (Euler, Silo) still respect the 15% TVL cap since their liquidity can be limited. The algorithm is neutral and APY-driven.
+Spark almost always ranks lower and absorbs overflow — giving it the same practical effect as the old "base layer" design, but without the artificial bias. ERC-4626 vaults (Euler, Silo) still respect the 7.5% TVL cap since their liquidity can be limited. The algorithm is neutral and APY-driven.
 
 ### User Market Selection & Diversification Preferences
 
@@ -339,9 +339,9 @@ SCHEDULER FIRES (every 30 minutes)
 
 15. TVL CAP AUTO-WITHDRAW CHECK [Aave and Benqi only — NOT Spark]
     current_share = current_position / protocol_tvl
-    If current_share > 0.15:
+    If current_share > 0.075:
       → Set max_new_allocation = 0
-      → Flag FORCED_REBALANCE to reduce to exactly 15% cap
+      → Flag FORCED_REBALANCE to reduce to exactly 7.5% cap
 
 16. BEAT MARGIN CHECK
     new_weighted_apy = Σ(new_alloc[p] / total_bal × twap_apy[p]) for each protocol
@@ -518,7 +518,7 @@ Layer 3: Protocol Safety (Backend)
   ├─ Admin pause flag detection (Aave reserve flags, Benqi comptroller, Spark vault/PSM3 health, Euler vault health)
   ├─ Utilization monitoring (>90% → no new deposits)
   ├─ TVL minimum ($100K for Aave/Benqi)
-  ├─ TVL cap enforcement (15% of pool, auto-withdraw if exceeded)
+  ├─ TVL cap enforcement (7.5% of pool, auto-withdraw if exceeded)
   ├─ Circuit breaker (3 RPC failures → exclude, resets on success)
   └─ Current-protocol health enforcement: if the protocol you're IN fails any check,
      force-exit to best healthy alternative regardless of APY delta
@@ -907,7 +907,7 @@ ZeroDev paymaster must be funded. If it runs empty, all UserOperations fail sile
 | Silo opt-in only | Growing protocol, isolated markets. Lower TVL than established protocols. |
 | No base layer | Pure APY ranking is neutral and correct. Spark absorbs overflow naturally. |
 | No 30% move cap | If pre-checks pass, they pass for full amount. Truncating is incoherent. |
-| No TVL cap for Spark only | PSM3 fixed-rate doesn't compress under deposits. Euler/Silo have the standard 15% TVL cap like Aave/Benqi. |
+| No TVL cap for Spark only | PSM3 fixed-rate doesn't compress under deposits. Euler/Silo have the standard 7.5% TVL cap like Aave/Benqi. |
 | 0.1% beat margin | Low enough to capture real improvements. Low Avalanche gas makes it viable. |
 | Proportional fee at every withdrawal | Prevents the partial-withdrawal fee-drain exploit. |
 | userEOA from on-chain | DB-stored EOA is spoofable by DB compromise. On-chain is immutable. |

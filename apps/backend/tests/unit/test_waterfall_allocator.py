@@ -74,7 +74,7 @@ def test_small_deposit_goes_to_best_protocol():
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl,
-        tvl_cap_pct=D("0.15"),
+        tvl_cap_pct=D("0.075"),
         max_exposure_pct=D("1.00"),  # max_yield mode
         base_beat_margin=D("0.005"),
     )
@@ -109,7 +109,7 @@ def test_large_deposit_splits_with_exposure_cap():
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl,
-        tvl_cap_pct=D("0.15"),
+        tvl_cap_pct=D("0.075"),
         max_exposure_pct=D("0.40"),  # 40% = $20K cap per protocol
         base_beat_margin=D("0.005"),
     )
@@ -130,13 +130,13 @@ def test_large_deposit_splits_with_exposure_cap():
 # ── Test 3: TVL cap limits allocation ────────────────────────────────────────
 
 def test_tvl_cap_limits_allocation():
-    """Protocol with small TVL ($100K): 15% cap = $15K max. Deposit $20K."""
+    """Protocol with small TVL ($100K): 7.5% cap = $7.5K max. Deposit $20K."""
     protocols = _make_protocols({
         "small_pool": "0.06",
         "aave_v3": "0.0375",
     })
     tvl = _make_tvl({
-        "small_pool": "100000",  # 15% = $15K cap
+        "small_pool": "100000",  # 7.5% = $7.5K cap
         "aave_v3": "100000000",
     })
     inp = OptimizerInput(
@@ -146,17 +146,17 @@ def test_tvl_cap_limits_allocation():
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl,
-        tvl_cap_pct=D("0.15"),
+        tvl_cap_pct=D("0.075"),
         max_exposure_pct=D("1.00"),
         base_beat_margin=D("0.005"),
     )
     _print_result("Test 3 — TVL cap", result)
 
     assert result.status == "optimal"
-    # small_pool capped at 15% of $100K = $15K
-    assert float(result.allocations["small_pool"]) == pytest.approx(15000.0, abs=1.0)
-    # Remainder ($5K) goes to aave_v3 (fallback)
-    assert float(result.allocations["aave_v3"]) == pytest.approx(5000.0, abs=1.0)
+    # small_pool capped at 7.5% of $100K = $7.5K
+    assert float(result.allocations["small_pool"]) == pytest.approx(7500.0, abs=1.0)
+    # Remainder ($12.5K) goes to aave_v3 (fallback)
+    assert float(result.allocations["aave_v3"]) == pytest.approx(12500.0, abs=1.0)
 
 
 # ── Test 4: No protocol beats base layer → 100% to base layer ───────────────

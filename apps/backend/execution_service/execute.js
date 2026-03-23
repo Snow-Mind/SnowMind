@@ -699,6 +699,76 @@ export async function executeRebalance({
     }))
   }
 
+  // ── Deep enable-signature debugging ──
+  // Capture the plugin manager state right before UserOp submission.
+  // This logs whether the SDK thinks the plugin is already enabled,
+  // the enable signature details, and the validator configuration.
+  try {
+    const kpm = permissionAccount.kernelPluginManager
+    const regularValidator = kpm?.regularValidator
+    const sudoValidator = kpm?.sudoValidator
+    const action = typeof kpm?.getAction === "function" ? kpm.getAction() : null
+    const validityData = typeof kpm?.getValidityData === "function" ? kpm.getValidityData() : null
+
+    // Check if the plugin is already enabled on-chain
+    let pluginEnabledOnChain = "unknown"
+    if (typeof kpm?.isPluginEnabled === "function" && action?.selector) {
+      try {
+        pluginEnabledOnChain = await kpm.isPluginEnabled(smartAccountAddress, action.selector)
+      } catch (e) { pluginEnabledOnChain = `error: ${e?.message?.slice(0, 100)}` }
+    }
+
+    // Get the enable signature if available
+    let enableSigLength = 0
+    let enableSigPrefix = ""
+    if (typeof kpm?.getPluginEnableSignature === "function") {
+      try {
+        const sig = await kpm.getPluginEnableSignature(smartAccountAddress)
+        enableSigLength = sig?.length ?? 0
+        enableSigPrefix = sig ? sig.slice(0, 20) + "..." : "null"
+      } catch (e) { enableSigPrefix = `error: ${e?.message?.slice(0, 100)}` }
+    }
+
+    // Get enable typed data (the hash the owner must sign)
+    let enableTypedDataHash = "unavailable"
+    if (typeof kpm?.getPluginsEnableTypedData === "function") {
+      try {
+        const td = await kpm.getPluginsEnableTypedData(smartAccountAddress)
+        enableTypedDataHash = JSON.stringify({
+          domain: td?.domain,
+          primaryType: td?.primaryType,
+          // Only log field names and types, not values (too large)
+          messageFields: td?.message ? Object.keys(td.message) : [],
+        })
+      } catch (e) { enableTypedDataHash = `error: ${e?.message?.slice(0, 200)}` }
+    }
+
+    console.log(JSON.stringify({
+      level: "info",
+      action: "enable_signature_debug",
+      smartAccountAddress,
+      pluginEnabledOnChain,
+      activeValidatorMode: kpm?.activeValidatorMode ?? "unknown",
+      regularValidatorAddress: regularValidator?.address ?? "null",
+      regularValidatorType: regularValidator?.validatorType ?? "null",
+      sudoValidatorAddress: sudoValidator?.address ?? "null",
+      actionSelector: action?.selector ?? "null",
+      actionAddress: action?.address ?? "null",
+      validityData: validityData ? { validAfter: Number(validityData.validAfter), validUntil: Number(validityData.validUntil) } : null,
+      enableSigLength,
+      enableSigPrefix,
+      enableTypedDataHash,
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (debugErr) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "enable_signature_debug_failed",
+      error: debugErr?.message?.slice(0, 300),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
@@ -741,6 +811,24 @@ export async function executeRebalance({
         )
       }
     }
+    // ── Full error dump for any unhandled rebalance failure ──
+    console.log(JSON.stringify({
+      level: "error",
+      action: "rebalance_failed_full_dump",
+      smartAccountAddress,
+      permissionAccountAddress,
+      errorName: err?.name,
+      errorMessage: err?.message?.slice(0, 500),
+      shortMessage: err?.shortMessage?.slice(0, 500),
+      details: err?.details?.slice(0, 500),
+      causeMessage: err?.cause?.message?.slice(0, 500),
+      causeDetails: err?.cause?.details?.slice(0, 500),
+      metaMessages: err?.metaMessages,
+      // Walk the cause chain for nested errors
+      causeCauseMessage: err?.cause?.cause?.message?.slice(0, 300),
+      causeCauseDetails: err?.cause?.cause?.details?.slice(0, 300),
+      timestamp: new Date().toISOString(),
+    }))
     throw new Error(formatExecutionError(err))
   }
 }

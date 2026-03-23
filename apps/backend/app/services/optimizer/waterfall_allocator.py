@@ -1,7 +1,7 @@
 """Waterfall allocator — priority-ordered fill with TVL caps and a base layer.
 
 Sorts protocols by APY descending, fills each up to
-min(user_exposure_cap, 15% of protocol TVL), and parks any remainder in
+min(user_exposure_cap, 7.5% of protocol TVL), and parks any remainder in
 the base layer (Spark on mainnet) as the stable yield floor.
 
 Used by the /simulate endpoint. The live rebalancer uses allocator.py.
@@ -28,7 +28,7 @@ _ONE = Decimal("1")
 def waterfall_allocate(
     inp: OptimizerInput,
     tvl_by_protocol: dict[str, Decimal],
-    tvl_cap_pct: Decimal = Decimal("0.15"),
+    tvl_cap_pct: Decimal = Decimal("0.075"),
     max_exposure_pct: Decimal = Decimal("1.00"),
     base_beat_margin: Decimal = Decimal("0.005"),
     base_layer_protocol_id: str = "spark",
@@ -46,7 +46,7 @@ def waterfall_allocate(
     Args:
         inp: Standard OptimizerInput (protocols, total_amount, current allocations, gas).
         tvl_by_protocol: Protocol ID → TVL in USD.
-        tvl_cap_pct: Max fraction of a protocol's TVL we can own (default 15%).
+        tvl_cap_pct: Max fraction of a protocol's TVL we can own (default 7.5%).
         max_exposure_pct: Max fraction of total deposit in any single protocol.
         base_beat_margin: Minimum APY advantage over base layer to justify allocation.
         base_layer_protocol_id: Protocol ID for the base layer (Spark on mainnet).

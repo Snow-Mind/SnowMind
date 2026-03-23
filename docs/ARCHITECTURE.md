@@ -103,14 +103,14 @@ The optimizer uses a **waterfall (APY-ranked greedy fill)** algorithm:
 ```
 1. Rank all healthy protocols by effective TWAP APY (highest first)
 2. For each protocol in ranked order:
-   - Cap = min(15% of protocol TVL, user exposure cap)
+   - Cap = min(7.5% of protocol TVL, user exposure cap)
    - Allocate min(remaining_funds, cap)
 3. Park any remainder in the base layer (Spark — fixed-rate floor)
 4. If remaining > 0 after all protocols: hold idle in smart account
 ```
 
 Constraints enforced:
-- **15% TVL cap** per protocol (prevents market impact)
+- **7.5% TVL cap** per protocol (prevents market impact)
 - **Diversification preference** controls max protocols and per-protocol cap
 - **Beat margin**: only rebalance if APY improvement exceeds threshold
 - **Profitability gate**: daily yield gain must exceed gas cost (bypassed for initial deployments)
@@ -231,7 +231,7 @@ Layer 2: TWAP + Cross-Validation (off-chain)
          → 25% APY sanity cap
 
 Layer 3: Allocator Constraints (off-chain)
-         → 15% TVL cap per protocol
+         → 7.5% TVL cap per protocol
          → Profitability gate (daily gain > gas)
          → Net-positive gas gate
 
@@ -323,7 +323,7 @@ Why 0.5% margin? Moving money costs gas. If Benqi is only 0.3% better than Aave,
 Safety caps that protect you:
 
 No single protocol gets more than 40% of your deposit
-We never put more than 15% of a protocol's total TVL (so we don't "move the market")
+We never put more than 7.5% of a protocol's total TVL (so we don't "move the market")
 Protocols with less than $100K TVL are skipped entirely
 Files: apps/backend/app/services/optimizer/waterfall_allocator.py  
 
