@@ -125,10 +125,13 @@ async def _do_register(
 
     # Store session key (may fail on KMS/encryption — non-fatal for account
     # creation since the user can re-grant from the dashboard).
+    # force=True because re-running onboarding means the user explicitly wants
+    # the new session key to replace any old one (the old one's enable signature
+    # may be invalid after a signing fix deployment).
     session_key_stored = False
     if req.session_key_data:
         try:
-            store_session_key(db, account["id"], req.session_key_data)
+            store_session_key(db, account["id"], req.session_key_data, force=True)
             session_key_stored = True
         except Exception as exc:
             logger.error(
@@ -161,10 +164,12 @@ async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
     """Best-effort immediate rebalance after registration.
 
     Runs as a fire-and-forget task so the registration response is not delayed.
-    If it fails (e.g. no idle USDC yet), the cron scheduler will pick it up.
+    Retries up to 3 times with exponential backoff (5s, 15s, 45s).
+    If all retries fail (e.g. funds already deployed from frontend), the cron
+    scheduler will pick it up on its next cycle.
     Uses a per-account lock to prevent duplicate concurrent submissions.
     """
-    await asyncio.sleep(3)  # Brief delay for session key to fully propagate
+    await asyncio.sleep(5)  # Wait for session key to fully propagate
 
     # Acquire per-account lock — if another rebalance is already running, skip
     lock = _rebalance_locks.setdefault(account_id, asyncio.Lock())
@@ -173,13 +178,41 @@ async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
         return
 
     async with lock:
-        try:
-            from app.services.optimizer.rebalancer import Rebalancer
-            rebalancer = Rebalancer()
-            result = await rebalancer.check_and_rebalance(account_id, address)
-            logger.info("Initial rebalance for %s: %s", address, result.get("status", "unknown"))
-        except Exception as exc:
-            logger.warning("Initial rebalance failed for %s (cron will retry): %s", address, exc)
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                from app.services.optimizer.rebalancer import Rebalancer
+                rebalancer = Rebalancer()
+                result = await rebalancer.check_and_rebalance(account_id, address)
+                res_status = result.get("status", "unknown")
+                logger.info(
+                    "Initial rebalance for %s attempt %d/%d: %s",
+                    address, attempt, max_retries, res_status,
+                )
+                # Success or "no action needed" (funds already deployed from frontend)
+                return
+            except Exception as exc:
+                exc_msg = str(exc)
+                # Non-retryable errors: duplicate permissionHash, user must re-grant
+                if "duplicate permissionhash" in exc_msg.lower():
+                    logger.warning(
+                        "Initial rebalance for %s: duplicate permissionHash — "
+                        "funds may already be deployed from frontend, stopping retries.",
+                        address,
+                    )
+                    return
+                if attempt < max_retries:
+                    delay = 5 * (3 ** (attempt - 1))  # 5s, 15s, 45s
+                    logger.warning(
+                        "Initial rebalance attempt %d/%d failed for %s: %s — retrying in %ds",
+                        attempt, max_retries, address, exc_msg[:200], delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        "Initial rebalance failed for %s after %d attempts (cron will retry): %s",
+                        address, max_retries, exc_msg[:200],
+                    )
 
 
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)

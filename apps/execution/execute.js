@@ -963,6 +963,13 @@ export async function executeRebalance({
         detail: "The permissionHash is already registered on-chain or in the bundler mempool. " +
           "This usually means a concurrent rebalance attempt already submitted. " +
           "The user may need to re-grant their session key to generate a fresh permissionHash.",
+        originalShortMessage: err?.shortMessage?.slice(0, 500),
+        originalMessage: err?.message?.slice(0, 500),
+        originalDetails: err?.details?.slice(0, 500),
+        originalCauseMessage: err?.cause?.message?.slice(0, 500),
+        originalCauseDetails: err?.cause?.details?.slice(0, 500),
+        originalCauseShortMessage: err?.cause?.shortMessage?.slice(0, 500),
+        allTextSnippet: allText.slice(0, 800),
         timestamp: new Date().toISOString(),
       }))
       throw new Error(
