@@ -147,6 +147,8 @@ class RPCManager:
         """Find the next available provider in priority order.
 
         Re-enables providers that were rate-limited after a cooldown period.
+        Emergency provider is only force-enabled if its cooldown has elapsed,
+        preventing infinite 429 loops when all providers are rate-limited.
         """
         now = time.time()
         for p in self._providers:
@@ -163,11 +165,19 @@ class RPCManager:
         for p in self._providers:
             if p.is_available and p.url != self._active_provider_url:
                 return p
-        # If all are unavailable, try emergency as last resort
+        # If all are unavailable, try emergency as last resort —
+        # but only if its rate-limit cooldown has elapsed.
         for p in self._providers:
             if p.tier == ProviderTier.EMERGENCY:
-                p.is_available = True  # Always allow emergency
-                return p
+                if p.is_available:
+                    return p
+                # Only force-enable emergency after cooldown to prevent
+                # infinite 429 loop when all providers are rate-limited
+                if p.last_failure_at == 0 or (now - p.last_failure_at > RATE_LIMIT_COOLDOWN_SECONDS):
+                    p.is_available = True
+                    p.consecutive_failures = 0
+                    logger.info("Emergency provider re-enabled after cooldown")
+                    return p
         return None
 
     def _rotate_provider(self) -> bool:

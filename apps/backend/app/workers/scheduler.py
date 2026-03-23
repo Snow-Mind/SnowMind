@@ -320,23 +320,54 @@ class SnowMindScheduler:
     # ── Spark snapshot seed ────────────────────────────────────────────────
 
     async def _seed_spark_snapshot_if_needed(self) -> None:
-        """Seed the first Spark convertToAssets snapshot if table is empty.
+        """Seed the first Spark convertToAssets snapshot if table is empty,
+        or purge stale 1e6-scale snapshots that cause scale mismatch errors.
 
-        Without at least one snapshot, Spark APY will always be 0%.
+        Without at least one 1e18-scale snapshot, Spark APY will always be 0%
+        or fall back to the short-term share-price estimator.
         This runs once on startup, 10 seconds after the scheduler starts.
         """
         try:
             result = (
                 self.db.table("spark_convert_snapshots")
-                .select("id")
-                .limit(1)
+                .select("id, convert_to_assets_value")
+                .order("snapshot_at", desc=True)
+                .limit(5)
                 .execute()
             )
             if not result.data:
                 logger.info("Spark snapshot table is empty — seeding initial snapshot")
                 await RateFetcher().save_spark_daily_snapshot()
+                return
+
+            # Check if any snapshots are stale 1e6-scale values (< 10^12).
+            # These cause "scale mismatch" errors on every rate fetch.
+            # Delete them and re-seed if no valid 1e18-scale snapshots remain.
+            from decimal import Decimal
+            stale_ids = [
+                row["id"] for row in result.data
+                if Decimal(str(row["convert_to_assets_value"])) < Decimal("1000000000000")
+            ]
+            if stale_ids:
+                logger.warning(
+                    "Found %d stale 1e6-scale Spark snapshots — purging",
+                    len(stale_ids),
+                )
+                for sid in stale_ids:
+                    self.db.table("spark_convert_snapshots").delete().eq("id", sid).execute()
+
+                # Check if any valid snapshots remain
+                remaining = (
+                    self.db.table("spark_convert_snapshots")
+                    .select("id")
+                    .limit(1)
+                    .execute()
+                )
+                if not remaining.data:
+                    logger.info("No valid Spark snapshots remain — re-seeding")
+                    await RateFetcher().save_spark_daily_snapshot()
             else:
-                logger.info("Spark snapshot table already has data — skipping seed")
+                logger.info("Spark snapshot table already has valid 1e18-scale data — skipping seed")
         except Exception as e:
             logger.error("Failed to seed Spark snapshot: %s", e)
 
