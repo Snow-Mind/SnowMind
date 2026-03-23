@@ -181,20 +181,18 @@ export async function createSmartAccount(walletClient: WalletClientLike) {
   // We separate them so the address is available even if bundler is down.
   let kernelClient
   try {
-    const paymasterClient = createZeroDevPaymasterClient({
-      chain: CHAIN,
-      transport: http(PAYMASTER_URL),
-    })
-
+    // Pass the ZeroDev paymaster client directly — NOT wrapped in { getPaymasterData }.
+    // The SDK internally extracts both getPaymasterStubData (for gas estimation)
+    // and getPaymasterData (for final sponsorship). Wrapping manually omits
+    // getPaymasterStubData which causes EnableNotApproved during estimation.
     kernelClient = createKernelAccountClient({
       account: kernelAccount,
       chain: CHAIN,
       bundlerTransport: http(BUNDLER_URL),
-      paymaster: {
-        getPaymasterData(userOperation) {
-          return paymasterClient.sponsorUserOperation({ userOperation })
-        },
-      },
+      paymaster: createZeroDevPaymasterClient({
+        chain: CHAIN,
+        transport: http(PAYMASTER_URL),
+      }),
     })
   } catch (err) {
     console.error("[ZeroDev] Failed to create bundler/paymaster client:", err)
@@ -630,9 +628,46 @@ export async function grantAndSerializeSessionKey(
     index: 0n,
   })
 
+  // ── Pre-activation: enable the permission plugin on-chain ─────────────
+  // Send a minimal UserOp using the permission account so the Kernel V3.1
+  // contract verifies the enable signature and registers the plugin.
+  // After this, the execution service can use the serialized permission
+  // without needing to include the enable signature in every UserOp.
+  // This eliminates EntryPoint AA23/EnableNotApproved errors caused by
+  // paymaster gas estimation simulating validateUserOp with dummy signatures.
+  try {
+    const activationClient = createKernelAccountClient({
+      account: permissionAccount,
+      chain: CHAIN,
+      bundlerTransport: http(BUNDLER_URL),
+      paymaster: createZeroDevPaymasterClient({
+        chain: CHAIN,
+        transport: http(PAYMASTER_URL),
+      }),
+    })
+
+    // USDC.approve(AAVE_POOL, 0) — benign no-op within the call policy
+    await activationClient.sendTransaction({
+      calls: [{
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [contracts.AAVE_POOL, 0n],
+        }),
+      }],
+    })
+    console.log("[ZeroDev] Permission plugin activated on-chain")
+  } catch (activationErr) {
+    // Non-fatal: the execution service can still handle enable flow
+    // with the corrected paymaster configuration
+    console.warn("[ZeroDev] Pre-activation tx failed (execution service will handle enable):", activationErr)
+  }
+
   // Standard ZeroDev serialization pattern (matches official examples):
   // - The SDK internally generates the enable signature via the sudo validator
-  //   (triggers a wallet signature popup for the user)
+  //   (triggers a wallet signature popup for the user if not already cached)
   // - The session private key is embedded in the blob so the execution service
   //   can reconstruct the signer via deserializePermissionAccount
   // - The key is ephemeral, policy-constrained, and time-limited

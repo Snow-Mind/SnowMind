@@ -807,11 +807,14 @@ class Rebalancer:
 
             # Only revoke on errors that definitively mean the session key
             # itself is corrupt, expired, or for the wrong account.
+            # NOTE: "EnableNotApproved" is NOT a definitive session key error —
+            # it can be caused by paymaster gas estimation triggering validateUserOp
+            # with dummy signatures (transient config issue). Revoking on this
+            # destroys the user's valid session key permanently.
             is_definite_session_key_error = (
                 "serializedSessionKey" in err_msg
                 or "No signer" in err_msg
                 or "Session key/account mismatch" in err_msg
-                or "EnableNotApproved" in err_msg
             )
             if is_definite_session_key_error:
                 logger.warning(

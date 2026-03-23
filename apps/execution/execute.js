@@ -232,10 +232,6 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
     transport: http(process.env.AVALANCHE_RPC_URL),
   })
 
-  const paymasterClient = options.withPaymaster
-    ? createZeroDevPaymasterClient({ chain: CHAIN, transport: http(PAYMASTER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }) })
-    : null
-
   const permissionAccount = await deserializePermissionAccount(
     publicClient,
     ENTRYPOINT,
@@ -249,12 +245,17 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
     bundlerTransport: http(BUNDLER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
   }
 
-  if (paymasterClient) {
-    clientConfig.paymaster = {
-      getPaymasterData(userOperation) {
-        return paymasterClient.sponsorUserOperation({ userOperation })
-      },
-    }
+  // Pass the ZeroDev paymaster client directly — NOT wrapped in { getPaymasterData }.
+  // The SDK internally extracts both getPaymasterStubData (for gas estimation)
+  // and getPaymasterData (for final sponsorship). When wrapped manually,
+  // getPaymasterStubData is missing, causing the SDK to call sponsorUserOperation
+  // during estimation. This triggers validateUserOp simulation with a dummy
+  // signature that lacks enable data → EnableNotApproved on first-time plugin use.
+  if (options.withPaymaster) {
+    clientConfig.paymaster = createZeroDevPaymasterClient({
+      chain: CHAIN,
+      transport: http(PAYMASTER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
+    })
   }
 
   const client = createKernelAccountClient(clientConfig)
