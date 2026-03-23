@@ -216,12 +216,14 @@ class Rebalancer:
             total_usd += amt
 
         # 4a. On-chain balance discovery — if allocations table is empty,
-        # scan all enabled protocols for existing positions. This handles
-        # the case where the frontend deployed funds directly but the
-        # allocation was never recorded in the DB.
+        # scan ALL protocols (not just session-key-allowed) for existing
+        # positions. This handles the case where funds were deployed to a
+        # protocol outside the session key's scope (e.g. frontend bug) and
+        # ensures the rebalancer can still detect them for portfolio tracking.
         if not current:
+            all_protocol_ids = set(twap_rates.keys()) | set(allowed_rates.keys())
             discovered = await self._discover_onchain_balances(
-                smart_account_address, set(allowed_rates.keys()),
+                smart_account_address, all_protocol_ids,
             )
             if discovered:
                 logger.info(

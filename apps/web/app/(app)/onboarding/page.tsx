@@ -488,8 +488,15 @@ export default function OnboardingPage() {
       // Phase 3: Deploy funds to top protocol immediately via sudo kernel client.
       // This bypasses the session-key enable flow entirely for the initial allocation,
       // avoiding the "duplicate permissionHash" / EnableNotApproved bundler errors.
+      // IMPORTANT: Only deploy to a protocol the user selected — otherwise the
+      // session key won't cover it and the agent can't manage the position.
       setActivationPhase("deploying-initial-funds");
-      const deployProtocol = topProtocolByApy ?? "aave_v3";
+      const selectedRates = activeRateRows.filter(
+        (r) => effectiveSelectedProtocols.has(r.normalizedProtocolId),
+      );
+      const deployProtocol =
+        selectedRates.slice().sort((a, b) => b.currentApy - a.currentApy)[0]
+          ?.normalizedProtocolId ?? "aave_v3";
       try {
         const deployResult = await deployInitialToProtocol(
           kernelClient,
