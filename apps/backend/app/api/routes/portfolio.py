@@ -185,6 +185,9 @@ async def get_portfolio(
                     existing.amount_usdc = onchain_balance
                     total_deposited += onchain_balance
             else:
+                # Discovered on-chain position not in DB — this is a deposit,
+                # not yield. Track it in original_db_deposits so yield calc
+                # shows correctly (yield = current_value - original_deposits).
                 allocations.append(
                     AllocationResponse(
                         protocol_id=pid,
@@ -195,6 +198,7 @@ async def get_portfolio(
                     )
                 )
                 total_deposited += onchain_balance
+                original_db_deposits += onchain_balance  # FIX: Don't count as yield
         else:
             if existing and existing.amount_usdc > Decimal("0.01"):
                 total_deposited -= existing.amount_usdc
