@@ -27,6 +27,7 @@ import {
   encodeFunctionData,
   maxUint256,
   parseUnits,
+  keccak256,
   type PublicClient,
 } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
@@ -626,6 +627,18 @@ export async function grantAndSerializeSessionKey(
   console.log("[ZeroDev] Enable signature will be signed by:", sudoSignerAddress)
   console.log("[ZeroDev] Session key address:", sessionKeyAccount.address)
   console.log("[ZeroDev] Smart account address:", kernelAccount.address)
+
+  // Diagnostic: log enableData hash so we can compare with backend-side hash
+  // If these don't match, the deserialized validator produces different data
+  try {
+    const frontendEnableData = await (permissionPlugin as any).getEnableData(kernelAccount.address)
+    const frontendPermissionId = (permissionPlugin as any).getIdentifier()
+    console.log("[ZeroDev] Frontend enableData hash:", keccak256(frontendEnableData))
+    console.log("[ZeroDev] Frontend enableData length:", frontendEnableData?.length)
+    console.log("[ZeroDev] Frontend permissionId:", frontendPermissionId)
+  } catch (e) {
+    console.log("[ZeroDev] Could not log enableData hash:", (e as Error)?.message?.slice(0, 100))
+  }
 
   // Create permission account with sudo + regular plugins.
   // The SDK's internal plugin manager spreads the permission validator's methods

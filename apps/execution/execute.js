@@ -15,14 +15,10 @@ import {
   maxUint256,
   parseUnits,
   keccak256,
-  concat,
-  pad,
-  encodeAbiParameters,
-  parseAbiParameters,
   hashTypedData,
 } from "viem"
 import { avalanche } from "viem/chains"
-import { privateKeyToAccount, publicKeyToAddress } from "viem/accounts"
+import { privateKeyToAccount } from "viem/accounts"
 import { recoverTypedDataAddress } from "viem"
 
 const CHAIN_ID = 43114
@@ -708,9 +704,9 @@ export async function executeRebalance({
   }
 
   // ── Deep enable-signature verification ──
-  // Reconstruct the EIP-712 typed data, recover the signer from the enable
-  // signature, and compare it with the on-chain ECDSA validator owner.
-  // This definitively tells us whether the issue is signer mismatch vs data mismatch.
+  // Use the SDK's own getPluginsEnableTypedData to produce the typed data
+  // the exact same way the SDK does internally, then recover the signer
+  // and compare it with the on-chain ECDSA validator owner.
   try {
     const kpm = permissionAccount.kernelPluginManager
     const regularValidator = kpm?.regularValidator
@@ -724,7 +720,7 @@ export async function executeRebalance({
       } catch (e) { pluginEnabledOnChain = `error: ${e?.message?.slice(0, 100)}` }
     }
 
-    // Get the enable signature
+    // Get the enable signature (cached from serialized blob)
     let enableSig = null
     if (typeof kpm?.getPluginEnableSignature === "function") {
       try {
@@ -732,8 +728,7 @@ export async function executeRebalance({
       } catch (e) { /* will be logged below */ }
     }
 
-    // Get the enable data from the deserialized permission plugin (this is
-    // what'll be included in the UserOp — must match what was signed)
+    // Get the enable data from the deserialized permission plugin
     let enableDataHex = null
     if (regularValidator && typeof regularValidator.getEnableData === "function") {
       try {
@@ -749,7 +744,7 @@ export async function executeRebalance({
       } catch (e) { /* ignore */ }
     }
 
-    // Read the on-chain currentNonce and get the nonce the SDK would use
+    // Read the on-chain currentNonce and compute the SDK nonce
     let onchainNonce = null
     let sdkNonce = null
     try {
@@ -761,7 +756,7 @@ export async function executeRebalance({
       sdkNonce = onchainNonce === 0 ? 1 : Number(onchainNonce)
     } catch (e) { /* ignore */ }
 
-    // Query the on-chain EIP-712 domain for version
+    // Get the on-chain EIP-712 domain version (same logic as SDK's accountMetadata)
     let onchainVersion = KERNEL_V3_1 // fallback
     try {
       const domainResult = await execPublicClient.request({
@@ -784,64 +779,36 @@ export async function executeRebalance({
       }
     } catch (e) { /* use fallback */ }
 
-    // Reconstruct the typed data that SHOULD have been signed
-    // and recover the signer to compare with the on-chain ECDSA owner
-    let recoveredSigner = "unable_to_recover"
-    let typedDataForVerification = null
-    if (enableSig && enableDataHex && permissionId && sdkNonce !== null) {
-      try {
-        const VALIDATOR_TYPE_PERMISSION = "0x02"
-        const validationId = concat([
-          VALIDATOR_TYPE_PERMISSION,
-          pad(permissionId, { size: 20, dir: "right" }),
-        ])
+    // ── Approach 1: Use the SDK's own getPluginsEnableTypedData function ──
+    // This calls the EXACT same code the SDK uses to build the typed data.
+    // If recovery from this also mismatches, the problem is the enableData
+    // produced by the deserialized validator (differs from what was signed).
+    let sdkRecoveredSigner = "unable_to_recover"
+    let sdkTypedDataHash = "none"
+    try {
+      const { getPluginsEnableTypedData: sdkGetTypedData } =
+        await import("@zerodev/sdk/_esm/accounts/kernel/utils/plugins/ep0_7/getPluginsEnableTypedData.js")
 
-        const CALL_TYPE_DELEGATE_CALL = "0xFF"
-        const selectorData = concat([
-          action.selector,
-          action.address,
-          action.hook?.address ?? "0x0000000000000000000000000000000000000000",
-          encodeAbiParameters(
-            parseAbiParameters("bytes selectorInitData, bytes hookInitData"),
-            [CALL_TYPE_DELEGATE_CALL, "0x0000"]
-          ),
-        ])
+      const sdkTypedData = await sdkGetTypedData({
+        accountAddress: smartAccountAddress,
+        chainId: CHAIN_ID,
+        kernelVersion: onchainVersion,
+        action: action,
+        hook: null,
+        validator: regularValidator,
+        validatorNonce: sdkNonce,
+      })
 
-        typedDataForVerification = {
-          domain: {
-            name: "Kernel",
-            version: onchainVersion,
-            chainId: CHAIN_ID,
-            verifyingContract: smartAccountAddress,
-          },
-          types: {
-            Enable: [
-              { name: "validationId", type: "bytes21" },
-              { name: "nonce", type: "uint32" },
-              { name: "hook", type: "address" },
-              { name: "validatorData", type: "bytes" },
-              { name: "hookData", type: "bytes" },
-              { name: "selectorData", type: "bytes" },
-            ],
-          },
-          message: {
-            validationId,
-            nonce: sdkNonce,
-            hook: "0x0000000000000000000000000000000000000000",
-            validatorData: enableDataHex,
-            hookData: "0x",
-            selectorData,
-          },
-          primaryType: "Enable",
-        }
+      sdkTypedDataHash = hashTypedData(sdkTypedData)
 
-        recoveredSigner = await recoverTypedDataAddress({
-          ...typedDataForVerification,
+      if (enableSig) {
+        sdkRecoveredSigner = await recoverTypedDataAddress({
+          ...sdkTypedData,
           signature: enableSig,
         })
-      } catch (e) {
-        recoveredSigner = `error: ${e?.message?.slice(0, 200)}`
       }
+    } catch (e) {
+      sdkRecoveredSigner = `error: ${e?.message?.slice(0, 200)}`
     }
 
     // Read the on-chain ECDSA owner for comparison
@@ -856,9 +823,12 @@ export async function executeRebalance({
       })
     } catch (e) { /* ignore */ }
 
-    const signerMatchesOwner = typeof recoveredSigner === "string"
+    const sdkSignerMatchesOwner = typeof sdkRecoveredSigner === "string"
       && typeof ecdsaOwner === "string"
-      && recoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
+      && sdkRecoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
+
+    // Hash the enableData for cross-side comparison with frontend
+    const enableDataHash = enableDataHex ? keccak256(enableDataHex) : "none"
 
     console.log(JSON.stringify({
       level: "info",
@@ -870,26 +840,27 @@ export async function executeRebalance({
       onchainVersion,
       permissionId,
       enableDataLength: enableDataHex?.length ?? 0,
-      enableDataPrefix: enableDataHex ? enableDataHex.slice(0, 40) + "..." : "null",
+      enableDataHash,
       enableSigLength: enableSig?.length ?? 0,
-      recoveredSigner,
+      sdkTypedDataHash,
+      sdkRecoveredSigner,
       ecdsaOwner,
-      signerMatchesOwner,
+      sdkSignerMatchesOwner,
       actionSelector: action?.selector ?? "null",
       actionAddress: action?.address ?? "null",
       timestamp: new Date().toISOString(),
     }))
 
-    if (!signerMatchesOwner) {
+    if (!sdkSignerMatchesOwner) {
       console.log(JSON.stringify({
         level: "error",
         action: "enable_signature_MISMATCH",
-        detail: "The address that signed the enable hash does NOT match the on-chain ECDSA owner. " +
-          "This means either: (1) a different wallet signed the enable hash than the one that deployed the account, " +
-          "(2) the typed data parameters changed between signing and verification (nonce, enableData, selectorData), " +
-          "or (3) the enable signature was corrupted during storage.",
-        recoveredSigner,
+        detail: "SDK-based typed data recovery failed — the deserialized validator's getEnableData() " +
+          "likely produces different data than what was signed on the frontend. " +
+          "Compare enableDataHash between frontend and backend to confirm.",
+        sdkRecoveredSigner,
         ecdsaOwner,
+        enableDataHash,
         onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
         sdkNonce,
         timestamp: new Date().toISOString(),
