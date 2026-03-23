@@ -492,6 +492,7 @@ export default function OnboardingPage() {
         diversificationPreference: diversificationPref,
         sessionKeyData: {
           serializedPermission: sessionKeyResult.serializedPermission,
+          sessionPrivateKey: sessionKeyResult.sessionPrivateKey,
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
           expiresAt: sessionKeyResult.expiresAt,
           allowedProtocols: Array.from(effectiveSelectedProtocols),
@@ -503,6 +504,7 @@ export default function OnboardingPage() {
       try {
         await api.storeSessionKey(derivedAddr, {
           serializedPermission: sessionKeyResult.serializedPermission,
+          sessionPrivateKey: sessionKeyResult.sessionPrivateKey,
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
           expiresAt: sessionKeyResult.expiresAt,
           allowedProtocols: Array.from(effectiveSelectedProtocols),

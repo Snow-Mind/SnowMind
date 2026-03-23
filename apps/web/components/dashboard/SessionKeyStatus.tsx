@@ -76,7 +76,7 @@ export default function SessionKeyStatus() {
       const walletClient = await toViemAccount({ wallet });
       const { kernelAccount, kernelClient } = await createSmartAccount(walletClient);
 
-      const { serializedPermission, sessionKeyAddress, expiresAt } =
+      const { serializedPermission, sessionPrivateKey, sessionKeyAddress, expiresAt } =
         await grantAndSerializeSessionKey(
           kernelAccount,
           kernelClient,
@@ -100,6 +100,7 @@ export default function SessionKeyStatus() {
 
       await api.storeSessionKey(smartAccountAddress, {
         serializedPermission,
+        sessionPrivateKey,
         sessionKeyAddress,
         expiresAt,
         allowedProtocols: ACTIVE_PROTOCOLS as unknown as string[],

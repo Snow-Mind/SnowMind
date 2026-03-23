@@ -770,6 +770,7 @@ class Rebalancer:
         smart_account_address: str,
         withdrawals: list[dict],
         deposits: list[dict],
+        session_private_key: str = "",
         account_id: str | None = None,
         fee_transfer: dict | None = None,
         user_transfer: dict | None = None,
@@ -786,6 +787,7 @@ class Rebalancer:
                 smart_account_address=smart_account_address,
                 withdrawals=withdrawals,
                 deposits=deposits,
+                session_private_key=session_private_key,
                 fee_transfer=fee_transfer,
                 user_transfer=user_transfer,
             )
@@ -875,9 +877,11 @@ class Rebalancer:
             return None
 
         # Step 3: Get session key and call execution service
-        session_key = get_active_session_key(db, UUID(account_id))
-        if not session_key:
+        session_record = get_active_session_key_record(db, UUID(account_id))
+        if not session_record:
             raise ValueError(f"No active session key for account {account_id}")
+        session_key = session_record["serialized_permission"]
+        session_private_key = session_record.get("session_private_key", "")
 
         # Build withdrawal/deposit instructions for the Node.js execution service
         exec_withdrawals = []
@@ -900,6 +904,7 @@ class Rebalancer:
             smart_account_address=smart_account_address,
             withdrawals=exec_withdrawals,
             deposits=exec_deposits,
+            session_private_key=session_private_key,
             account_id=account_id,
         )
 

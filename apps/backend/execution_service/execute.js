@@ -1,4 +1,5 @@
 import { deserializePermissionAccount } from "@zerodev/permissions"
+import { toECDSASigner } from "@zerodev/permissions/signers"
 import {
   createKernelAccountClient,
   createZeroDevPaymasterClient,
@@ -14,6 +15,7 @@ import {
   parseUnits,
 } from "viem"
 import { avalanche } from "viem/chains"
+import { privateKeyToAccount } from "viem/accounts"
 
 const CHAIN_ID = 43114
 const CHAIN = avalanche
@@ -226,18 +228,38 @@ function isValidateUserOpRevert(err) {
   return text.includes("validateuserop") && text.includes("revert")
 }
 
-async function getKernelClient(serializedPermission, options = { withPaymaster: true }) {
+async function getKernelClient(serializedPermission, sessionPrivateKey, options = { withPaymaster: true }) {
   const publicClient = createPublicClient({
     chain: CHAIN,
     transport: http(process.env.AVALANCHE_RPC_URL),
   })
 
-  const permissionAccount = await deserializePermissionAccount(
-    publicClient,
-    ENTRYPOINT,
-    KERNEL_V3_1,
-    serializedPermission,
-  )
+  // Official ZeroDev pattern: deserializePermissionAccount takes 5 args.
+  // The signer is reconstructed from the separately-stored private key,
+  // NOT embedded in the serialized blob. This ensures the plugin
+  // serialization params hash matches the on-chain enable signature.
+  let permissionAccount
+  if (sessionPrivateKey) {
+    const sessionKeySigner = await toECDSASigner({
+      signer: privateKeyToAccount(sessionPrivateKey),
+    })
+    permissionAccount = await deserializePermissionAccount(
+      publicClient,
+      ENTRYPOINT,
+      KERNEL_V3_1,
+      serializedPermission,
+      sessionKeySigner,
+    )
+  } else {
+    // Legacy fallback: 4-arg deserialization (for old session keys that
+    // embedded the private key in the serialized blob)
+    permissionAccount = await deserializePermissionAccount(
+      publicClient,
+      ENTRYPOINT,
+      KERNEL_V3_1,
+      serializedPermission,
+    )
+  }
 
   const clientConfig = {
     account: permissionAccount,
@@ -245,17 +267,19 @@ async function getKernelClient(serializedPermission, options = { withPaymaster: 
     bundlerTransport: http(BUNDLER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
   }
 
-  // Pass the ZeroDev paymaster client directly — NOT wrapped in { getPaymasterData }.
-  // The SDK internally extracts both getPaymasterStubData (for gas estimation)
-  // and getPaymasterData (for final sponsorship). When wrapped manually,
-  // getPaymasterStubData is missing, causing the SDK to call sponsorUserOperation
-  // during estimation. This triggers validateUserOp simulation with a dummy
-  // signature that lacks enable data → EnableNotApproved on first-time plugin use.
+  // Permission accounts use the { getPaymasterData } wrapper pattern.
+  // This matches the official ZeroDev transaction-automation example.
+  // The wrapper ensures the SDK calls getPaymasterData at the right phase.
   if (options.withPaymaster) {
-    clientConfig.paymaster = createZeroDevPaymasterClient({
+    const paymasterClient = createZeroDevPaymasterClient({
       chain: CHAIN,
       transport: http(PAYMASTER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
     })
+    clientConfig.paymaster = {
+      getPaymasterData(userOperation) {
+        return paymasterClient.sponsorUserOperation({ userOperation })
+      },
+    }
   }
 
   const client = createKernelAccountClient(clientConfig)
@@ -329,6 +353,7 @@ async function resolveKernelOwner(permissionAccount) {
 
 export async function executeRebalance({
   serializedPermission,
+  sessionPrivateKey,
   smartAccountAddress,
   withdrawals,
   deposits,
@@ -342,6 +367,7 @@ export async function executeRebalance({
 
   const { client: kernelClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
+    sessionPrivateKey || "",
     { withPaymaster: true },
   )
 
@@ -597,7 +623,7 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
         return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
       } catch (paymasterRetryErr) {
@@ -616,7 +642,7 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
         return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
       } catch (retryErr) {
@@ -633,6 +659,7 @@ export async function executeRebalance({
 
 export async function executeWithdrawal({
   serializedPermission,
+  sessionPrivateKey,
   smartAccountAddress,
   ownerAddress,
   agentFeeAmount,
@@ -647,6 +674,7 @@ export async function executeWithdrawal({
 
   const { client: kernelClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
+    sessionPrivateKey || "",
     { withPaymaster: true },
   )
 
@@ -802,7 +830,7 @@ export async function executeWithdrawal({
   } catch (err) {
     if (isLikelyPaymasterError(err)) {
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
         return {
           txHash,
@@ -819,7 +847,7 @@ export async function executeWithdrawal({
     }
     if (isValidateUserOpRevert(err)) {
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, { withPaymaster: false })
+        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
         return {
           txHash,

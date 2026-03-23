@@ -12,6 +12,7 @@ export interface RegisterAccountRequest {
   diversificationPreference?: DiversificationPreference;
   sessionKeyData?: {
     serializedPermission: string;
+    sessionPrivateKey: string;
     sessionKeyAddress: string;
     expiresAt: number;
     allowedProtocols?: string[];

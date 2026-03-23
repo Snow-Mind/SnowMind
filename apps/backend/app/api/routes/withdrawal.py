@@ -24,7 +24,7 @@ from app.services.fee_calculator import (
     get_yield_tracking,
     record_withdrawal,
 )
-from app.services.execution.session_key import get_active_session_key, revoke_session_key
+from app.services.execution.session_key import get_active_session_key, get_active_session_key_record, revoke_session_key
 from app.services.execution.executor import ExecutionService
 from app.services.protocols import get_adapter
 
@@ -304,12 +304,14 @@ async def execute_withdrawal(
 
     # Build and submit withdrawal UserOp via Execution Service
     try:
-        session_key = get_active_session_key(db, UUID(account["id"]))
-        if not session_key:
+        session_record = get_active_session_key_record(db, UUID(account["id"]))
+        if not session_record:
             raise HTTPException(
                 status_code=400,
                 detail="No active session key for account",
             )
+        session_key = session_record["serialized_permission"]
+        session_private_key = session_record.get("session_private_key", "")
 
         benqi_qi_balance = 0
         spark_share_balance = 0
@@ -356,6 +358,7 @@ async def execute_withdrawal(
 
         payload = {
             "serializedPermission": session_key,
+            "sessionPrivateKey": session_private_key,
             "smartAccountAddress": address,
             "ownerAddress": account.get("owner_address", ""),
             "withdrawAmount": str(withdraw_raw),

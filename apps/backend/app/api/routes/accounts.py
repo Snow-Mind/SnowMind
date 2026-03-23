@@ -306,6 +306,7 @@ async def revoke_account_session_key_post(
 class StoreSessionKeyRequest(BaseModel):
     """Request body for storing a session key (used for retry/renewal)."""
     serialized_permission: str = Field(..., alias="serializedPermission")
+    session_private_key: str = Field("", alias="sessionPrivateKey")
     session_key_address: str = Field(..., alias="sessionKeyAddress")
     expires_at: int | str = Field(..., alias="expiresAt")
     allowed_protocols: list[str] | None = Field(None, alias="allowedProtocols")
@@ -347,6 +348,7 @@ async def store_account_session_key(
     # Store session key
     session_key_data = {
         "serializedPermission": req.serialized_permission,
+        "sessionPrivateKey": req.session_private_key,
         "sessionKeyAddress": req.session_key_address,
         "expiresAt": req.expires_at,
         "allowedProtocols": req.allowed_protocols or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],

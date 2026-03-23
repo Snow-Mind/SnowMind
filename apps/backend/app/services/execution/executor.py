@@ -61,16 +61,18 @@ class ExecutionService:
 
     async def execute_rebalance(
         self,
-        serialized_permission: str,   # decrypted from DB
+        serialized_permission: str,   # decrypted approval from DB
         smart_account_address: str,
         withdrawals: list[dict],
         deposits: list[dict],
+        session_private_key: str = "",  # session key's private key for deserialization
         fee_transfer: dict | None = None,
         user_transfer: dict | None = None,
     ) -> dict:
         settings = get_settings()
         payload = {
             "serializedPermission": serialized_permission,
+            "sessionPrivateKey": session_private_key,
             "smartAccountAddress": smart_account_address,
             "withdrawals": withdrawals,
             "deposits": deposits,

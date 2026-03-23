@@ -32,6 +32,7 @@ _KMS_ENVELOPE_PREFIX = "kms:v1:"
 
 class ActiveSessionKey(TypedDict):
     serialized_permission: str
+    session_private_key: str
     allowed_protocols: list[str]
 
 
@@ -247,6 +248,20 @@ def store_session_key(
     if not raw_key:
         raise ValueError("session_key_data must contain 'serializedPermission' or 'raw_key'")
 
+    # Session private key — required for correct ZeroDev deserialization.
+    # Stored alongside the approval in an encrypted JSON envelope.
+    session_private_key = (
+        session_key_data.get("sessionPrivateKey")
+        or session_key_data.get("session_private_key")
+        or ""
+    )
+
+    # Build JSON envelope containing both approval and private key
+    envelope = json.dumps({
+        "approval": raw_key,
+        "sessionPrivateKey": session_private_key,
+    }, separators=(",", ":"))
+
     key_address = (
         session_key_data.get("sessionKeyAddress")
         or session_key_data.get("key_address")
@@ -263,7 +278,7 @@ def store_session_key(
         if expires_at and expires_at.endswith("+00:00"):
             expires_at = expires_at.replace("+00:00", "Z")
 
-    encrypted = encrypt_session_key(raw_key)
+    encrypted = encrypt_session_key(envelope)
 
     row = (
         db.table("session_keys")
@@ -288,9 +303,10 @@ def store_session_key(
 
 
 def get_active_session_key(db: Client, account_id: UUID) -> str | None:
-    """Fetch, decrypt, and return the active session key for *account_id*.
+    """Fetch, decrypt, and return the active session key approval for *account_id*.
 
     Returns ``None`` when no active (and non-expired) key exists.
+    Returns only the serialized permission (approval) string for backward compat.
     """
     record = get_active_session_key_record(db, account_id)
     if not record:
@@ -343,8 +359,24 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
         else ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"]
     )
 
+    decrypted = decrypt_session_key(row["serialized_permission"])
+
+    # Parse JSON envelope format: {"approval": "...", "sessionPrivateKey": "0x..."}
+    # Backward compat: legacy keys stored as plain strings (no JSON envelope)
+    session_private_key = ""
+    serialized_permission = decrypted
+    try:
+        parsed = json.loads(decrypted)
+        if isinstance(parsed, dict) and "approval" in parsed:
+            serialized_permission = parsed["approval"]
+            session_private_key = parsed.get("sessionPrivateKey", "")
+    except (json.JSONDecodeError, TypeError):
+        # Legacy format: plain serialized permission string
+        pass
+
     return {
-        "serialized_permission": decrypt_session_key(row["serialized_permission"]),
+        "serialized_permission": serialized_permission,
+        "session_private_key": session_private_key,
         "allowed_protocols": allowed_protocols,
     }
 

@@ -165,6 +165,7 @@ export const api = {
     address: string,
     data: {
       serializedPermission: string;
+      sessionPrivateKey: string;
       sessionKeyAddress: string;
       expiresAt: number;
       allowedProtocols?: string[];
