@@ -232,6 +232,7 @@ class Rebalancer:
                     {pid: f"${float(amt):.2f}" for pid, amt in discovered.items()},
                 )
                 # Sync discovered positions to DB
+                total_discovered = sum(discovered.values()) or Decimal("1")
                 for pid, amt in discovered.items():
                     try:
                         db.table("allocations").upsert(
@@ -239,6 +240,7 @@ class Rebalancer:
                                 "account_id": account_id,
                                 "protocol_id": pid,
                                 "amount_usdc": str(amt.quantize(Decimal("0.000001"))),
+                                "allocation_pct": str((amt / total_discovered).quantize(Decimal("0.0001"))),
                             },
                             on_conflict="account_id,protocol_id",
                         ).execute()
@@ -531,7 +533,7 @@ class Rebalancer:
 
         # 6. Beat-margin gate (bypassed by FORCED/EMERGENCY flags AND initial deployments)
         #    Initial deployment: idle USDC earning 0% → any protocol is better.
-        has_existing_protocol_positions = any(v > Decimal("1") for v in current.values())
+        has_existing_protocol_positions = any(v > Decimal("0.01") for v in current.values())
         is_initial_deployment = not has_existing_protocol_positions and idle_usdc > Decimal("0.01")
 
         if global_flag == RebalanceFlag.NONE and not is_initial_deployment and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
