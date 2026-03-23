@@ -234,32 +234,56 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     transport: http(process.env.AVALANCHE_RPC_URL),
   })
 
+  // Diagnostic: log whether the session private key was provided.
+  // NEVER log the key itself — only its presence and length.
+  console.log(JSON.stringify({
+    level: "info",
+    action: "getKernelClient_init",
+    hasSessionPrivateKey: !!sessionPrivateKey,
+    sessionPrivateKeyLength: sessionPrivateKey ? sessionPrivateKey.length : 0,
+    withPaymaster: options.withPaymaster,
+    serializedPermissionLength: serializedPermission ? serializedPermission.length : 0,
+    timestamp: new Date().toISOString(),
+  }))
+
   // Official ZeroDev pattern: deserializePermissionAccount takes 5 args.
   // The signer is reconstructed from the separately-stored private key,
   // NOT embedded in the serialized blob. This ensures the plugin
   // serialization params hash matches the on-chain enable signature.
-  let permissionAccount
-  if (sessionPrivateKey) {
-    const sessionKeySigner = await toECDSASigner({
-      signer: privateKeyToAccount(sessionPrivateKey),
-    })
-    permissionAccount = await deserializePermissionAccount(
-      publicClient,
-      ENTRYPOINT,
-      KERNEL_V3_1,
-      serializedPermission,
-      sessionKeySigner,
-    )
-  } else {
-    // Legacy fallback: 4-arg deserialization (for old session keys that
-    // embedded the private key in the serialized blob)
-    permissionAccount = await deserializePermissionAccount(
-      publicClient,
-      ENTRYPOINT,
-      KERNEL_V3_1,
-      serializedPermission,
+  if (!sessionPrivateKey) {
+    throw new Error(
+      "sessionPrivateKey is required for deserialization. " +
+      "The frontend must send sessionPrivateKey alongside the serialized permission. " +
+      "If this is a legacy session key without a stored private key, " +
+      "the user must re-grant their session key from the dashboard."
     )
   }
+
+  const sessionKeySigner = await toECDSASigner({
+    signer: privateKeyToAccount(sessionPrivateKey),
+  })
+
+  console.log(JSON.stringify({
+    level: "info",
+    action: "session_key_signer_created",
+    signerAddress: sessionKeySigner.account.address,
+    timestamp: new Date().toISOString(),
+  }))
+
+  const permissionAccount = await deserializePermissionAccount(
+    publicClient,
+    ENTRYPOINT,
+    KERNEL_V3_1,
+    serializedPermission,
+    sessionKeySigner,
+  )
+
+  console.log(JSON.stringify({
+    level: "info",
+    action: "permission_account_deserialized",
+    permissionAccountAddress: permissionAccount.address,
+    timestamp: new Date().toISOString(),
+  }))
 
   const clientConfig = {
     account: permissionAccount,

@@ -883,6 +883,20 @@ class Rebalancer:
         session_key = session_record["serialized_permission"]
         session_private_key = session_record.get("session_private_key", "")
 
+        # Diagnostic: log whether session private key is present (never log the key itself)
+        logger.info(
+            "Session key retrieved for %s: has_private_key=%s, approval_length=%d",
+            account_id,
+            bool(session_private_key),
+            len(session_key) if session_key else 0,
+        )
+        if not session_private_key:
+            logger.warning(
+                "No session_private_key found for account %s. "
+                "This is a legacy session key — user must re-grant from dashboard.",
+                account_id,
+            )
+
         # Build withdrawal/deposit instructions for the Node.js execution service
         exec_withdrawals = []
         for protocol_id, amount_usd in withdrawals:
