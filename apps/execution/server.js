@@ -8,6 +8,10 @@ const VERSION = "1.0.0"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
 const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 30000)
 const recentNonces = new Map()
+// Per-sender concurrency lock: prevents two concurrent UserOps for the same
+// smart account from being submitted to the bundler simultaneously.
+// This avoids "duplicate permissionHash" and nonce collision errors.
+const activeSenders = new Set()
 
 // ── Startup validation: fail fast if critical env vars are missing ───────────
 const REQUIRED_ENV = [
@@ -132,6 +136,21 @@ app.post("/execute-rebalance", async (req, res) => {
   if (validationErrors.length > 0) {
     return res.status(400).json({ error: "Validation failed", details: validationErrors })
   }
+
+  // Per-sender concurrency guard: reject if another UserOp is in-flight
+  const sender = req.body.smartAccountAddress?.toLowerCase()
+  if (activeSenders.has(sender)) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "rebalance_dedup_rejected",
+      smartAccountAddress: req.body.smartAccountAddress,
+      message: "Another rebalance is already in-flight for this sender",
+      timestamp: new Date().toISOString(),
+    }))
+    return res.status(409).json({ error: "Rebalance already in-flight for this account" })
+  }
+  activeSenders.add(sender)
+
   try {
     const result = await withTimeout(executeRebalance(req.body), EXECUTION_TIMEOUT_MS)
     console.log(JSON.stringify({
@@ -160,6 +179,8 @@ app.post("/execute-rebalance", async (req, res) => {
     }))
     const status = err.message?.includes("timed out") ? 504 : 500
     res.status(status).json({ error: err.message, code: err.code || "UNKNOWN" })
+  } finally {
+    activeSenders.delete(sender)
   }
 })
 

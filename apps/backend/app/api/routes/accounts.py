@@ -150,20 +150,36 @@ async def _do_register(
     )
 
 
+# Per-account lock to prevent concurrent rebalance triggers.
+# Maps account_id → asyncio.Lock. If a rebalance is already in flight
+# for an account, subsequent triggers wait (or skip) rather than
+# submitting duplicate UserOps to the bundler.
+_rebalance_locks: dict[str, asyncio.Lock] = {}
+
+
 async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
     """Best-effort immediate rebalance after registration.
 
     Runs as a fire-and-forget task so the registration response is not delayed.
     If it fails (e.g. no idle USDC yet), the cron scheduler will pick it up.
+    Uses a per-account lock to prevent duplicate concurrent submissions.
     """
     await asyncio.sleep(3)  # Brief delay for session key to fully propagate
-    try:
-        from app.services.optimizer.rebalancer import Rebalancer
-        rebalancer = Rebalancer()
-        result = await rebalancer.check_and_rebalance(account_id, address)
-        logger.info("Initial rebalance for %s: %s", address, result.get("status", "unknown"))
-    except Exception as exc:
-        logger.warning("Initial rebalance failed for %s (cron will retry): %s", address, exc)
+
+    # Acquire per-account lock — if another rebalance is already running, skip
+    lock = _rebalance_locks.setdefault(account_id, asyncio.Lock())
+    if lock.locked():
+        logger.info("Initial rebalance for %s skipped — another attempt in flight", address)
+        return
+
+    async with lock:
+        try:
+            from app.services.optimizer.rebalancer import Rebalancer
+            rebalancer = Rebalancer()
+            result = await rebalancer.check_and_rebalance(account_id, address)
+            logger.info("Initial rebalance for %s: %s", address, result.get("status", "unknown"))
+        except Exception as exc:
+            logger.warning("Initial rebalance failed for %s (cron will retry): %s", address, exc)
 
 
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
@@ -386,7 +402,12 @@ async def store_account_session_key(
             except Exception as exc:
                 logger.warning("Failed to record allocation %s/%s: %s", address, protocol_id, exc)
 
-    # Trigger immediate rebalance attempt
+    # NOTE: Do NOT trigger rebalance here. The register endpoint already fires
+    # _trigger_initial_rebalance when the session key is stored inline. Firing
+    # here as well causes TWO concurrent rebalance attempts that submit
+    # identical UserOps to the bundler → "duplicate permissionHash" AA23 revert.
+    # The per-account lock in _trigger_initial_rebalance prevents the collision
+    # if both endpoints fire — the second attempt will be skipped.
     asyncio.create_task(_trigger_initial_rebalance(account_id, address))
 
     return {"success": True, "keyId": key_id}

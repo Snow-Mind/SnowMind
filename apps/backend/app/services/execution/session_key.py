@@ -285,6 +285,16 @@ def store_session_key(
 
     encrypted = encrypt_session_key(envelope)
 
+    # Deactivate ALL existing active keys for this account before inserting.
+    # Multiple active keys cause race conditions when concurrent rebalance
+    # attempts pick up different keys with different permissionHashes.
+    try:
+        db.table("session_keys").update(
+            {"is_active": False}
+        ).eq("account_id", str(account_id)).eq("is_active", True).execute()
+    except Exception as exc:
+        logger.warning("Failed to deactivate old session keys for %s: %s", account_id, exc)
+
     row = (
         db.table("session_keys")
         .insert(

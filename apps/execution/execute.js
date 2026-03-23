@@ -951,6 +951,25 @@ export async function executeRebalance({
     const txHash = await kernelClient.sendTransaction({ calls })
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
   } catch (err) {
+    // Non-retryable errors: these are on-chain / bundler state issues.
+    // Retrying will always produce the same result, so fail fast.
+    const allText = [err?.shortMessage, err?.message, err?.details,
+      err?.cause?.message, err?.cause?.details]
+      .filter(Boolean).join(" ").toLowerCase()
+    if (allText.includes("duplicate permissionhash")) {
+      console.log(JSON.stringify({
+        level: "error", action: "duplicate_permissionHash_no_retry",
+        smartAccountAddress,
+        detail: "The permissionHash is already registered on-chain or in the bundler mempool. " +
+          "This usually means a concurrent rebalance attempt already submitted. " +
+          "The user may need to re-grant their session key to generate a fresh permissionHash.",
+        timestamp: new Date().toISOString(),
+      }))
+      throw new Error(
+        "duplicate permissionHash — this session key's permission was already submitted to the bundler. " +
+        "A concurrent rebalance likely already handled it, or the user needs to re-grant."
+      )
+    }
     // Retry 1: explicit paymaster error — try without paymaster
     if (isLikelyPaymasterError(err)) {
       console.log(JSON.stringify({
@@ -1182,6 +1201,16 @@ export async function executeWithdrawal({
       callCount: calls.length,
     }
   } catch (err) {
+    // Non-retryable: duplicate permissionHash is an on-chain/mempool state issue
+    const allText = [err?.shortMessage, err?.message, err?.details,
+      err?.cause?.message, err?.cause?.details]
+      .filter(Boolean).join(" ").toLowerCase()
+    if (allText.includes("duplicate permissionhash")) {
+      throw new Error(
+        "duplicate permissionHash — this session key's permission was already submitted. " +
+        "The user may need to re-grant their session key."
+      )
+    }
     if (isLikelyPaymasterError(err)) {
       try {
         const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
