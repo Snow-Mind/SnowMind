@@ -14,7 +14,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { createPublicClient, http, encodeFunctionData } from "viem";
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useWallets } from "@privy-io/react-auth";
 import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL, CHAIN } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
@@ -122,8 +122,7 @@ export default function EmergencyPanel() {
       }
 
       // Create kernel client and send batched withdrawal UserOp
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
+      const { kernelClient } = await createSmartAccount(wallet);
 
       const calls: { to: `0x${string}`; value: bigint; data: `0x${string}` }[] = [];
 

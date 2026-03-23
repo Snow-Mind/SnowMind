@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ConnectedWallet } from "@privy-io/react-auth";
-import { toViemAccount } from "@privy-io/react-auth";
 import { createSmartAccount } from "@/lib/zerodev";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
@@ -50,8 +49,7 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     setState((prev) => ({ ...prev, setupStep: "creating", error: null, txHashes: {} }));
 
     try {
-      const walletClient = await toViemAccount({ wallet });
-      const { kernelClient, smartAccountAddress } = await createSmartAccount(walletClient);
+      const { kernelClient, smartAccountAddress } = await createSmartAccount(wallet);
 
       // Register address with backend (no session key yet — that happens at activation)
       try {

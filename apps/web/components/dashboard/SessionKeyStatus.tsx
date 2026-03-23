@@ -19,7 +19,7 @@ import {
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSessionKey } from "@/hooks/useSessionKey";
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useWallets } from "@privy-io/react-auth";
 import { createSmartAccount, grantAndSerializeSessionKey } from "@/lib/zerodev";
 import { toast } from "sonner";
 
@@ -73,8 +73,7 @@ export default function SessionKeyStatus() {
     if (!wallet || !smartAccountAddress) return;
     setGranting(true);
     try {
-      const walletClient = await toViemAccount({ wallet });
-      const { kernelAccount, kernelClient } = await createSmartAccount(walletClient);
+      const { kernelAccount, kernelClient } = await createSmartAccount(wallet);
 
       const { serializedPermission, sessionPrivateKey, sessionKeyAddress, expiresAt } =
         await grantAndSerializeSessionKey(

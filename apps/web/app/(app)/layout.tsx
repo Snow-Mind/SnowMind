@@ -35,7 +35,7 @@ import {
   http,
 } from "viem";
 
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useWallets } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { createSmartAccount, emergencyWithdrawAll } from "@/lib/zerodev";
 
@@ -610,8 +610,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
       setStep("redeeming");
       const balances = await readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`);
 
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
+      const { kernelClient } = await createSmartAccount(wallet);
 
       // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
       const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || (balances.aaveBalance ?? 0n) > 0n;
@@ -799,8 +798,7 @@ function AgentDetailsModal({
       // Read share balances from ALL protocols
       const balances = await readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`);
 
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
+      const { kernelClient } = await createSmartAccount(wallet);
 
       // Step 1: Redeem from ALL protocols in one batched UserOp
       const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || (balances.aaveBalance ?? 0n) > 0n;

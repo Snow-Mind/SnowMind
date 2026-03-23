@@ -24,7 +24,7 @@ import {
   encodeFunctionData,
   formatUnits,
 } from "viem";
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useWallets } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
@@ -300,12 +300,11 @@ export default function OnboardingPage() {
     setDeployError(null);
 
     try {
-      const viemAccount = await toViemAccount({ wallet });
       const {
         kernelAccount,
         kernelClient,
         smartAccountAddress: derivedAddr,
-      } = await createSmartAccount(viemAccount);
+      } = await createSmartAccount(wallet);
 
       // Store for use in activate step
       kernelAccountRef.current = kernelAccount;
@@ -362,8 +361,7 @@ export default function OnboardingPage() {
       let derivedAddr = derivedAddressRef.current ?? smartAccountAddress;
 
       if (!kernelAccount || !kernelClient) {
-        const viemAccount = await toViemAccount({ wallet });
-        const result = await createSmartAccount(viemAccount);
+        const result = await createSmartAccount(wallet);
         kernelAccount = result.kernelAccount;
         kernelClient = result.kernelClient;
         derivedAddr = result.smartAccountAddress;

@@ -13,7 +13,7 @@ import {
   http,
 } from "viem";
 
-import { useWallets, toViemAccount } from "@privy-io/react-auth";
+import { useWallets } from "@privy-io/react-auth";
 import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER, CHAIN } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
@@ -136,8 +136,7 @@ export default function DepositPanel() {
 
       // Step 2: Deposit to Benqi via smart account (UserOp — signs via wallet)
       setStep("deploying");
-      const viemAccount = await toViemAccount({ wallet });
-      const { kernelClient } = await createSmartAccount(viemAccount);
+      const { kernelClient } = await createSmartAccount(wallet);
 
       const mintHash = await kernelClient.sendTransaction({
         calls: [

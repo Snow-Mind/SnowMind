@@ -161,30 +161,33 @@ function getPublicClient(): PublicClient {
 
 // ── 1. Create smart account (sudo — user is the owner) ───────────────────────
 
-export async function createSmartAccount(walletClient: WalletClientLike) {
+// Accept either:
+// - A Privy ConnectedWallet (has getEthereumProvider) — PREFERRED, uses raw EIP-1193 provider
+// - A WalletClientLike (viem Account/WalletClient) — fallback for non-Privy wallets
+type PrivyWalletLike = { getEthereumProvider: () => Promise<unknown>; address: string }
+
+export async function createSmartAccount(walletClient: WalletClientLike | PrivyWalletLike) {
   const publicClient = getPublicClient()
 
-  // Fix: Privy's embedded wallet sends typed data to eth_signTypedData_v4 via
-  // iframe RPC. During serialization (likely BigInt handling), the data gets
-  // modified, causing the Privy wallet to sign a DIFFERENT EIP-712 hash than
-  // what the Kernel contract expects → EnableNotApproved.
-  // Workaround: compute the EIP-712 hash ourselves with viem's hashTypedData
-  // (which we know is correct) and use Privy's raw secp256k1_sign instead.
+  // Fix for EnableNotApproved: Privy's toViemAccount() returns a "local" type
+  // account, causing the ZeroDev SDK to call account.signTypedData() directly
+  // (bypassing viem's JSON serialization). Privy then passes the raw typed data
+  // object — including BigInt values — to eth_signTypedData_v4 via iframe RPC.
+  // The BigInt values don't survive iframe serialization correctly, causing the
+  // wallet to sign a DIFFERENT EIP-712 hash → EnableNotApproved on-chain.
+  //
+  // Fix: Use the raw EIP-1193 provider instead. The SDK's toSigner() creates a
+  // WalletClient from it, and viem's signTypedData action JSON-stringifies the
+  // typed data with proper BigInt→string conversion before sending to the provider.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const signer = walletClient as any
-  const fixedSigner: WalletClientLike = (
-    signer?.type === "local" && typeof signer?.sign === "function"
-  ) ? {
-    ...signer,
-    signTypedData: async (typedData: Parameters<typeof hashTypedData>[0]) => {
-      const hash = hashTypedData(typedData)
-      return signer.sign({ hash })
-    },
-  } : walletClient
+  let signer: any = walletClient
+  if ('getEthereumProvider' in walletClient && typeof walletClient.getEthereumProvider === 'function') {
+    signer = await walletClient.getEthereumProvider()
+  }
 
   // Sudo validator: user's wallet is the owner (full control)
   const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
-    signer: fixedSigner,
+    signer,
     entryPoint: ENTRYPOINT,
     kernelVersion: KERNEL_V3_1,           // ← constant, NOT string "0.3.1"
   })
@@ -649,8 +652,8 @@ export async function grantAndSerializeSessionKey(
   console.log("[ZeroDev] Session key address:", sessionKeyAccount.address)
   console.log("[ZeroDev] Smart account address:", kernelAccount.address)
 
-  // KEY VERIFICATION: Test that the sudo validator's signTypedData (with our
-  // hashTypedData+sign fix) produces signatures that recover to the correct owner.
+  // KEY VERIFICATION: Test that the sudo validator's signTypedData produces
+  // signatures that recover to the correct owner (validates the EIP-1193 fix).
   try {
     const testTypedData = {
       domain: { name: "Kernel", version: "0.3.1", chainId: 43114, verifyingContract: kernelAccount.address },
@@ -662,6 +665,9 @@ export async function grantAndSerializeSessionKey(
     const testRecovered = await recoverTypedDataAddress({ ...testTypedData, signature: testSig })
     console.log("[ZeroDev] KEY TEST signTypedData recovered:", testRecovered)
     console.log("[ZeroDev] KEY TEST matches owner:", testRecovered.toLowerCase() === sudoSignerAddress.toLowerCase())
+    if (testRecovered.toLowerCase() !== sudoSignerAddress.toLowerCase()) {
+      console.error("[ZeroDev] KEY TEST FAILED — signTypedData still produces wrong signer!")
+    }
   } catch (e) {
     console.log("[ZeroDev] KEY TEST failed:", (e as Error)?.message?.slice(0, 200))
   }
