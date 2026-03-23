@@ -9,13 +9,21 @@ import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants"
 import {
   createPublicClient,
   decodeErrorResult,
+  decodeFunctionResult,
   http,
   encodeFunctionData,
   maxUint256,
   parseUnits,
+  keccak256,
+  concat,
+  pad,
+  encodeAbiParameters,
+  parseAbiParameters,
+  hashTypedData,
 } from "viem"
 import { avalanche } from "viem/chains"
-import { privateKeyToAccount } from "viem/accounts"
+import { privateKeyToAccount, publicKeyToAddress } from "viem/accounts"
+import { recoverTypedDataAddress } from "viem"
 
 const CHAIN_ID = 43114
 const CHAIN = avalanche
@@ -699,16 +707,14 @@ export async function executeRebalance({
     }))
   }
 
-  // ── Deep enable-signature debugging ──
-  // Capture the plugin manager state right before UserOp submission.
-  // This logs whether the SDK thinks the plugin is already enabled,
-  // the enable signature details, and the validator configuration.
+  // ── Deep enable-signature verification ──
+  // Reconstruct the EIP-712 typed data, recover the signer from the enable
+  // signature, and compare it with the on-chain ECDSA validator owner.
+  // This definitively tells us whether the issue is signer mismatch vs data mismatch.
   try {
     const kpm = permissionAccount.kernelPluginManager
     const regularValidator = kpm?.regularValidator
-    const sudoValidator = kpm?.sudoValidator
     const action = typeof kpm?.getAction === "function" ? kpm.getAction() : null
-    const validityData = typeof kpm?.getValidityData === "function" ? kpm.getValidityData() : null
 
     // Check if the plugin is already enabled on-chain
     let pluginEnabledOnChain = "unknown"
@@ -718,48 +724,177 @@ export async function executeRebalance({
       } catch (e) { pluginEnabledOnChain = `error: ${e?.message?.slice(0, 100)}` }
     }
 
-    // Get the enable signature if available
-    let enableSigLength = 0
-    let enableSigPrefix = ""
+    // Get the enable signature
+    let enableSig = null
     if (typeof kpm?.getPluginEnableSignature === "function") {
       try {
-        const sig = await kpm.getPluginEnableSignature(smartAccountAddress)
-        enableSigLength = sig?.length ?? 0
-        enableSigPrefix = sig ? sig.slice(0, 20) + "..." : "null"
-      } catch (e) { enableSigPrefix = `error: ${e?.message?.slice(0, 100)}` }
+        enableSig = await kpm.getPluginEnableSignature(smartAccountAddress)
+      } catch (e) { /* will be logged below */ }
     }
 
-    // Get enable typed data (the hash the owner must sign)
-    let enableTypedDataHash = "unavailable"
-    if (typeof kpm?.getPluginsEnableTypedData === "function") {
+    // Get the enable data from the deserialized permission plugin (this is
+    // what'll be included in the UserOp — must match what was signed)
+    let enableDataHex = null
+    if (regularValidator && typeof regularValidator.getEnableData === "function") {
       try {
-        const td = await kpm.getPluginsEnableTypedData(smartAccountAddress)
-        enableTypedDataHash = JSON.stringify({
-          domain: td?.domain,
-          primaryType: td?.primaryType,
-          // Only log field names and types, not values (too large)
-          messageFields: td?.message ? Object.keys(td.message) : [],
-        })
-      } catch (e) { enableTypedDataHash = `error: ${e?.message?.slice(0, 200)}` }
+        enableDataHex = await regularValidator.getEnableData(smartAccountAddress)
+      } catch (e) { /* ignore */ }
     }
+
+    // Get the permission ID (validator identifier)
+    let permissionId = null
+    if (regularValidator && typeof regularValidator.getIdentifier === "function") {
+      try {
+        permissionId = regularValidator.getIdentifier()
+      } catch (e) { /* ignore */ }
+    }
+
+    // Read the on-chain currentNonce and get the nonce the SDK would use
+    let onchainNonce = null
+    let sdkNonce = null
+    try {
+      onchainNonce = await execPublicClient.readContract({
+        address: smartAccountAddress,
+        abi: [{ name: "currentNonce", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint32" }] }],
+        functionName: "currentNonce",
+      })
+      sdkNonce = onchainNonce === 0 ? 1 : Number(onchainNonce)
+    } catch (e) { /* ignore */ }
+
+    // Query the on-chain EIP-712 domain for version
+    let onchainVersion = KERNEL_V3_1 // fallback
+    try {
+      const domainResult = await execPublicClient.request({
+        method: "eth_call",
+        params: [{
+          to: smartAccountAddress,
+          data: encodeFunctionData({
+            abi: [{ name: "eip712Domain", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "bytes1" }, { type: "string" }, { type: "string" }, { type: "uint256" }, { type: "address" }, { type: "bytes32" }, { type: "uint256[]" }] }],
+            functionName: "eip712Domain",
+          }),
+        }, "latest"],
+      })
+      if (domainResult && domainResult !== "0x") {
+        const decoded = decodeFunctionResult({
+          abi: [{ name: "eip712Domain", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "bytes1" }, { type: "string" }, { type: "string" }, { type: "uint256" }, { type: "address" }, { type: "bytes32" }, { type: "uint256[]" }] }],
+          functionName: "eip712Domain",
+          data: domainResult,
+        })
+        onchainVersion = decoded[2] // version string
+      }
+    } catch (e) { /* use fallback */ }
+
+    // Reconstruct the typed data that SHOULD have been signed
+    // and recover the signer to compare with the on-chain ECDSA owner
+    let recoveredSigner = "unable_to_recover"
+    let typedDataForVerification = null
+    if (enableSig && enableDataHex && permissionId && sdkNonce !== null) {
+      try {
+        const VALIDATOR_TYPE_PERMISSION = "0x02"
+        const validationId = concat([
+          VALIDATOR_TYPE_PERMISSION,
+          pad(permissionId, { size: 20, dir: "right" }),
+        ])
+
+        const CALL_TYPE_DELEGATE_CALL = "0xFF"
+        const selectorData = concat([
+          action.selector,
+          action.address,
+          action.hook?.address ?? "0x0000000000000000000000000000000000000000",
+          encodeAbiParameters(
+            parseAbiParameters("bytes selectorInitData, bytes hookInitData"),
+            [CALL_TYPE_DELEGATE_CALL, "0x0000"]
+          ),
+        ])
+
+        typedDataForVerification = {
+          domain: {
+            name: "Kernel",
+            version: onchainVersion,
+            chainId: CHAIN_ID,
+            verifyingContract: smartAccountAddress,
+          },
+          types: {
+            Enable: [
+              { name: "validationId", type: "bytes21" },
+              { name: "nonce", type: "uint32" },
+              { name: "hook", type: "address" },
+              { name: "validatorData", type: "bytes" },
+              { name: "hookData", type: "bytes" },
+              { name: "selectorData", type: "bytes" },
+            ],
+          },
+          message: {
+            validationId,
+            nonce: sdkNonce,
+            hook: "0x0000000000000000000000000000000000000000",
+            validatorData: enableDataHex,
+            hookData: "0x",
+            selectorData,
+          },
+          primaryType: "Enable",
+        }
+
+        recoveredSigner = await recoverTypedDataAddress({
+          ...typedDataForVerification,
+          signature: enableSig,
+        })
+      } catch (e) {
+        recoveredSigner = `error: ${e?.message?.slice(0, 200)}`
+      }
+    }
+
+    // Read the on-chain ECDSA owner for comparison
+    const ECDSA_VALIDATOR_MODULE = "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57"
+    let ecdsaOwner = "unknown"
+    try {
+      ecdsaOwner = await execPublicClient.readContract({
+        address: ECDSA_VALIDATOR_MODULE,
+        abi: [{ name: "ecdsaValidatorStorage", type: "function", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "address" }] }],
+        functionName: "ecdsaValidatorStorage",
+        args: [smartAccountAddress],
+      })
+    } catch (e) { /* ignore */ }
+
+    const signerMatchesOwner = typeof recoveredSigner === "string"
+      && typeof ecdsaOwner === "string"
+      && recoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
 
     console.log(JSON.stringify({
       level: "info",
-      action: "enable_signature_debug",
+      action: "enable_signature_verification",
       smartAccountAddress,
       pluginEnabledOnChain,
-      activeValidatorMode: kpm?.activeValidatorMode ?? "unknown",
-      regularValidatorAddress: regularValidator?.address ?? "null",
-      regularValidatorType: regularValidator?.validatorType ?? "null",
-      sudoValidatorAddress: sudoValidator?.address ?? "null",
+      onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
+      sdkNonce,
+      onchainVersion,
+      permissionId,
+      enableDataLength: enableDataHex?.length ?? 0,
+      enableDataPrefix: enableDataHex ? enableDataHex.slice(0, 40) + "..." : "null",
+      enableSigLength: enableSig?.length ?? 0,
+      recoveredSigner,
+      ecdsaOwner,
+      signerMatchesOwner,
       actionSelector: action?.selector ?? "null",
       actionAddress: action?.address ?? "null",
-      validityData: validityData ? { validAfter: Number(validityData.validAfter), validUntil: Number(validityData.validUntil) } : null,
-      enableSigLength,
-      enableSigPrefix,
-      enableTypedDataHash,
       timestamp: new Date().toISOString(),
     }))
+
+    if (!signerMatchesOwner) {
+      console.log(JSON.stringify({
+        level: "error",
+        action: "enable_signature_MISMATCH",
+        detail: "The address that signed the enable hash does NOT match the on-chain ECDSA owner. " +
+          "This means either: (1) a different wallet signed the enable hash than the one that deployed the account, " +
+          "(2) the typed data parameters changed between signing and verification (nonce, enableData, selectorData), " +
+          "or (3) the enable signature was corrupted during storage.",
+        recoveredSigner,
+        ecdsaOwner,
+        onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
+        sdkNonce,
+        timestamp: new Date().toISOString(),
+      }))
+    }
   } catch (debugErr) {
     console.log(JSON.stringify({
       level: "warn",

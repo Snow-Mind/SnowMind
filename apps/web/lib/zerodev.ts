@@ -616,9 +616,13 @@ export async function grantAndSerializeSessionKey(
   // Diagnostic: log the wallet address that will sign the enable hash.
   // This MUST match the owner stored in the on-chain ECDSA validator module
   // at 0x845ADb2C711129d4f3966735eD98a9F09fC4cE57.
-  const sudoSignerAddress = (sudoValidator as any)?.account?.address
-    ?? (sudoValidator as any)?.signer?.address
-    ?? "unknown"
+  // The ECDSA validator's getEnableData() returns the signer's EOA address.
+  let sudoSignerAddress = "unknown"
+  try {
+    if (typeof (sudoValidator as any).getEnableData === "function") {
+      sudoSignerAddress = await (sudoValidator as any).getEnableData()
+    }
+  } catch { /* ignore */ }
   console.log("[ZeroDev] Enable signature will be signed by:", sudoSignerAddress)
   console.log("[ZeroDev] Session key address:", sessionKeyAccount.address)
   console.log("[ZeroDev] Smart account address:", kernelAccount.address)
