@@ -28,6 +28,7 @@ import {
   maxUint256,
   parseUnits,
   keccak256,
+  hashTypedData,
   type PublicClient,
 } from "viem"
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
@@ -663,6 +664,22 @@ export async function grantAndSerializeSessionKey(
   const serializedPermission = await serializePermissionAccount(
     permissionAccount,
   )
+
+  // Diagnostic: log typed data hash and enable sig hash for cross-comparison with backend.
+  // The SDK's kpm.getPluginsEnableTypedData() uses the EXACT same code path as signing.
+  try {
+    const kpm = (permissionAccount as any).kernelPluginManager
+    const typedData = await kpm.getPluginsEnableTypedData(kernelAccount.address)
+    const enableSig = await kpm.getPluginEnableSignature(kernelAccount.address)
+    console.log("[ZeroDev] Frontend typedDataHash:", hashTypedData(typedData))
+    console.log("[ZeroDev] Frontend enableSigHash:", keccak256(enableSig))
+    console.log("[ZeroDev] Frontend validationId:", typedData.message.validationId)
+    console.log("[ZeroDev] Frontend nonce:", typedData.message.nonce)
+    console.log("[ZeroDev] Frontend selectorDataHash:", keccak256(typedData.message.selectorData))
+    console.log("[ZeroDev] Frontend domain:", JSON.stringify(typedData.domain))
+  } catch (e) {
+    console.log("[ZeroDev] Could not compute typedDataHash:", (e as Error)?.message?.slice(0, 200))
+  }
 
   return {
     serializedPermission,

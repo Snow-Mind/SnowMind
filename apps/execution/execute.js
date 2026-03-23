@@ -15,7 +15,12 @@ import {
   maxUint256,
   parseUnits,
   keccak256,
+  concat,
+  pad,
+  encodeAbiParameters,
+  parseAbiParameters,
   hashTypedData,
+  zeroAddress,
 } from "viem"
 import { avalanche } from "viem/chains"
 import { privateKeyToAccount } from "viem/accounts"
@@ -779,36 +784,76 @@ export async function executeRebalance({
       }
     } catch (e) { /* use fallback */ }
 
-    // ── Approach 1: Use the SDK's own getPluginsEnableTypedData function ──
-    // This calls the EXACT same code the SDK uses to build the typed data.
-    // If recovery from this also mismatches, the problem is the enableData
-    // produced by the deserialized validator (differs from what was signed).
-    let sdkRecoveredSigner = "unable_to_recover"
-    let sdkTypedDataHash = "none"
-    try {
-      const { getPluginsEnableTypedData: sdkGetTypedData } =
-        await import("@zerodev/sdk/_esm/accounts/kernel/utils/plugins/ep0_7/getPluginsEnableTypedData.js")
+    // ── Inline SDK's getPluginsEnableTypedData (ep0_7) ──
+    // Direct import of SDK internal path fails due to package exports.
+    // This is a verbatim copy of the SDK function from:
+    // @zerodev/sdk/_esm/accounts/kernel/utils/plugins/ep0_7/getPluginsEnableTypedData.js
+    const VALIDATOR_TYPE_MAP = { SUDO: "0x00", SECONDARY: "0x01", PERMISSION: "0x02" }
+    const CALL_TYPE_INLINE = { DELEGATE_CALL: "0xFF" }
 
-      const sdkTypedData = await sdkGetTypedData({
-        accountAddress: smartAccountAddress,
-        chainId: CHAIN_ID,
-        kernelVersion: onchainVersion,
-        action: action,
-        hook: null,
-        validator: regularValidator,
-        validatorNonce: sdkNonce,
-      })
+    let backendRecoveredSigner = "unable_to_recover"
+    let backendTypedDataHash = "none"
+    let enableSigHash = enableSig ? keccak256(enableSig) : "none"
+    let backendValidationId = "none"
+    let backendSelectorDataHash = "none"
+    let backendDomain = "none"
 
-      sdkTypedDataHash = hashTypedData(sdkTypedData)
+    if (enableSig && enableDataHex && regularValidator && sdkNonce !== null) {
+      try {
+        const validationId = concat([
+          VALIDATOR_TYPE_MAP[regularValidator.validatorType],
+          pad(regularValidator.getIdentifier(), { size: 20, dir: "right" }),
+        ])
+        const selectorData = concat([
+          action.selector,
+          action.address,
+          action.hook?.address ?? zeroAddress,
+          encodeAbiParameters(
+            parseAbiParameters("bytes selectorInitData, bytes hookInitData"),
+            [CALL_TYPE_INLINE.DELEGATE_CALL, "0x0000"],
+          ),
+        ])
+        const domain = {
+          name: "Kernel",
+          version: onchainVersion === "0.3.0" ? "0.3.0-beta" : onchainVersion,
+          chainId: CHAIN_ID,
+          verifyingContract: smartAccountAddress,
+        }
+        const backendTypedData = {
+          domain,
+          types: {
+            Enable: [
+              { name: "validationId", type: "bytes21" },
+              { name: "nonce", type: "uint32" },
+              { name: "hook", type: "address" },
+              { name: "validatorData", type: "bytes" },
+              { name: "hookData", type: "bytes" },
+              { name: "selectorData", type: "bytes" },
+            ],
+          },
+          message: {
+            validationId,
+            nonce: sdkNonce,
+            hook: zeroAddress,
+            validatorData: enableDataHex,
+            hookData: "0x",
+            selectorData,
+          },
+          primaryType: "Enable",
+        }
 
-      if (enableSig) {
-        sdkRecoveredSigner = await recoverTypedDataAddress({
-          ...sdkTypedData,
+        backendTypedDataHash = hashTypedData(backendTypedData)
+        backendValidationId = validationId
+        backendSelectorDataHash = keccak256(selectorData)
+        backendDomain = JSON.stringify(domain)
+
+        backendRecoveredSigner = await recoverTypedDataAddress({
+          ...backendTypedData,
           signature: enableSig,
         })
+      } catch (e) {
+        backendRecoveredSigner = `error: ${e?.message?.slice(0, 200)}`
       }
-    } catch (e) {
-      sdkRecoveredSigner = `error: ${e?.message?.slice(0, 200)}`
     }
 
     // Read the on-chain ECDSA owner for comparison
@@ -823,9 +868,9 @@ export async function executeRebalance({
       })
     } catch (e) { /* ignore */ }
 
-    const sdkSignerMatchesOwner = typeof sdkRecoveredSigner === "string"
+    const backendSignerMatchesOwner = typeof backendRecoveredSigner === "string"
       && typeof ecdsaOwner === "string"
-      && sdkRecoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
+      && backendRecoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
 
     // Hash the enableData for cross-side comparison with frontend
     const enableDataHash = enableDataHex ? keccak256(enableDataHex) : "none"
@@ -839,28 +884,38 @@ export async function executeRebalance({
       sdkNonce,
       onchainVersion,
       permissionId,
+      validatorType: regularValidator?.validatorType ?? "unknown",
       enableDataLength: enableDataHex?.length ?? 0,
       enableDataHash,
       enableSigLength: enableSig?.length ?? 0,
-      sdkTypedDataHash,
-      sdkRecoveredSigner,
+      enableSigHash,
+      backendTypedDataHash,
+      backendValidationId,
+      backendSelectorDataHash,
+      backendDomain,
+      backendRecoveredSigner,
       ecdsaOwner,
-      sdkSignerMatchesOwner,
+      backendSignerMatchesOwner,
       actionSelector: action?.selector ?? "null",
       actionAddress: action?.address ?? "null",
+      actionHookAddress: action?.hook?.address ?? "none",
       timestamp: new Date().toISOString(),
     }))
 
-    if (!sdkSignerMatchesOwner) {
+    if (!backendSignerMatchesOwner) {
       console.log(JSON.stringify({
         level: "error",
         action: "enable_signature_MISMATCH",
-        detail: "SDK-based typed data recovery failed — the deserialized validator's getEnableData() " +
-          "likely produces different data than what was signed on the frontend. " +
-          "Compare enableDataHash between frontend and backend to confirm.",
-        sdkRecoveredSigner,
+        detail: "Compare backendTypedDataHash with frontend typedDataHash from console logs. " +
+          "If hashes match, the typed data is identical and the enable signature itself is the problem. " +
+          "If hashes differ, compare validationId, selectorDataHash, domain, nonce to find the discrepancy.",
+        backendRecoveredSigner,
         ecdsaOwner,
         enableDataHash,
+        enableSigHash,
+        backendTypedDataHash,
+        backendValidationId,
+        backendSelectorDataHash,
         onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
         sdkNonce,
         timestamp: new Date().toISOString(),
