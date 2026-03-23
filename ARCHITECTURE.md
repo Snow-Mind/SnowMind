@@ -103,7 +103,7 @@ Euler and Silo vaults are opt-in: fully active in the optimizer but not enabled 
 - **Interface**: `mint(amount)` / `redeem(qiTokenAmount)`
 - **APY Source**: `supplyRatePerTimestamp()` → annualized (use `exchangeRateStored()` for balance, NOT `exchangeRateCurrent()`)
 - **TVL Cap**: 7.5% of total USDC supplied
-- **Risk Score**: 9/10 — established on Avalanche since 2021
+- **Risk Score**: 10/10 — Avalanche-native since 2021, battle-tested, deep USDC liquidity
 - **Health checks**: Comptroller pause flags (mintGuardianPaused, redeemGuardianPaused), utilization, exploit detection
 
 ### Spark — Fixed-Rate Savings Vault
@@ -187,7 +187,7 @@ Every user selects which markets (protocols) the agent is allowed to use and cho
 | Market | Default Enabled | Risk Score |
 |---|---|---|
 | Aave V3 | Yes | 10/10 |
-| Benqi | Yes | 9/10 |
+| Benqi | Yes | 10/10 |
 | Spark | Yes | 9/10 |
 | Euler V2 (9Summits) | No (opt-in) | 6/10 |
 | Silo savUSD/USDC | No (opt-in) | 8/10 |
@@ -230,8 +230,7 @@ SCHEDULER FIRES (every 30 minutes)
 
 2. LOAD ACTIVE ACCOUNTS
    WHERE is_active = true
-     AND session_key_expires_at > now() + INTERVAL '24 hours'
-   (Skip accounts with expiring session keys — require renewal first)
+   (Session keys are infinite — no expiry filter needed)
 
    ═══ PER-ACCOUNT LOOP ═══════════════════════════════════════
 
@@ -426,9 +425,7 @@ User signs a session key during the activation step. This is a limited-permissio
 **Session key CANNOT do:**
 - Transfer USDC to any other address
 - Call any function not listed above
-- Operate after 7 days (expires, auto-renewal triggered on next frontend visit)
-- Exceed 20 operations per day
-- Exceed 0.5 AVAX total gas
+- Operate on any contract or function not listed above
 
 All restrictions are enforced on-chain by Kernel v3.1 call policy. A stolen session key can only do what the policy allows.
 
@@ -504,7 +501,7 @@ Layer 1: On-Chain Session Key Call Policy (Kernel v3.1)
   ├─ USDC.transfer only to TREASURY and userEOA (two destinations, both verified)
   ├─ userEOA address read from on-chain owner record — NEVER from Supabase
   ├─ Amount cap on treasury transfer
-  ├─ 7-day expiry, 20 ops/day rate limit
+  ├─ No expiry (infinite lifetime — revoked on full withdrawal or user request)
   └─ 0.5 AVAX total gas cap
 
 Layer 2: Rate Validation (Backend)
@@ -532,7 +529,9 @@ Layer 4: Operational Monitoring
 Layer 5: Infrastructure Security
   ├─ Session key encryption: AES-256-GCM with KMS envelope encryption
   ├─ Encryption key: AWS KMS or Supabase Vault — never in environment variables
-  ├─ Key rotation: aligned with 7-day session key expiry  ├─ Session key renewal guard: rejects new key if existing key has >24h remaining  ├─ Supabase RLS: users can only read their own accounts/allocations
+  ├─ Key rotation: on user re-grant or full withdrawal (session keys are infinite)
+  ├─ Re-grant guard: rejects new key if existing key has >24h remaining (force bypass available)
+  ├─ Supabase RLS: users can only read their own accounts/allocations
   ├─ Session keys: USING (false) policy — frontend cannot read them ever
   ├─ Audit log: every session key operation logged to session_key_audit
   └─ Fallback bundler: Pimlico primary, Alchemy AA API as fallback
@@ -586,7 +585,7 @@ CREATE TABLE session_keys (
     encrypted_blob      text NOT NULL,              -- AES-256-GCM via KMS
     iv                  text NOT NULL,
     created_at          timestamptz DEFAULT now(),
-    expires_at          timestamptz NOT NULL
+    expires_at          timestamptz NOT NULL         -- Far-future date (2100-01-01) for infinite keys
 );
 
 -- Current USDC positions per protocol
@@ -876,10 +875,11 @@ ZeroDev paymaster must be funded. If it runs empty, all UserOperations fail sile
 - Auto-replenishment script from treasury wallet
 - Fallback: if paymaster depleted, surface a UI prompt explaining the user must pay gas temporarily
 
-### Session Key Rotation
-- TTL: 7 days
-- Auto-renewal: when a session key has < 48 hours remaining, prompt renewal on next frontend visit
-- Backend guard: refuse to execute rebalances on keys expiring < 24 hours. Require renewal first.
+### Session Key Lifetime
+- TTL: Infinite (no on-chain expiry)
+- Revocation: On full withdrawal (automatic) or user-initiated from dashboard
+- Re-grant: User can re-grant session key from dashboard at any time (replaces previous key)
+- Backend guard: session key is encrypted (AES-256-GCM) and stored in Supabase. Decrypted only at execution time.
 
 ---
 

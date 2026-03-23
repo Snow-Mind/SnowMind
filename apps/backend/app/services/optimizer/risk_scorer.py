@@ -14,7 +14,7 @@ _ZERO = Decimal("0")
 # Static base scores (from snowmind-risk-scoring.md, 1-10 scale, higher = safer)
 BASE_RISK_SCORES: dict[str, Decimal] = {
     "aave_v3": Decimal("10.0"),          # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1
-    "benqi": Decimal("9.0"),             # Safety 3 + Liquidity 2 + Collateral 2 + Yield 2 + Architecture 1
+    "benqi": Decimal("10.0"),            # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 — Avalanche-native since 2021, battle-tested
     "spark": Decimal("9.0"),             # Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 0
     "silo_savusd_usdc": Decimal("8.0"),  # Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1
     "euler_v2": Decimal("6.0"),          # Safety 2 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 0

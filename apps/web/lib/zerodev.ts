@@ -17,7 +17,6 @@ import {
   toCallPolicy,
   toGasPolicy,
   toRateLimitPolicy,
-  toTimestampPolicy,
   ParamCondition,
   CallPolicyVersion,
 } from "@zerodev/permissions/policies"
@@ -291,7 +290,7 @@ export async function grantAndSerializeSessionKey(
   },
   config: {
     maxAmountUSDC:  number   // max USDC per single tx e.g. 10000
-    durationDays:   number   // session key lifetime e.g. 30
+    durationDays:   number   // deprecated: session key no longer expires (kept for API compat)
     maxOpsPerDay:   number   // rate limit e.g. 20
     userEOA:        `0x${string}`  // user's EOA address for withdrawal transfers
   }
@@ -303,7 +302,10 @@ export async function grantAndSerializeSessionKey(
 }> {
   const publicClient = getPublicClient()
   const maxAmount    = parseUnits(config.maxAmountUSDC.toString(), 6)
-  const expiresAt    = Math.floor(Date.now() / 1000) + config.durationDays * 86400
+  // Session key never expires on-chain. Store a far-future date in DB for
+  // backward compatibility with the expires_at NOT NULL column.
+  // 4102444800 = 2100-01-01T00:00:00Z
+  const expiresAt    = 4102444800
 
   // Generate ephemeral session key
   const sessionPrivateKey  = generatePrivateKey()
@@ -621,15 +623,16 @@ export async function grantAndSerializeSessionKey(
     interval: 86400,
   })
 
-  // Timestamp: auto-expire
-  const timestampPolicy = toTimestampPolicy({ validUntil: expiresAt })
+  // Session key does NOT expire on-chain (infinite lifetime).
+  // The agent runs indefinitely until the user revokes or does a full withdrawal.
+  // No toTimestampPolicy — only call, gas, and rate-limit policies apply.
 
   // Compose all policies — ALL must pass for every UserOp
   const permissionPlugin = await toPermissionValidator(publicClient, {
     entryPoint:    ENTRYPOINT,
     kernelVersion: KERNEL_V3_1,
     signer:        sessionKeySigner,
-    policies:      [callPolicy, gasPolicy, rateLimitPolicy, timestampPolicy],
+    policies:      [callPolicy, gasPolicy, rateLimitPolicy],
   })
 
   // Validate sudo validator exists BEFORE creating the permission account

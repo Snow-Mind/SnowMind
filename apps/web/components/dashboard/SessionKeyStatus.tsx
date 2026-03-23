@@ -267,13 +267,8 @@ export default function SessionKeyStatus() {
             <Clock className="h-3.5 w-3.5 text-[#8A837C]" />
             <span className="text-xs text-[#1A1715]">Expires</span>
           </div>
-          <span
-            className={`font-mono text-xs ${isExpiringSoon ? "text-amber-500" : "text-[#8A837C]"}`}
-          >
-            {isExpiringSoon && (
-              <AlertTriangle className="mr-1 inline h-3 w-3 text-amber-400" />
-            )}
-            {hoursLeft < 48 ? `${hoursLeft}h left` : `${daysLeft} days left`}
+          <span className="font-mono text-xs text-[#059669]">
+            Never (infinite)
           </span>
         </div>
         <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA]/60 bg-[#EDE8E3]/30 px-3 py-2.5">
@@ -296,7 +291,7 @@ export default function SessionKeyStatus() {
           ) : (
             <RefreshCw className="h-3 w-3" />
           )}
-          {granting ? "Granting…" : isExpiringSoon ? "Renew in <48h" : "Renew Key"}
+          {granting ? "Granting…" : "Re-grant Key"}
         </button>
         {!showRevokeConfirm ? (
           <button
