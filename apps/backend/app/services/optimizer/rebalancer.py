@@ -201,7 +201,11 @@ class Rebalancer:
                 reason="No protocols permitted by active session key",
             )
 
-        # 4. Get current allocations from DB + on-chain idle USDC
+        # 4. Get current allocations from DB + on-chain verification
+        # CRITICAL: Always verify DB allocations against on-chain balances.
+        # Stale DB entries (from failed rebalances, partial executions, etc.)
+        # cause the optimizer to generate impossible moves that revert on-chain,
+        # creating an infinite failure loop.
         alloc_rows = (
             db.table("allocations")
             .select("protocol_id, amount_usdc")
@@ -210,10 +214,50 @@ class Rebalancer:
         )
         current: dict[str, Decimal] = {}
         total_usd = Decimal("0")
+        db_needs_update = False
         for row in alloc_rows.data:
-            amt = Decimal(str(row["amount_usdc"]))
-            current[row["protocol_id"]] = amt
-            total_usd += amt
+            db_amt = Decimal(str(row["amount_usdc"]))
+            pid = row["protocol_id"]
+            # Verify each DB allocation against on-chain balance
+            try:
+                adapter = get_adapter(pid)
+                balance_wei = await adapter.get_balance(smart_account_address)
+                onchain_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                if abs(onchain_usd - db_amt) > Decimal("0.10"):
+                    logger.warning(
+                        "Allocation mismatch %s/%s: DB=$%.2f, on-chain=$%.2f — using on-chain",
+                        smart_account_address, pid, float(db_amt), float(onchain_usd),
+                    )
+                    db_needs_update = True
+                if onchain_usd >= Decimal("0.01"):
+                    current[pid] = onchain_usd
+                    total_usd += onchain_usd
+                elif db_amt >= Decimal("0.01"):
+                    # On-chain says $0 but DB says >$0 — stale entry, skip it
+                    logger.warning(
+                        "Stale DB allocation %s/%s: DB=$%.4f, on-chain=$%.4f — removing",
+                        smart_account_address, pid, float(db_amt), float(onchain_usd),
+                    )
+                    db_needs_update = True
+            except Exception as exc:
+                logger.warning("On-chain check failed for %s/%s: %s — using DB value", account_id, pid, exc)
+                if db_amt >= Decimal("0.01"):
+                    current[pid] = db_amt
+                    total_usd += db_amt
+
+        # Sync DB to on-chain truth if mismatches were detected
+        if db_needs_update:
+            try:
+                if current:
+                    await self._update_allocations_db(db, account_id, current)
+                    logger.info("Synced allocations DB to on-chain for %s: %s",
+                                account_id, {p: f"${float(v):.2f}" for p, v in current.items()})
+                else:
+                    # All DB allocations were stale — wipe them
+                    db.table("allocations").delete().eq("account_id", account_id).execute()
+                    logger.info("Cleared all stale allocations for %s", account_id)
+            except Exception as exc:
+                logger.warning("Failed to sync allocations DB: %s", exc)
 
         # 4a. On-chain balance discovery — if allocations table is empty,
         # scan ALL protocols (not just session-key-allowed) for existing
@@ -683,6 +727,36 @@ class Rebalancer:
             raise  # Let scheduler see ValueError as non-retryable
         except Exception as exc:
             logger.exception("Rebalance execution failed for %s", smart_account_address)
+
+            # ── Detect "inner calls reverting" and force-reconcile DB ──
+            # When the execution error states that inner calls (withdrawals/
+            # deposits) are reverting, it usually means the DB allocations
+            # are stale (e.g. DB says user has $1 in Euler but on-chain
+            # they have $0).  Force-reconcile the DB to on-chain truth so
+            # the NEXT scheduler cycle does not repeat the same failure.
+            err_msg = str(exc).lower()
+            if "inner calls" in err_msg or "reverting" in err_msg or "useroperation reverted" in err_msg:
+                logger.warning(
+                    "Inner calls reverted for %s — force-reconciling DB allocations to on-chain",
+                    smart_account_address,
+                )
+                try:
+                    all_protocol_ids = set(self._protocol_addresses.keys())
+                    onchain = await self._discover_onchain_balances(
+                        smart_account_address, all_protocol_ids,
+                    )
+                    if onchain:
+                        await self._update_allocations_db(db, account_id, onchain)
+                        logger.info(
+                            "Reconciled allocations for %s to on-chain: %s",
+                            account_id,
+                            {p: f"${float(v):.2f}" for p, v in onchain.items()},
+                        )
+                    else:
+                        db.table("allocations").delete().eq("account_id", account_id).execute()
+                        logger.info("Cleared all allocations for %s (no on-chain positions found)", account_id)
+                except Exception as reconcile_exc:
+                    logger.warning("DB reconciliation failed: %s", reconcile_exc)
 
             # Initial deployment fallback: if top protocol fails, try next-best protocol
             # so idle USDC is still put to work.

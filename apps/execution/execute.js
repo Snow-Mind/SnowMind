@@ -426,6 +426,53 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
  * - MAX → redeem(shareBalance, receiver, owner) — requires backend to pass actual share balance.
  * NEVER use redeem() with USDC amounts — shares ≠ assets when share price > 1.0.
  */
+/**
+ * Verify the smart account actually holds vault shares before building
+ * a withdrawal call.  If the account has 0 shares, the on-chain redeem/
+ * withdraw will revert ("burn amount exceeds balance"), which reverts
+ * the entire atomic UserOp.  Catching this BEFORE submission prevents
+ * the infinite failure loop of stale-DB → impossible withdrawal → revert
+ * → retry next cycle → same failure.
+ */
+async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddress, protocolName) {
+  try {
+    const shareBalance = await publicClient.readContract({
+      address: vaultAddress,
+      abi: ERC4626_ABI,
+      functionName: "balanceOf",
+      args: [accountAddress],
+    })
+    if (shareBalance === 0n) {
+      throw new Error(
+        `${protocolName} withdrawal skipped: account ${accountAddress} has 0 vault shares ` +
+        `in ${vaultAddress}. DB allocation is stale — reconciling.`
+      )
+    }
+    console.log(JSON.stringify({
+      level: "info",
+      action: "vault_share_balance_verified",
+      protocol: protocolName,
+      vaultAddress,
+      accountAddress,
+      shareBalance: shareBalance.toString(),
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (err) {
+    if (err.message?.includes("withdrawal skipped")) {
+      throw err // Re-throw our own guard error
+    }
+    // RPC failure — log warning but don't block the withdrawal
+    // (the on-chain transaction will tell us if it works)
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "vault_share_balance_check_failed",
+      protocol: protocolName,
+      error: err?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+}
+
 function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAccountAddress) {
   if (amountUSDC === "MAX") {
     if (!shareBalance) {
@@ -546,12 +593,16 @@ export async function executeRebalance({
         data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [BigInt(qiTokenAmount)] }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SPARK_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SPARK_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.EULER_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.EULER_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SAVUSD_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SILO_SAVUSD_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SILO_SUSDP_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     }
   }
