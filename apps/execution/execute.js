@@ -301,12 +301,12 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
         timestamp: new Date().toISOString(),
       }))
     } catch (e) {
-      console.log(JSON.stringify({
-        level: "warn",
-        action: "force_regular_mode_parse_failed",
-        error: e?.message?.slice(0, 200),
-        timestamp: new Date().toISOString(),
-      }))
+      // If we can't parse the permission blob in regular mode, the blob
+      // is corrupt and MUST NOT be used as-is (it would attempt enable
+      // mode and fail with "duplicate permissionHash").
+      throw new Error(
+        `forceRegularMode: failed to parse serialized permission blob: ${e?.message?.slice(0, 200)}`
+      )
     }
   }
 

@@ -100,6 +100,15 @@ class RateValidator:
 
         last_apy = readings[-1].apy
         if last_apy == 0:
+            # If previous reading was 0 (protocol paused/cold start),
+            # only accept if new rate is below 1% APY absolute.
+            # Prevents accepting any arbitrary spike from zero.
+            if current_apy > Decimal("0.01"):
+                logger.warning(
+                    "Velocity check: %s jumped from 0%% to %.2f%% — flagged",
+                    protocol_id, float(current_apy * 100),
+                )
+                return False
             return True
 
         change = abs(current_apy - last_apy) / last_apy

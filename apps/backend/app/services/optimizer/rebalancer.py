@@ -916,7 +916,7 @@ class Rebalancer:
         idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
 
         available_for_deposit = total_withdraw_amt + idle_usdc
-        if total_deposit_amt > available_for_deposit + Decimal("0.50"):
+        if total_deposit_amt > available_for_deposit + Decimal("0.05"):
             logger.warning(
                 "BALANCE GUARD: deposit $%.2f exceeds available funds $%.2f "
                 "(withdrawals=$%.2f + idle=$%.2f) for %s — skipping rebalance",

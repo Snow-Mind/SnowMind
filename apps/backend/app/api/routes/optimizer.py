@@ -275,6 +275,10 @@ async def get_all_rates(request: Request):
         if twap_apy is not None and twap_apy > Decimal("0"):
             display_apy = twap_apy
 
+        # Cap displayed APY at sanity bound (25%) — never show inflated values
+        # to users even if transient spike landed in the TWAP buffer.
+        display_apy = min(display_apy, Decimal("0.25"))
+
         out.append(
             ProtocolRateResponse(
                 protocol_id=pid,

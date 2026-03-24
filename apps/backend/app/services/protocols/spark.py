@@ -262,15 +262,16 @@ class SparkAdapter(BaseProtocolAdapter):
                             snapshot_at, e,
                         )
 
-                # Compound APY: annualize the growth over the actual elapsed period
-                # periods_per_year = 365 / elapsed_days
-                periods_per_year = Decimal("365") / elapsed_days
-                gross_apy = (Decimal("1") + growth) ** periods_per_year - Decimal("1")
+                # Linear annualization: APY = daily_growth × 365
+                # Compound formula amplifies transient spikes and diverges
+                # from DefiLlama's methodology for lending pools.
+                daily_growth = growth / elapsed_days
+                gross_apy = daily_growth * Decimal("365")
                 use_snapshot = True
 
                 logger.debug(
-                    "Spark APY calc: growth=%s elapsed_days=%s periods=%s apy=%s",
-                    growth, elapsed_days, periods_per_year, gross_apy,
+                    "Spark APY calc: growth=%s elapsed_days=%s apy=%s",
+                    growth, elapsed_days, gross_apy,
                 )
 
         if not use_snapshot:
@@ -286,9 +287,10 @@ class SparkAdapter(BaseProtocolAdapter):
                 if elapsed > Decimal("60"):
                     growth = (current_price - self._last_share_price) / self._last_share_price
                     if growth > Decimal("0"):
-                        # Compound APY: (1 + growth)^periods - 1
-                        periods = SECONDS_PER_YEAR / elapsed
-                        self._cached_apy = (Decimal("1") + growth) ** periods - Decimal("1")
+                        # Linear annualization for consistency with snapshot method
+                        seconds_elapsed = elapsed
+                        daily_growth = growth * (Decimal("86400") / seconds_elapsed)
+                        self._cached_apy = daily_growth * Decimal("365")
                     self._last_share_price = current_price
                     self._last_share_price_time = now
                 # elapsed < 60s: keep _cached_apy, don't reset observation window

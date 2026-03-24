@@ -11,7 +11,27 @@ const recentNonces = new Map()
 // Per-sender concurrency lock: prevents two concurrent UserOps for the same
 // smart account from being submitted to the bundler simultaneously.
 // This avoids "duplicate permissionHash" and nonce collision errors.
-const activeSenders = new Set()
+// Uses a Map with timestamps so stale entries auto-expire after 90 seconds
+// (e.g. if a UserOp times out and the finally block doesn't run).
+const activeSenders = new Map()
+
+function isSenderActive(sender) {
+  const ts = activeSenders.get(sender)
+  if (!ts) return false
+  if (Date.now() - ts > 90_000) {
+    activeSenders.delete(sender)
+    return false
+  }
+  return true
+}
+
+function markSenderActive(sender) {
+  activeSenders.set(sender, Date.now())
+}
+
+function clearSender(sender) {
+  activeSenders.delete(sender)
+}
 
 // ── Startup validation: fail fast if critical env vars are missing ───────────
 const REQUIRED_ENV = [
@@ -139,7 +159,7 @@ app.post("/execute-rebalance", async (req, res) => {
 
   // Per-sender concurrency guard: reject if another UserOp is in-flight
   const sender = req.body.smartAccountAddress?.toLowerCase()
-  if (activeSenders.has(sender)) {
+  if (isSenderActive(sender)) {
     console.log(JSON.stringify({
       level: "warn",
       action: "rebalance_dedup_rejected",
@@ -149,7 +169,7 @@ app.post("/execute-rebalance", async (req, res) => {
     }))
     return res.status(409).json({ error: "Rebalance already in-flight for this account" })
   }
-  activeSenders.add(sender)
+  markSenderActive(sender)
 
   try {
     const result = await withTimeout(executeRebalance(req.body), EXECUTION_TIMEOUT_MS)
@@ -180,7 +200,7 @@ app.post("/execute-rebalance", async (req, res) => {
     const status = err.message?.includes("timed out") ? 504 : 500
     res.status(status).json({ error: err.message, code: err.code || "UNKNOWN" })
   } finally {
-    activeSenders.delete(sender)
+    clearSender(sender)
   }
 })
 
@@ -190,6 +210,22 @@ app.post("/execute/withdrawal", async (req, res) => {
   if (validationErrors.length > 0) {
     return res.status(400).json({ error: "Validation failed", details: validationErrors })
   }
+
+  // Per-sender concurrency guard: same lock as rebalance to prevent
+  // concurrent UserOps (withdrawal + rebalance or two withdrawals)
+  const sender = req.body.smartAccountAddress?.toLowerCase()
+  if (isSenderActive(sender)) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "withdrawal_dedup_rejected",
+      smartAccountAddress: req.body.smartAccountAddress,
+      message: "Another operation is already in-flight for this sender",
+      timestamp: new Date().toISOString(),
+    }))
+    return res.status(409).json({ error: "Operation already in-flight for this account" })
+  }
+  markSenderActive(sender)
+
   try {
     const result = await withTimeout(executeWithdrawal(req.body), EXECUTION_TIMEOUT_MS)
     console.log(JSON.stringify({
@@ -213,6 +249,8 @@ app.post("/execute/withdrawal", async (req, res) => {
     }))
     const status = err.message?.includes("timed out") ? 504 : 500
     res.status(status).json({ error: err.message, code: err.code || "UNKNOWN" })
+  } finally {
+    clearSender(sender)
   }
 })
 

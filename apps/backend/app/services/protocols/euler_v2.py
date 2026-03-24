@@ -207,10 +207,12 @@ class EulerV2Adapter(BaseProtocolAdapter):
                                 elapsed_days = elapsed_s / Decimal("86400")
                         except (ValueError, TypeError):
                             pass
-                    periods = Decimal("365") / elapsed_days
-                    self._cached_apy = (
-                        (Decimal("1") + growth) ** periods - Decimal("1")
-                    )
+                    # Linear annualization: APY = daily_growth × 365
+                    # Compound formula amplifies transient spikes (0.06% daily
+                    # → 25% compound vs 22% linear).  Lending pool interest
+                    # accrues linearly, so linear matches DefiLlama methodology.
+                    daily_growth = growth / elapsed_days
+                    self._cached_apy = daily_growth * Decimal("365")
                     use_snapshot = True
 
         # ── Fallback: share-price growth observation ─────────────────────
@@ -224,8 +226,10 @@ class EulerV2Adapter(BaseProtocolAdapter):
                 if elapsed > Decimal("60"):  # At least 1 minute between readings
                     growth = (current_price - self._last_share_price) / self._last_share_price
                     if growth > Decimal("0"):
-                        periods = SECONDS_PER_YEAR / elapsed
-                        self._cached_apy = (Decimal("1") + growth) ** periods - Decimal("1")
+                        # Linear annualization for consistency with snapshot method
+                        seconds_elapsed = elapsed
+                        daily_growth = growth * (Decimal("86400") / seconds_elapsed)
+                        self._cached_apy = daily_growth * Decimal("365")
                     self._last_share_price = current_price
                     self._last_share_price_time = now
             else:
