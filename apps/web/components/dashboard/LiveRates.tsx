@@ -28,6 +28,62 @@ export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
     return b.currentApy - a.currentApy;
   });
 
+  // Split into Selected (user has funds) vs Available (no funds / not selected)
+  const selectedMarkets = sorted.filter(
+    (r) => !r.isComingSoon && activeProtocolIds.includes(r.protocolId),
+  );
+  const availableMarkets = sorted.filter(
+    (r) => r.isComingSoon || !activeProtocolIds.includes(r.protocolId),
+  );
+
+  const renderCard = (r: (typeof sorted)[number]) => {
+    const meta =
+      PROTOCOL_CONFIG[r.protocolId as keyof typeof PROTOCOL_CONFIG];
+    if (!meta) return null;
+
+    return (
+      <div
+        key={r.protocolId}
+        className={`rounded-xl border p-4 transition-colors ${
+          r.isComingSoon
+            ? "border-border/20 bg-void-2/10 opacity-50"
+            : activeProtocolIds.includes(r.protocolId)
+              ? "border-[#E84142] bg-[#E84142]/[0.06]"
+              : "border-border/50 bg-void-2/30"
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Image
+              src={meta.logoPath}
+              alt={meta.name}
+              width={24}
+              height={24}
+              className="rounded-full"
+            />
+            <span className="text-sm font-medium text-arctic">
+              {r.name}
+            </span>
+            {r.isComingSoon && (
+              <span className="rounded-full bg-amber/10 px-2 py-0.5 text-[10px] text-amber">
+                Coming Soon
+              </span>
+            )}
+          </div>
+          {!r.isComingSoon && (
+            <div className="flex items-center gap-1">
+              <TrendingUp className="h-3 w-3 text-muted-foreground" />
+              <span className="font-mono text-lg font-bold text-glacier">
+                {formatPct(r.currentApy * 100)}
+              </span>
+              <span className="text-xs text-muted-foreground">APY</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="crystal-card p-6">
       <div className="flex items-center justify-between">
@@ -63,55 +119,31 @@ export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
             <Loader2 className="h-5 w-5 animate-spin text-glacier" />
           </div>
         ) : (
-          sorted.map((r) => {
-            const meta =
-              PROTOCOL_CONFIG[r.protocolId as keyof typeof PROTOCOL_CONFIG];
-            if (!meta) return null;
-
-            return (
-              <div
-                key={r.protocolId}
-                className={`rounded-xl border p-4 transition-colors ${
-                  r.isComingSoon
-                    ? "border-border/20 bg-void-2/10 opacity-50"
-                    : activeProtocolIds.includes(r.protocolId)
-                      ? "border-[#E84142] bg-[#E84142]/[0.06]"
-                      : "border-border/50 bg-void-2/30"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Image
-                      src={meta.logoPath}
-                      alt={meta.name}
-                      width={24}
-                      height={24}
-                      className="rounded-full"
-                    />
-                    <span className="text-sm font-medium text-arctic">
-                      {r.name}
-                    </span>
-                    {r.isComingSoon && (
-                      <span className="rounded-full bg-amber/10 px-2 py-0.5 text-[10px] text-amber">
-                        Coming Soon
-                      </span>
-                    )}
-                  </div>
-                  {!r.isComingSoon && (
-                    <div className="flex items-center gap-1">
-                      <TrendingUp className="h-3 w-3 text-muted-foreground" />
-                      <span className="font-mono text-lg font-bold text-glacier">
-                        {formatPct(r.currentApy * 100)}
-                      </span>
-                      <span className="text-xs text-muted-foreground">APY</span>
-                    </div>
-                  )}
+          <>
+            {/* Selected Markets */}
+            {selectedMarkets.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-glacier/70">
+                  Selected Markets
+                </h3>
+                <div className="space-y-2">
+                  {selectedMarkets.map(renderCard)}
                 </div>
-
-
               </div>
-            );
-          })
+            )}
+
+            {/* Available Markets */}
+            {availableMarkets.length > 0 && (
+              <div className={selectedMarkets.length > 0 ? "mt-4" : ""}>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Available Markets
+                </h3>
+                <div className="space-y-2">
+                  {availableMarkets.map(renderCard)}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

@@ -139,14 +139,16 @@ class SiloAdapter(BaseProtocolAdapter):
     async def get_rate(
         self,
         yesterday_snapshot: Decimal | None = None,
+        snapshot_at: str | None = None,
     ) -> ProtocolRate:
-        """Compute APY using 24h convertToAssets snapshot (primary) or share-price
-        growth observation (fallback).
+        """Compute APY using convertToAssets snapshot delta with ACTUAL elapsed
+        time (not hardcoded 24h).
 
         Primary: When yesterday_snapshot is provided (1e18-scale convertToAssets
-        value from ~24h ago), APY = (1 + daily_growth)^365 - 1.
+        value from ~24h ago), APY = (1 + growth)^(365/elapsed_days) - 1.
         Fallback: Observes share-price change over ≥60s.
         """
+        import datetime as _dt
         vault = self._get_vault()
         if not vault:
             return ProtocolRate(
@@ -200,10 +202,26 @@ class SiloAdapter(BaseProtocolAdapter):
                     self.protocol_id, yesterday_snapshot, today_value,
                 )
             else:
-                daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
-                if daily_rate > Decimal("0"):
+                growth = (today_value - yesterday_snapshot) / yesterday_snapshot
+                if growth > Decimal("0"):
+                    # Use ACTUAL elapsed time, not hardcoded 24h
+                    elapsed_days = Decimal("1")  # default fallback
+                    if snapshot_at:
+                        try:
+                            snap_dt = _dt.datetime.fromisoformat(
+                                snapshot_at.replace("Z", "+00:00")
+                            )
+                            now_dt = _dt.datetime.now(_dt.timezone.utc)
+                            elapsed_s = Decimal(
+                                str((now_dt - snap_dt).total_seconds())
+                            )
+                            if elapsed_s > Decimal("3600"):
+                                elapsed_days = elapsed_s / Decimal("86400")
+                        except (ValueError, TypeError):
+                            pass
+                    periods = Decimal("365") / elapsed_days
                     self._cached_apy = (
-                        (Decimal("1") + daily_rate) ** Decimal("365") - Decimal("1")
+                        (Decimal("1") + growth) ** periods - Decimal("1")
                     )
                     use_snapshot = True
 

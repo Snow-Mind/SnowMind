@@ -47,10 +47,10 @@ class RateValidator:
     # is a point-in-time daily delta while DefiLlama averages over longer
     # periods.  Use a wider threshold for these to avoid false halts.
     _PROTOCOL_DIVERGENCE_OVERRIDES: dict[str, Decimal] = {
-        "spark":             Decimal("0.35"),  # 35% — DSR-style, daily governance-set rate
+        "spark":             Decimal("0.20"),  # 20% — now using actual elapsed time, tighter is safe
         "euler_v2":          Decimal("0.25"),  # 25% — ERC-4626 vault
-        "silo_savusd_usdc":  Decimal("0.30"),  # 30% — Silo vault
-        "silo_susdp_usdc":   Decimal("0.30"),  # 30% — Silo vault
+        "silo_savusd_usdc":  Decimal("0.25"),  # 25% — Silo vault (tightened from 30%)
+        "silo_susdp_usdc":   Decimal("0.25"),  # 25% — Silo vault (tightened from 30%)
     }
 
     def __init__(self):

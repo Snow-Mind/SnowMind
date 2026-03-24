@@ -415,18 +415,23 @@ class Rebalancer:
         # ── 5b. Check health of CURRENT positions ONLY ──────────────
         health_results: dict[str, HealthCheckResult] = {}
         unhealthy_positions: list[str] = []
+        stranded_positions: dict[str, Decimal] = {}  # pid → USD amount
 
         for pid, position_amt in current.items():
             if position_amt < Decimal("1"):
                 continue
             if pid not in allowed_rates:
-                # Session key no longer covers this protocol → forced exit
+                # Session key does NOT cover this protocol — we CANNOT
+                # withdraw from it.  Treat the funds as stranded (not
+                # actionable) and deduct from total_usd so the allocator
+                # doesn't try to re-deploy money we can't actually move.
                 logger.warning(
-                    "FORCED EXIT: position $%.2f in %s but protocol not in "
-                    "allowed rates — forcing withdrawal",
+                    "STRANDED: $%.2f in %s — session key does not cover "
+                    "this protocol.  User must re-grant session key with "
+                    "all protocols to allow fund recovery.",
                     float(position_amt), pid,
                 )
-                unhealthy_positions.append(pid)
+                stranded_positions[pid] = position_amt
                 continue
 
             hr = await _check_one(pid, position_amt)
@@ -439,6 +444,27 @@ class Rebalancer:
                     "; ".join(hr.exclusion_reasons) or "unhealthy",
                 )
                 unhealthy_positions.append(pid)
+
+        # Deduct stranded funds — these are inaccessible with current
+        # session key, so they must NOT be counted in the allocatable total.
+        stranded_total = sum(stranded_positions.values())
+        if stranded_total > Decimal("0"):
+            total_usd -= stranded_total
+            logger.warning(
+                "Deducted $%.2f stranded funds from total_usd "
+                "(new allocatable total: $%.2f)",
+                float(stranded_total), float(total_usd),
+            )
+            if total_usd <= Decimal("0.01"):
+                return await self._log(
+                    db, account_id, "skipped",
+                    reason=(
+                        f"All funds (${float(stranded_total):.2f}) stranded in "
+                        f"protocols outside session key scope: "
+                        f"{', '.join(stranded_positions.keys())}. "
+                        f"User must re-grant session key."
+                    ),
+                )
 
         # ── 5c. Check CANDIDATES in APY-ranked order (one at a time) ─
         # Walk the ranked list; health-check each candidate ONE at a
@@ -878,6 +904,28 @@ class Rebalancer:
                 withdrawals.append((protocol_id, current_usd))
 
         if not withdrawals and not deposits:
+            return None
+
+        # ── Balance guard ────────────────────────────────────────────
+        # Verify that the funds we plan to deposit actually exist.
+        # total_deposits must not exceed total_withdrawals + idle USDC.
+        # This prevents sending impossible "deposit-only" rebalances
+        # when on-chain balance reads differ from the scheduler's DB view.
+        total_deposit_amt = sum(amt for _, amt in deposits)
+        total_withdraw_amt = sum(amt for _, amt in withdrawals)
+        idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
+
+        available_for_deposit = total_withdraw_amt + idle_usdc
+        if total_deposit_amt > available_for_deposit + Decimal("0.50"):
+            logger.warning(
+                "BALANCE GUARD: deposit $%.2f exceeds available funds $%.2f "
+                "(withdrawals=$%.2f + idle=$%.2f) for %s — skipping rebalance",
+                float(total_deposit_amt),
+                float(available_for_deposit),
+                float(total_withdraw_amt),
+                float(idle_usdc),
+                smart_account_address,
+            )
             return None
 
         # Step 3: Get session key and call execution service

@@ -184,14 +184,15 @@ class SparkAdapter(BaseProtocolAdapter):
     async def get_rate(
         self,
         yesterday_snapshot: Decimal | None = None,
+        snapshot_at: str | None = None,
         expected_hold_days: int = DEFAULT_EXPECTED_HOLD_DAYS,
     ) -> ProtocolRate:
         """
         Calculate Spark effective APY on Avalanche.
 
-        Primary:  gross_apy = (today_convertToAssets - yesterday_snapshot) / yesterday × 365
-        Fallback: When no DB snapshot exists yet, uses share-price-growth estimation
-                  (same pattern as Euler/Silo — observes convertToAssets change over time).
+        Primary:  Use convertToAssets delta over the ACTUAL elapsed time since
+                  the snapshot (not a hardcoded 24h assumption). This eliminates
+                  APY inflation when the snapshot is older than 24h.
 
         effective_apy = gross_apy × 1.0  (convertToAssets already reflects the
                         effective depositor yield after the 90/10 split)
@@ -202,6 +203,8 @@ class SparkAdapter(BaseProtocolAdapter):
         If PSM3 totalAssets is near-zero, effective_apy is set to 0 to prevent
         new deposits into an illiquid PSM.
         """
+        import datetime
+
         vault = self._get_vault_contract()
 
         # Read high-precision share price: convertToAssets(1e18) for both
@@ -223,21 +226,52 @@ class SparkAdapter(BaseProtocolAdapter):
             # Guard against scale mismatch: old snapshots used 1e6 scale
             # (values < 10^12), new ones use 1e18 scale (values > 10^12).
             if yesterday_snapshot < Decimal("1000000000000"):
-                # Old snapshot was stored at 1e6 scale. Scaling up by 1e12
-                # loses ~12 digits of precision, which when annualized (×365)
-                # inflates APY by ~44% (e.g. 3.75% → 5.39%). Skip to fallback.
                 logger.info(
                     "Spark snapshot scale mismatch: yesterday=%s (1e6 scale) "
                     "vs today=%s (1e18 scale) — skipping to share-price fallback",
                     yesterday_snapshot, today_value,
                 )
             else:
-                # Primary: 24h delta from DB snapshot (both at 1e18 scale)
-                daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
-                # Compound APY: (1 + daily_rate)^365 - 1
-                # Linear (daily_rate * 365) gives APR, not APY.
-                gross_apy = (Decimal("1") + daily_rate) ** Decimal("365") - Decimal("1")
+                # Primary: use ACTUAL elapsed time since snapshot, not hardcoded 24h.
+                # If we assumed 24h but the snapshot was from 30h ago, the daily
+                # rate gets inflated by 30/24 = 25%, and compounding inflates the
+                # APY even more (e.g. 3.75% → 4.71%).
+                growth = (today_value - yesterday_snapshot) / yesterday_snapshot
+
+                # Compute actual elapsed time from snapshot timestamp
+                elapsed_days = Decimal("1")  # default fallback: assume 24h
+                if snapshot_at:
+                    try:
+                        snap_dt = datetime.datetime.fromisoformat(
+                            snapshot_at.replace("Z", "+00:00")
+                        )
+                        now_dt = datetime.datetime.now(datetime.timezone.utc)
+                        elapsed_seconds = Decimal(
+                            str((now_dt - snap_dt).total_seconds())
+                        )
+                        if elapsed_seconds > Decimal("3600"):  # at least 1h
+                            elapsed_days = elapsed_seconds / Decimal("86400")
+                        else:
+                            logger.warning(
+                                "Spark snapshot too recent (%.0fs) — using 1 day",
+                                elapsed_seconds,
+                            )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(
+                            "Could not parse snapshot_at=%s: %s — using 1 day",
+                            snapshot_at, e,
+                        )
+
+                # Compound APY: annualize the growth over the actual elapsed period
+                # periods_per_year = 365 / elapsed_days
+                periods_per_year = Decimal("365") / elapsed_days
+                gross_apy = (Decimal("1") + growth) ** periods_per_year - Decimal("1")
                 use_snapshot = True
+
+                logger.debug(
+                    "Spark APY calc: growth=%s elapsed_days=%s periods=%s apy=%s",
+                    growth, elapsed_days, periods_per_year, gross_apy,
+                )
 
         if not use_snapshot:
             # Fallback: short-term share-price-growth estimation

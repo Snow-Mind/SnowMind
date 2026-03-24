@@ -452,6 +452,14 @@ export default function LandingPage() {
                 How It Works
               </a>
               <a
+                href="https://docs.snowmind.xyz"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                Docs
+              </a>
+              <a
                 href="https://x.com/mark_nakatani"
                 target="_blank"
                 rel="noopener noreferrer"

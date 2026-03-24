@@ -494,10 +494,14 @@ export async function executeRebalance({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
+  // Always use forceRegularMode: the permission is already registered on-chain
+  // by the frontend's initial enable UserOp. Using enable mode from the backend
+  // causes "duplicate permissionHash" (InvalidNonce) because the nonce was
+  // already consumed. Regular mode skips the enable envelope entirely.
   const { client: kernelClient, publicClient: execPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
-    { withPaymaster: true },
+    { withPaymaster: true, forceRegularMode: true },
   )
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
@@ -582,34 +586,12 @@ export async function executeRebalance({
     })
   }
 
-  // Log each withdrawal once. If there are deposits, pair with the first
-  // deposit target so the registry records the flow direction. Previous code
-  // used a nested loop that created N×M false entries.
-  // GUARD: Skip logRebalance when REGISTRY is empty/not deployed — the session
-  // key call policy may not include Registry permissions. Rebalance must not
-  // fail due to an optional audit log call.
-  const registryValid = contracts.REGISTRY && contracts.REGISTRY.length >= 42
-    && contracts.REGISTRY !== "0x0000000000000000000000000000000000000000"
-  if (registryValid) {
-    const firstDepositAddr = deposits.length > 0
-      ? resolveContractKey(deposits[0].protocol, contracts)
-      : null
-    for (const w of withdrawals) {
-      const from = resolveContractKey(w.protocol, contracts)
-      const to = firstDepositAddr || from  // fallback to self if no deposits
-      if (from && to) {
-        calls.push({
-          to: contracts.REGISTRY,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: REGISTRY_ABI,
-            functionName: "logRebalance",
-            args: [from, to, parseUnits(String(w.amountUSDC), 6)],
-          }),
-        })
-      }
-    }
-  }
+  // DISABLED: On-chain logRebalance removed from the atomic batch.
+  // Including Registry calls in the same UserOp risks the entire rebalance
+  // reverting if the Registry call fails (permissions, gas, contract state).
+  // Rebalance outcomes are tracked in the backend database instead.
+  // The Registry can be called in a SEPARATE, non-critical transaction later
+  // if on-chain audit logging is needed.
 
   // Approve exact amounts per protocol — never use infinite approvals.
   // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
@@ -996,6 +978,9 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
+        // The permission was already registered on-chain by a previous
+        // enable-mode UserOp. Re-create the kernel client in regular mode
+        // so the SDK signs without the enable data.
         const { client: regularClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
@@ -1099,10 +1084,11 @@ export async function executeWithdrawal({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
+  // Always use forceRegularMode — see executeRebalance comment for rationale.
   const { client: kernelClient, publicClient: wdPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
-    { withPaymaster: true },
+    { withPaymaster: true, forceRegularMode: true },
   )
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {

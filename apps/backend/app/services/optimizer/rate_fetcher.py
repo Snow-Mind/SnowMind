@@ -292,8 +292,15 @@ class RateFetcher:
             adapter = ALL_ADAPTERS[pid]
             # Pass 24h convertToAssets snapshot to all ERC-4626 vault adapters
             if pid in _VAULT_SNAPSHOT_PROTOCOLS:
-                yesterday_snapshot = self._get_vault_yesterday_snapshot(pid)
-                return await adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
+                snapshot_data = self._get_vault_yesterday_snapshot(pid)
+                if snapshot_data is not None:
+                    yesterday_value, snapshot_at = snapshot_data
+                    return await adapter.get_rate(
+                        yesterday_snapshot=yesterday_value,
+                        snapshot_at=snapshot_at,
+                    )
+                else:
+                    return await adapter.get_rate(yesterday_snapshot=None)
             else:
                 return await adapter.get_rate()
 
@@ -404,11 +411,12 @@ class RateFetcher:
             for pid in ALL_ADAPTERS
         }
 
-    def _get_vault_yesterday_snapshot(self, protocol_id: str) -> Decimal | None:
+    def _get_vault_yesterday_snapshot(self, protocol_id: str) -> tuple[Decimal, str] | None:
         """
-        Get yesterday's convertToAssets(1e18) value from DB for any ERC-4626 vault.
+        Get yesterday's convertToAssets(1e18) value and timestamp from DB.
 
-        Used for stable 24h APY calculation across Euler, Silo, and Spark.
+        Returns (value, snapshot_at_iso) tuple so callers can compute the
+        actual elapsed time instead of assuming exactly 24h.
         """
         try:
             db = get_supabase()
@@ -419,7 +427,7 @@ class RateFetcher:
             ).isoformat()
             result = (
                 db.table("spark_convert_snapshots")
-                .select("convert_to_assets_value")
+                .select("convert_to_assets_value, snapshot_at")
                 .eq("protocol_id", protocol_id)
                 .lte("snapshot_at", yesterday)
                 .order("snapshot_at", desc=True)
@@ -427,7 +435,9 @@ class RateFetcher:
                 .execute()
             )
             if result.data:
-                return Decimal(str(result.data[0]["convert_to_assets_value"]))
+                value = Decimal(str(result.data[0]["convert_to_assets_value"]))
+                snapshot_at = result.data[0]["snapshot_at"]
+                return (value, snapshot_at)
             return None
         except Exception as exc:
             logger.warning("Failed to get %s yesterday snapshot: %s", protocol_id, exc)

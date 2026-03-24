@@ -494,10 +494,14 @@ export async function executeRebalance({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
+  // Always use forceRegularMode: the permission is already registered on-chain
+  // by the frontend's initial enable UserOp. Using enable mode from the backend
+  // causes "duplicate permissionHash" (InvalidNonce) because the nonce was
+  // already consumed. Regular mode skips the enable envelope entirely.
   const { client: kernelClient, publicClient: execPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
-    { withPaymaster: true },
+    { withPaymaster: true, forceRegularMode: true },
   )
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
@@ -582,34 +586,12 @@ export async function executeRebalance({
     })
   }
 
-  // Log each withdrawal once. If there are deposits, pair with the first
-  // deposit target so the registry records the flow direction. Previous code
-  // used a nested loop that created N×M false entries.
-  // GUARD: Skip logRebalance when REGISTRY is empty/not deployed — the session
-  // key call policy may not include Registry permissions. Rebalance must not
-  // fail due to an optional audit log call.
-  const registryValid = contracts.REGISTRY && contracts.REGISTRY.length >= 42
-    && contracts.REGISTRY !== "0x0000000000000000000000000000000000000000"
-  if (registryValid) {
-    const firstDepositAddr = deposits.length > 0
-      ? resolveContractKey(deposits[0].protocol, contracts)
-      : null
-    for (const w of withdrawals) {
-      const from = resolveContractKey(w.protocol, contracts)
-      const to = firstDepositAddr || from  // fallback to self if no deposits
-      if (from && to) {
-        calls.push({
-          to: contracts.REGISTRY,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: REGISTRY_ABI,
-            functionName: "logRebalance",
-            args: [from, to, parseUnits(String(w.amountUSDC), 6)],
-          }),
-        })
-      }
-    }
-  }
+  // DISABLED: On-chain logRebalance removed from the atomic batch.
+  // Including Registry calls in the same UserOp risks the entire rebalance
+  // reverting if the Registry call fails (permissions, gas, contract state).
+  // Rebalance outcomes are tracked in the backend database instead.
+  // The Registry can be called in a SEPARATE, non-critical transaction later
+  // if on-chain audit logging is needed.
 
   // Approve exact amounts per protocol — never use infinite approvals.
   // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
@@ -982,48 +964,72 @@ export async function executeRebalance({
     const txHash = await kernelClient.sendTransaction({ calls })
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
   } catch (err) {
-    // Non-retryable errors: these are on-chain / bundler state issues.
-    // Retrying will always produce the same result, so fail fast.
     const allText = [err?.shortMessage, err?.message, err?.details,
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
-    if (allText.includes("duplicate permissionhash")) {
+
+    // ── Retry 0: permission not yet enabled on-chain ──────────────
+    // With forceRegularMode=true, the first UserOp after a NEW session
+    // key will fail because the Kernel contract hasn't seen this
+    // permissionId yet.  Detect validation failures and retry with
+    // enable mode (forceRegularMode=false) so the SDK wraps the
+    // enable data into the UserOp.
+    const isPermissionNotEnabled = (
+      allText.includes("aa24") ||
+      allText.includes("signature error") ||
+      (allText.includes("useroperation reverted") && allText.includes("simulation"))
+    )
+    if (isPermissionNotEnabled) {
       console.log(JSON.stringify({
-        level: "warn", action: "duplicate_permissionHash_retry_regular",
+        level: "warn", action: "permission_not_enabled_retry_enable",
         smartAccountAddress,
-        detail: "Permission already registered on-chain. " +
-          "Retrying in regular (non-enable) validation mode.",
+        detail: "Regular mode failed (permission may not be on-chain). " +
+          "Retrying with enable mode to register the permission.",
+        originalError: err?.shortMessage?.slice(0, 300),
         timestamp: new Date().toISOString(),
       }))
       try {
-        // The permission was already registered on-chain by a previous
-        // enable-mode UserOp. Re-create the kernel client in regular mode
-        // so the SDK signs without the enable data.
-        const { client: regularClient } = await getKernelClient(
+        const { client: enableClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: true },
+          { withPaymaster: true, forceRegularMode: false },
         )
-        const retryTxHash = await regularClient.sendTransaction({ calls })
+        const retryTxHash = await enableClient.sendTransaction({ calls })
         console.log(JSON.stringify({
-          level: "info", action: "duplicate_permissionHash_retry_succeeded",
+          level: "info", action: "permission_enable_retry_succeeded",
           smartAccountAddress, txHash: retryTxHash,
           timestamp: new Date().toISOString(),
         }))
         return { txHash: retryTxHash, explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}` }
-      } catch (retryErr) {
+      } catch (enableRetryErr) {
+        // Both modes failed — log fully and throw the more descriptive error
+        const enableText = [enableRetryErr?.shortMessage, enableRetryErr?.message,
+          enableRetryErr?.details, enableRetryErr?.cause?.message]
+          .filter(Boolean).join(" ").toLowerCase()
+        const isDuplicate = enableText.includes("duplicate permissionhash") ||
+          enableText.includes("invalidnonce")
         console.error(JSON.stringify({
-          level: "error", action: "duplicate_permissionHash_retry_failed",
+          level: "error", action: "permission_enable_retry_failed",
           smartAccountAddress,
-          error: formatExecutionError(retryErr),
-          shortMessage: retryErr?.shortMessage?.slice(0, 500),
-          details: retryErr?.details?.slice(0, 500),
-          causeMessage: retryErr?.cause?.message?.slice(0, 500),
+          regularModeError: err?.shortMessage?.slice(0, 300),
+          enableModeError: formatExecutionError(enableRetryErr),
+          isDuplicatePermission: isDuplicate,
           timestamp: new Date().toISOString(),
         }))
+        // If enable mode says "duplicate" but regular mode also failed,
+        // the issue is with the inner calls, not the permission.
+        // Throw a clear message.
+        if (isDuplicate) {
+          throw new Error(
+            "Permission IS registered on-chain (enable retry confirms) but " +
+            "regular mode also failed. The inner calls (withdrawals/deposits) " +
+            `are reverting: ${err?.shortMessage || err?.message || "unknown"}`
+          )
+        }
         throw new Error(
-          "duplicate permissionHash — permission already registered on-chain. " +
-          `Retry in regular mode also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+          `Both regular and enable mode failed. ` +
+          `Regular: ${err?.shortMessage || err?.message || "unknown"} | ` +
+          `Enable: ${enableRetryErr?.shortMessage || enableRetryErr?.message || "unknown"}`
         )
       }
     }
@@ -1102,10 +1108,11 @@ export async function executeWithdrawal({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
+  // Always use forceRegularMode — see executeRebalance comment for rationale.
   const { client: kernelClient, publicClient: wdPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
-    { withPaymaster: true },
+    { withPaymaster: true, forceRegularMode: true },
   )
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
@@ -1258,35 +1265,53 @@ export async function executeWithdrawal({
       callCount: calls.length,
     }
   } catch (err) {
-    // Non-retryable: duplicate permissionHash is an on-chain/mempool state issue
     const allText = [err?.shortMessage, err?.message, err?.details,
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
-    if (allText.includes("duplicate permissionhash")) {
+
+    // ── Retry 0: permission not yet enabled on-chain ──────────────
+    const isPermissionNotEnabled = (
+      allText.includes("aa24") ||
+      allText.includes("signature error") ||
+      (allText.includes("useroperation reverted") && allText.includes("simulation"))
+    )
+    if (isPermissionNotEnabled) {
       console.log(JSON.stringify({
-        level: "warn", action: "duplicate_permissionHash_retry_regular",
+        level: "warn", action: "withdrawal_permission_not_enabled_retry",
         smartAccountAddress,
-        detail: "Permission already registered on-chain. " +
-          "Retrying withdrawal in regular (non-enable) validation mode.",
+        detail: "Regular mode failed. Retrying with enable mode.",
+        originalError: err?.shortMessage?.slice(0, 300),
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: regularClient } = await getKernelClient(
+        const { client: enableClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: true },
+          { withPaymaster: true, forceRegularMode: false },
         )
-        const retryTxHash = await regularClient.sendTransaction({ calls })
+        const retryTxHash = await enableClient.sendTransaction({ calls })
         return {
           txHash: retryTxHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
           owner: onchainOwner,
           callCount: calls.length,
         }
-      } catch (retryErr) {
+      } catch (enableRetryErr) {
+        const enableText = [enableRetryErr?.shortMessage, enableRetryErr?.message,
+          enableRetryErr?.details, enableRetryErr?.cause?.message]
+          .filter(Boolean).join(" ").toLowerCase()
+        const isDuplicate = enableText.includes("duplicate permissionhash") ||
+          enableText.includes("invalidnonce")
+        if (isDuplicate) {
+          throw new Error(
+            "Permission IS registered but inner calls are reverting: " +
+            `${err?.shortMessage || err?.message || "unknown"}`
+          )
+        }
         throw new Error(
-          "duplicate permissionHash — permission already registered on-chain. " +
-          `Retry in regular mode also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+          `Both regular and enable mode failed for withdrawal. ` +
+          `Regular: ${err?.shortMessage || "unknown"} | ` +
+          `Enable: ${enableRetryErr?.shortMessage || "unknown"}`
         )
       }
     }

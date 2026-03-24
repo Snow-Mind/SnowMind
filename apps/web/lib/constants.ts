@@ -107,7 +107,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.BENQI_QIUSDC,
-    riskScore: 9,     // Safety 3 + Liquidity 2 + Collateral 2 + Yield 2 + Architecture 1 = 9/10
+    riskScore: 10,    // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 = 10/10
     color: '#2A72FF', // Benqi brand blue
     bgColor: 'rgba(42, 114, 255, 0.12)',
     logoPath: '/protocols/benqi-official.svg',
