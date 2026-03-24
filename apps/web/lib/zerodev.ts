@@ -158,6 +158,83 @@ function getPublicClient(): PublicClient {
   })
 }
 
+// ── Wallet compatibility wrapper ──────────────────────────────────────────────
+// Some wallets (e.g. Core wallet) fail on eth_signTypedData_v4 when the EIP-712
+// typed data contains `bytes`-type fields with raw ABI-encoded values that aren't
+// valid UTF-8. Their internal ethers.js v5 parser tries to decode these as text,
+// throwing "invalid codepoint at offset N; UNEXPECTED_CONTINUE".
+//
+// This wrapper intercepts the call and tries alternative signing methods:
+// 1. eth_signTypedData_v3 (older version, may handle bytes differently)
+// 2. eth_signTypedData_v4 with typed data as object instead of JSON string
+// 3. eth_signTypedData (generic, no version suffix)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createRobustProvider(provider: any): any {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wrapped: any = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request: async (args: { method: string; params?: any[] }) => {
+      if (args.method === 'eth_signTypedData_v4') {
+        try {
+          return await provider.request(args)
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.includes('codepoint') || msg.includes('UNEXPECTED_CONTINUE')) {
+            console.warn('[ZeroDev] signTypedData_v4 failed with encoding error, trying fallbacks...')
+
+            // Fallback 1: Try v3
+            try {
+              return await provider.request({ ...args, method: 'eth_signTypedData_v3' })
+            } catch { /* continue */ }
+
+            // Fallback 2: Try with typed data as object instead of JSON string
+            try {
+              const [address, data] = args.params || []
+              const dataObj = typeof data === 'string' ? JSON.parse(data) : data
+              return await provider.request({
+                method: 'eth_signTypedData_v4',
+                params: [address, dataObj],
+              })
+            } catch { /* continue */ }
+
+            // Fallback 3: Try generic signTypedData (no version suffix)
+            try {
+              return await provider.request({ ...args, method: 'eth_signTypedData' })
+            } catch { /* continue */ }
+
+            // All fallbacks failed — throw a clear user-facing error
+            throw new Error(
+              'Your wallet cannot process the signing request required for activation. ' +
+              'This is a known compatibility issue with some wallets (including Core wallet) ' +
+              'when handling advanced typed data. Please try connecting with MetaMask or ' +
+              'another EVM-compatible wallet instead.'
+            )
+          }
+          throw err
+        }
+      }
+      return provider.request(args)
+    },
+  }
+
+  // Preserve event emitter and other methods from the original provider
+  for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(provider))) {
+    if (key !== 'request' && key !== 'constructor' && typeof provider[key] === 'function') {
+      wrapped[key] = provider[key].bind(provider)
+    }
+  }
+  // Also copy own properties (some providers attach methods directly)
+  for (const key of Object.keys(provider)) {
+    if (key !== 'request' && typeof provider[key] === 'function') {
+      wrapped[key] = provider[key].bind(provider)
+    } else if (key !== 'request') {
+      wrapped[key] = provider[key]
+    }
+  }
+
+  return wrapped
+}
+
 // ── 1. Create smart account (sudo — user is the owner) ───────────────────────
 
 // Accept either:
@@ -181,7 +258,10 @@ export async function createSmartAccount(walletClient: WalletClientLike | PrivyW
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let signer: any = walletClient
   if ('getEthereumProvider' in walletClient && typeof walletClient.getEthereumProvider === 'function') {
-    signer = await walletClient.getEthereumProvider()
+    const rawProvider = await walletClient.getEthereumProvider()
+    // Wrap with fallback signing for wallets that can't handle bytes in typed data
+    // (e.g. Core wallet's ethers.js v5 internal fails on non-UTF-8 byte sequences)
+    signer = createRobustProvider(rawProvider)
   }
 
   // Sudo validator: user's wallet is the owner (full control)

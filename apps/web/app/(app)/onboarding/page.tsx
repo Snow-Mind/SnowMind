@@ -389,6 +389,14 @@ export default function OnboardingPage() {
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         setDeployPhase("idle");
         toast.error("Deployment cancelled — you can retry.");
+      } else if (msg.includes("codepoint") || msg.includes("UNEXPECTED_CONTINUE")) {
+        setDeployPhase("error");
+        setDeployError(
+          "Your wallet cannot process the signing request. " +
+          "This is a known issue with some wallets (e.g. Core wallet). " +
+          "Please try connecting with MetaMask or another EVM wallet."
+        );
+        toast.error("Wallet compatibility issue — try MetaMask instead.");
       } else {
         setDeployPhase("error");
         setDeployError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
@@ -632,6 +640,15 @@ export default function OnboardingPage() {
         // User cancelled — go back to review state, don't show error phase
         setActivationPhase("idle");
         toast.error("Transaction cancelled.");
+      } else if (msg.includes("codepoint") || msg.includes("UNEXPECTED_CONTINUE")) {
+        // Wallet can't handle bytes fields in EIP-712 typed data (e.g. Core wallet)
+        setActivationPhase("error");
+        setActivationError(
+          "Your wallet cannot process the advanced signing request required for activation. " +
+          "This is a known compatibility issue with some wallets (including Core wallet). " +
+          "Please try connecting with MetaMask or another EVM-compatible wallet."
+        );
+        toast.error("Wallet compatibility issue — try MetaMask instead.");
       } else {
         setActivationPhase("error");
         setActivationError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
@@ -1248,6 +1265,14 @@ export default function OnboardingPage() {
                         <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">{selectedCount} {selectedCount === 1 ? 'market' : 'markets'}</p>
                       </div>
                     </div>
+                  </div>
+
+                  <div className="rounded-lg bg-[#FEF3C7] border border-[#F59E0B]/20 p-3">
+                    <p className="text-[11px] text-[#92400E]">
+                      <span className="font-semibold">Wallet note:</span> Your wallet will ask you to sign a permission grant.
+                      Some wallets (e.g. Core) may show a &quot;Scam transaction&quot; warning — this is a false positive.
+                      It&apos;s safe to proceed. We only request limited, time-bound DeFi permissions for your account.
+                    </p>
                   </div>
 
                   <div className="flex gap-3">
