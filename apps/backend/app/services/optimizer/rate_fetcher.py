@@ -31,6 +31,9 @@ _rate_cache: dict[str, ProtocolRate] = {}
 _rate_cache_timestamp: float = 0.0
 _RATE_CACHE_TTL_SECONDS: float = 45.0  # Serve cached rates for 45s
 
+# ERC-4626 vault adapters that use 24h convertToAssets snapshots for stable APY
+_VAULT_SNAPSHOT_PROTOCOLS = {"spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"}
+
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────
 
@@ -287,8 +290,9 @@ class RateFetcher:
         async def _do_fetch(pid: str) -> ProtocolRate:
             """Execute a single adapter's get_rate() call."""
             adapter = ALL_ADAPTERS[pid]
-            if pid == "spark":
-                yesterday_snapshot = self._get_spark_yesterday_snapshot()
+            # Pass 24h convertToAssets snapshot to all ERC-4626 vault adapters
+            if pid in _VAULT_SNAPSHOT_PROTOCOLS:
+                yesterday_snapshot = self._get_vault_yesterday_snapshot(pid)
                 return await adapter.get_rate(yesterday_snapshot=yesterday_snapshot)
             else:
                 return await adapter.get_rate()
@@ -400,11 +404,11 @@ class RateFetcher:
             for pid in ALL_ADAPTERS
         }
 
-    def _get_spark_yesterday_snapshot(self) -> Decimal | None:
+    def _get_vault_yesterday_snapshot(self, protocol_id: str) -> Decimal | None:
         """
-        Get yesterday's Spark convertToAssets(1e18) value from DB.
+        Get yesterday's convertToAssets(1e18) value from DB for any ERC-4626 vault.
 
-        Used for Spark APY calculation: gross_apy = (today - yesterday) / yesterday × 365
+        Used for stable 24h APY calculation across Euler, Silo, and Spark.
         """
         try:
             db = get_supabase()
@@ -416,6 +420,7 @@ class RateFetcher:
             result = (
                 db.table("spark_convert_snapshots")
                 .select("convert_to_assets_value")
+                .eq("protocol_id", protocol_id)
                 .lte("snapshot_at", yesterday)
                 .order("snapshot_at", desc=True)
                 .limit(1)
@@ -425,25 +430,26 @@ class RateFetcher:
                 return Decimal(str(result.data[0]["convert_to_assets_value"]))
             return None
         except Exception as exc:
-            logger.warning("Failed to get Spark yesterday snapshot: %s", exc)
+            logger.warning("Failed to get %s yesterday snapshot: %s", protocol_id, exc)
             return None
 
-    async def save_spark_daily_snapshot(self) -> None:
+    async def save_vault_daily_snapshot(self, protocol_id: str) -> None:
         """
-        Save daily Spark convertToAssets(1e18) snapshot for APY calculation.
+        Save daily convertToAssets(1e18) snapshot for any ERC-4626 vault.
 
-        Should be called once per day by the scheduler.
+        Should be called once per day by the scheduler for each vault adapter.
         """
         try:
-            spark_adapter = ALL_ADAPTERS.get("spark")
-            if not spark_adapter:
+            adapter = ALL_ADAPTERS.get(protocol_id)
+            if not adapter or not hasattr(adapter, "get_convert_to_assets_value"):
                 return
 
-            value = await spark_adapter.get_convert_to_assets_value()
+            value = await adapter.get_convert_to_assets_value()
             db = get_supabase()
             db.table("spark_convert_snapshots").insert({
+                "protocol_id": protocol_id,
                 "convert_to_assets_value": str(value),
             }).execute()
-            logger.info("Saved Spark convertToAssets snapshot: %d", value)
+            logger.info("Saved %s convertToAssets snapshot: %d", protocol_id, value)
         except Exception as exc:
-            logger.warning("Failed to save Spark daily snapshot: %s", exc)
+            logger.warning("Failed to save %s daily snapshot: %s", protocol_id, exc)

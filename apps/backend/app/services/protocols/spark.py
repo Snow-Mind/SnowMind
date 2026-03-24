@@ -234,7 +234,9 @@ class SparkAdapter(BaseProtocolAdapter):
             else:
                 # Primary: 24h delta from DB snapshot (both at 1e18 scale)
                 daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
-                gross_apy = daily_rate * Decimal("365")
+                # Compound APY: (1 + daily_rate)^365 - 1
+                # Linear (daily_rate * 365) gives APR, not APY.
+                gross_apy = (Decimal("1") + daily_rate) ** Decimal("365") - Decimal("1")
                 use_snapshot = True
 
         if not use_snapshot:
@@ -250,7 +252,9 @@ class SparkAdapter(BaseProtocolAdapter):
                 if elapsed > Decimal("60"):
                     growth = (current_price - self._last_share_price) / self._last_share_price
                     if growth > Decimal("0"):
-                        self._cached_apy = growth * SECONDS_PER_YEAR / elapsed
+                        # Compound APY: (1 + growth)^periods - 1
+                        periods = SECONDS_PER_YEAR / elapsed
+                        self._cached_apy = (Decimal("1") + growth) ** periods - Decimal("1")
                     self._last_share_price = current_price
                     self._last_share_price_time = now
                 # elapsed < 60s: keep _cached_apy, don't reset observation window

@@ -41,6 +41,7 @@ class ProtocolRateResponse(CamelModel):
     current_apy: Decimal
     tvl_usd: Decimal
     risk_score: Decimal
+    utilization_rate: Decimal | None = None
     last_updated: float
 
 
@@ -238,9 +239,9 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 async def get_all_rates(request: Request):
     """Fetch live on-chain rates from every known protocol adapter.
 
-    Falls back to TWAP-cached data for protocols whose live fetch failed
-    (circuit breaker open, 429, RPC timeout, etc.).  This prevents the
-    frontend from showing 0% APY / $0 TVL when Infura is rate-limited.
+    Uses TWAP-smoothed APY when available for stable frontend display.
+    Falls back to spot rate, then to last-known-good TWAP snapshot if
+    live fetch failed (circuit breaker open, 429, RPC timeout, etc.).
     """
     rates = await _rate_fetcher.fetch_all_rates()
 
@@ -268,15 +269,22 @@ async def get_all_rates(request: Request):
                 )
                 continue
 
+        # Prefer TWAP-smoothed APY over noisy spot rate for display
+        display_apy = rate.apy if rate else Decimal("0")
+        twap_apy = twap_buffer.get_twap_effective_apy(pid)
+        if twap_apy is not None and twap_apy > Decimal("0"):
+            display_apy = twap_apy
+
         out.append(
             ProtocolRateResponse(
                 protocol_id=pid,
                 name=adapter.name,
                 is_active=is_active,
                 is_coming_soon=is_coming_soon,
-                current_apy=rate.apy if rate else Decimal("0"),
+                current_apy=display_apy,
                 tvl_usd=rate.tvl_usd if rate else Decimal("0"),
                 risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
+                utilization_rate=rate.utilization_rate if rate else None,
                 last_updated=rate.fetched_at if rate else time.time(),
             )
         )

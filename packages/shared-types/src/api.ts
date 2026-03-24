@@ -47,6 +47,7 @@ export interface ProtocolRateResponse {
   currentApy: number;
   tvlUsd: number;
   riskScore: number;
+  utilizationRate: number | null;
   lastUpdated: number;
 }
 

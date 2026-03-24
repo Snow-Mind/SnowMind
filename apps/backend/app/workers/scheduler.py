@@ -311,65 +311,72 @@ class SnowMindScheduler:
         except Exception as e:
             logger.error("APY snapshot job failed: %s", e)
 
-        # Also save Spark convertToAssets snapshot for APY calculation
-        try:
-            await RateFetcher().save_spark_daily_snapshot()
-        except Exception as e:
-            logger.error("Spark daily snapshot failed: %s", e)
+        # Save convertToAssets snapshots for ALL ERC-4626 vault adapters
+        from app.services.optimizer.rate_fetcher import _VAULT_SNAPSHOT_PROTOCOLS
+        fetcher_for_snapshots = RateFetcher()
+        for vault_pid in _VAULT_SNAPSHOT_PROTOCOLS:
+            try:
+                await fetcher_for_snapshots.save_vault_daily_snapshot(vault_pid)
+            except Exception as e:
+                logger.error("%s daily snapshot failed: %s", vault_pid, e)
 
-    # ── Spark snapshot seed ────────────────────────────────────────────────
+    # ── Vault snapshot seed ────────────────────────────────────────────────
 
     async def _seed_spark_snapshot_if_needed(self) -> None:
-        """Seed the first Spark convertToAssets snapshot if table is empty,
-        or purge stale 1e6-scale snapshots that cause scale mismatch errors.
+        """Seed initial convertToAssets snapshots for ALL ERC-4626 vault adapters,
+        and purge stale 1e6-scale Spark snapshots that cause scale mismatch errors.
 
-        Without at least one 1e18-scale snapshot, Spark APY will always be 0%
-        or fall back to the short-term share-price estimator.
+        Without at least one 1e18-scale snapshot per vault, APY falls back to
+        the short-term share-price estimator (noisier, less accurate).
         This runs once on startup, 10 seconds after the scheduler starts.
         """
-        try:
-            result = (
-                self.db.table("spark_convert_snapshots")
-                .select("id, convert_to_assets_value")
-                .order("snapshot_at", desc=True)
-                .limit(5)
-                .execute()
-            )
-            if not result.data:
-                logger.info("Spark snapshot table is empty — seeding initial snapshot")
-                await RateFetcher().save_spark_daily_snapshot()
-                return
+        from app.services.optimizer.rate_fetcher import _VAULT_SNAPSHOT_PROTOCOLS
 
-            # Check if any snapshots are stale 1e6-scale values (< 10^12).
-            # These cause "scale mismatch" errors on every rate fetch.
-            # Delete them and re-seed if no valid 1e18-scale snapshots remain.
-            from decimal import Decimal
-            stale_ids = [
-                row["id"] for row in result.data
-                if Decimal(str(row["convert_to_assets_value"])) < Decimal("1000000000000")
-            ]
-            if stale_ids:
-                logger.warning(
-                    "Found %d stale 1e6-scale Spark snapshots — purging",
-                    len(stale_ids),
-                )
-                for sid in stale_ids:
-                    self.db.table("spark_convert_snapshots").delete().eq("id", sid).execute()
+        fetcher = RateFetcher()
 
-                # Check if any valid snapshots remain
-                remaining = (
+        for vault_pid in _VAULT_SNAPSHOT_PROTOCOLS:
+            try:
+                result = (
                     self.db.table("spark_convert_snapshots")
-                    .select("id")
-                    .limit(1)
+                    .select("id, convert_to_assets_value")
+                    .eq("protocol_id", vault_pid)
+                    .order("snapshot_at", desc=True)
+                    .limit(5)
                     .execute()
                 )
-                if not remaining.data:
-                    logger.info("No valid Spark snapshots remain — re-seeding")
-                    await RateFetcher().save_spark_daily_snapshot()
-            else:
-                logger.info("Spark snapshot table already has valid 1e18-scale data — skipping seed")
-        except Exception as e:
-            logger.error("Failed to seed Spark snapshot: %s", e)
+                if not result.data:
+                    logger.info("%s snapshot missing — seeding initial snapshot", vault_pid)
+                    await fetcher.save_vault_daily_snapshot(vault_pid)
+                    continue
+
+                # Purge stale 1e6-scale values (< 10^12) — only relevant for Spark
+                from decimal import Decimal
+                stale_ids = [
+                    row["id"] for row in result.data
+                    if Decimal(str(row["convert_to_assets_value"])) < Decimal("1000000000000")
+                ]
+                if stale_ids:
+                    logger.warning(
+                        "Found %d stale 1e6-scale %s snapshots — purging",
+                        len(stale_ids), vault_pid,
+                    )
+                    for sid in stale_ids:
+                        self.db.table("spark_convert_snapshots").delete().eq("id", sid).execute()
+
+                    remaining = (
+                        self.db.table("spark_convert_snapshots")
+                        .select("id")
+                        .eq("protocol_id", vault_pid)
+                        .limit(1)
+                        .execute()
+                    )
+                    if not remaining.data:
+                        logger.info("No valid %s snapshots remain — re-seeding", vault_pid)
+                        await fetcher.save_vault_daily_snapshot(vault_pid)
+                else:
+                    logger.info("%s snapshot table has valid data — skipping seed", vault_pid)
+            except Exception as e:
+                logger.error("Failed to seed %s snapshot: %s", vault_pid, e)
 
     # ── Snapshot cleanup ────────────────────────────────────────────────────
 

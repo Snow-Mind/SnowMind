@@ -82,7 +82,18 @@ ONE_USDC = Decimal("1000000")
 # Using 1e18 gives ~15 digits of precision for APY estimation.
 SHARE_PRICE_QUERY_AMOUNT = 10**18
 SHARE_PRICE_QUERY_DECIMAL = Decimal("1000000000000000000")
-SECONDS_PER_YEAR = Decimal("31557600")
+SECONDS_PER_YEAR = Decimal("31536000")  # 365 × 86400
+
+# Minimal ERC-20 ABI for reading vault cash (USDC.balanceOf(vault))
+_ERC20_BALANCE_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    }
+]
 
 
 class SiloAdapter(BaseProtocolAdapter):
@@ -125,11 +136,16 @@ class SiloAdapter(BaseProtocolAdapter):
 
     # ── Rate reading ──────────────────────────────────────────────────────────
 
-    async def get_rate(self) -> ProtocolRate:
-        """Estimate APY from share price growth (convertToAssets over time).
+    async def get_rate(
+        self,
+        yesterday_snapshot: Decimal | None = None,
+    ) -> ProtocolRate:
+        """Compute APY using 24h convertToAssets snapshot (primary) or share-price
+        growth observation (fallback).
 
-        When called rapidly (< 60s), returns the previously computed APY
-        without resetting the share-price observation window.
+        Primary: When yesterday_snapshot is provided (1e18-scale convertToAssets
+        value from ~24h ago), APY = (1 + daily_growth)^365 - 1.
+        Fallback: Observes share-price change over ≥60s.
         """
         vault = self._get_vault()
         if not vault:
@@ -151,39 +167,77 @@ class SiloAdapter(BaseProtocolAdapter):
         total_assets_raw = await vault.functions.totalAssets().call()
         tvl = Decimal(str(total_assets_raw)) / ONE_USDC
 
-        now = time.time()
+        # Compute utilization: cash = USDC sitting idle in vault, borrowed = totalAssets - cash
+        utilization_rate: Decimal | None = None
+        if total_assets_raw > 0:
+            try:
+                settings = get_settings()
+                w3 = self._get_w3()
+                usdc_contract = w3.eth.contract(
+                    address=w3.to_checksum_address(settings.USDC_ADDRESS),
+                    abi=_ERC20_BALANCE_ABI,
+                )
+                cash_raw = await usdc_contract.functions.balanceOf(
+                    w3.to_checksum_address(self.vault_address)
+                ).call()
+                cash = Decimal(str(cash_raw))
+                total = Decimal(str(total_assets_raw))
+                utilization_rate = (total - cash) / total
+                utilization_rate = max(Decimal("0"), min(utilization_rate, Decimal("1")))
+            except Exception as exc:
+                logger.warning("Silo utilization calculation failed for %s: %s", self.protocol_id, exc)
 
-        # Estimate APY from price change since last reading
-        if (
-            self._last_share_price is not None
-            and self._last_share_price_time is not None
-            and self._last_share_price > Decimal("0")
-        ):
-            elapsed = Decimal(str(now - self._last_share_price_time))
-            if elapsed > Decimal("60"):  # At least 1 minute between readings
-                growth = (current_price - self._last_share_price) / self._last_share_price
-                if growth > Decimal("0"):
-                    self._cached_apy = growth * SECONDS_PER_YEAR / elapsed
-                # Update observation window only when we compute a new APY
+        now = time.time()
+        today_value = Decimal(str(current_assets))  # raw 1e18-scale value
+
+        # ── Primary: 24h snapshot delta ──────────────────────────────────
+        use_snapshot = False
+        if yesterday_snapshot is not None and yesterday_snapshot > 0:
+            if yesterday_snapshot < Decimal("1000000000000"):
+                logger.info(
+                    "%s snapshot scale mismatch: yesterday=%s (1e6) "
+                    "vs today=%s (1e18) — fallback",
+                    self.protocol_id, yesterday_snapshot, today_value,
+                )
+            else:
+                daily_rate = (today_value - yesterday_snapshot) / yesterday_snapshot
+                if daily_rate > Decimal("0"):
+                    self._cached_apy = (
+                        (Decimal("1") + daily_rate) ** Decimal("365") - Decimal("1")
+                    )
+                    use_snapshot = True
+
+        # ── Fallback: share-price growth observation ─────────────────────
+        if not use_snapshot:
+            if (
+                self._last_share_price is not None
+                and self._last_share_price_time is not None
+                and self._last_share_price > Decimal("0")
+            ):
+                elapsed = Decimal(str(now - self._last_share_price_time))
+                if elapsed > Decimal("60"):  # At least 1 minute between readings
+                    growth = (current_price - self._last_share_price) / self._last_share_price
+                    if growth > Decimal("0"):
+                        periods = SECONDS_PER_YEAR / elapsed
+                        self._cached_apy = (Decimal("1") + growth) ** periods - Decimal("1")
+                    self._last_share_price = current_price
+                    self._last_share_price_time = now
+            else:
                 self._last_share_price = current_price
                 self._last_share_price_time = now
-            # elapsed < 60s: keep _cached_apy, don't reset the observation window
-        else:
-            # First call ever: seed the price cache
-            self._last_share_price = current_price
-            self._last_share_price_time = now
 
         return ProtocolRate(
             protocol_id=self.protocol_id,
             apy=self._cached_apy,
             effective_apy=self._cached_apy,
             tvl_usd=tvl,
-            utilization_rate=None,
+            utilization_rate=utilization_rate,
             fetched_at=now,
         )
 
     async def get_health(self) -> ProtocolHealth:
-        """Health check: vault must be configured and have non-zero totalAssets."""
+        """Health check: vault must be configured, have non-zero totalAssets,
+        and utilization below 90%."""
         vault = self._get_vault()
         if not vault:
             return ProtocolHealth(
@@ -233,14 +287,52 @@ class SiloAdapter(BaseProtocolAdapter):
                 details={"reason": f"Health check RPC failed: {exc}"},
             )
 
+        # Check utilization: cash = USDC.balanceOf(vault), utilization = 1 - cash/totalAssets
+        utilization: Decimal | None = None
+        status = ProtocolStatus.HEALTHY
+        is_deposit_safe = True
+        try:
+            settings = get_settings()
+            w3 = self._get_w3()
+            usdc_contract = w3.eth.contract(
+                address=w3.to_checksum_address(settings.USDC_ADDRESS),
+                abi=_ERC20_BALANCE_ABI,
+            )
+            cash_raw = await usdc_contract.functions.balanceOf(
+                w3.to_checksum_address(self.vault_address)
+            ).call()
+            cash = Decimal(str(cash_raw))
+            total = Decimal(str(total_assets))
+            utilization = (total - cash) / total
+            utilization = max(Decimal("0"), min(utilization, Decimal("1")))
+
+            if utilization > Decimal("0.90"):
+                status = ProtocolStatus.HIGH_UTILIZATION
+                is_deposit_safe = False
+                logger.info(
+                    "Silo %s utilization %.1f%% > 90%% — marking HIGH_UTILIZATION",
+                    self.protocol_id, float(utilization * 100),
+                )
+        except Exception as exc:
+            logger.warning("Silo %s utilization check failed: %s — assuming healthy", self.protocol_id, exc)
+
         return ProtocolHealth(
             protocol_id=self.protocol_id,
-            status=ProtocolStatus.HEALTHY,
-            is_deposit_safe=True,
+            status=status,
+            is_deposit_safe=is_deposit_safe,
             is_withdrawal_safe=True,
-            utilization=None,
+            utilization=utilization,
             details={},
         )
+
+    # ── Snapshot helper ──────────────────────────────────────────────────
+
+    async def get_convert_to_assets_value(self) -> int:
+        """Read current convertToAssets(1e18) for daily snapshot persistence."""
+        vault = self._get_vault()
+        if not vault:
+            raise RuntimeError(f"Silo vault not configured for {self.protocol_id}")
+        return await vault.functions.convertToAssets(SHARE_PRICE_QUERY_AMOUNT).call()
 
     # ── Calldata builders ─────────────────────────────────────────────────────
 

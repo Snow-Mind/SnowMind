@@ -655,26 +655,6 @@ export async function grantAndSerializeSessionKey(
   console.log("[ZeroDev] Session key address:", sessionKeyAccount.address)
   console.log("[ZeroDev] Smart account address:", kernelAccount.address)
 
-  // KEY VERIFICATION: Test that the sudo validator's signTypedData produces
-  // signatures that recover to the correct owner (validates the EIP-1193 fix).
-  try {
-    const testTypedData = {
-      domain: { name: "Kernel", version: "0.3.1", chainId: 43114, verifyingContract: kernelAccount.address },
-      types: { Test: [{ name: "value", type: "uint256" }] } as const,
-      primaryType: "Test" as const,
-      message: { value: 1n },
-    }
-    const testSig = await (sudoValidator as any).signTypedData(testTypedData)
-    const testRecovered = await recoverTypedDataAddress({ ...testTypedData, signature: testSig })
-    console.log("[ZeroDev] KEY TEST signTypedData recovered:", testRecovered)
-    console.log("[ZeroDev] KEY TEST matches owner:", testRecovered.toLowerCase() === sudoSignerAddress.toLowerCase())
-    if (testRecovered.toLowerCase() !== sudoSignerAddress.toLowerCase()) {
-      console.error("[ZeroDev] KEY TEST FAILED — signTypedData still produces wrong signer!")
-    }
-  } catch (e) {
-    console.log("[ZeroDev] KEY TEST failed:", (e as Error)?.message?.slice(0, 200))
-  }
-
   // Diagnostic: log enableData hash so we can compare with backend-side hash
   // If these don't match, the deserialized validator produces different data
   try {

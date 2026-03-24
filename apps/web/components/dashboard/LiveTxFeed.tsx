@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Activity,
   Lightbulb,
+  Eye,
 } from "lucide-react";
 import { PROTOCOL_CONFIG, EXPLORER, type ProtocolId } from "@/lib/constants";
 import { formatUsd } from "@/lib/format";
@@ -23,9 +24,11 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-type ActionType = "deposit" | "withdraw" | "rebalance";
+type ActionType = "deposit" | "withdraw" | "rebalance" | "monitoring";
 
 function inferAction(entry: RebalanceLogEntry): ActionType {
+  // Skipped entries are monitoring checks, not actual transactions
+  if (entry.status === "skipped") return "monitoring";
   const hasProposed = entry.proposedAllocations && Object.keys(entry.proposedAllocations).length > 0;
   const hasExecuted = entry.executedAllocations && Object.keys(entry.executedAllocations).length > 0;
   if (!hasProposed && hasExecuted) return "deposit";
@@ -50,9 +53,10 @@ function estimateAmount(entry: RebalanceLogEntry): string {
 }
 
 const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: string; iconClass: string }> = {
-  deposit:   { icon: ArrowDownToLine, label: "Deposit",   iconClass: "text-mint" },
-  withdraw:  { icon: ArrowUpFromLine, label: "Withdraw",  iconClass: "text-crimson" },
-  rebalance: { icon: RefreshCw,       label: "Rebalance", iconClass: "text-glacier" },
+  deposit:    { icon: ArrowDownToLine, label: "Deposit",    iconClass: "text-mint" },
+  withdraw:   { icon: ArrowUpFromLine, label: "Withdraw",   iconClass: "text-crimson" },
+  rebalance:  { icon: RefreshCw,       label: "Rebalance",  iconClass: "text-glacier" },
+  monitoring: { icon: Eye,             label: "Monitoring",  iconClass: "text-muted-foreground" },
 };
 
 /** Derive verifiable reasoning for each agent action — Giza-style "Verifiable Decision-Making" */
@@ -75,7 +79,15 @@ interface LiveTxFeedProps {
 }
 
 export default function LiveTxFeed({ history }: LiveTxFeedProps) {
-  const entries = useMemo(() => history.slice(0, 5), [history]);
+  const entries = useMemo(() => {
+    // Show up to 3 recent monitoring entries + all executed/failed entries, max 8 total
+    const executed = history.filter((e) => e.status !== "skipped");
+    const monitoring = history.filter((e) => e.status === "skipped").slice(0, 3);
+    const merged = [...executed, ...monitoring]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 8);
+    return merged;
+  }, [history]);
 
   return (
     <div className="crystal-card overflow-hidden">
@@ -84,7 +96,7 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
           <Activity className="h-4 w-4 text-glacier" />
           <h2 className="text-sm font-medium text-arctic">Live Transactions</h2>
         </div>
-        <span className="text-[10px] text-muted-foreground">Last 5</span>
+        <span className="text-[10px] text-muted-foreground">Recent Activity</span>
       </div>
 
       {entries.length === 0 ? (

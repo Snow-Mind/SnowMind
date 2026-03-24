@@ -494,8 +494,15 @@ export default function OnboardingPage() {
       const selectedRates = activeRateRows.filter(
         (r) => effectiveSelectedProtocols.has(r.normalizedProtocolId),
       );
+      // Filter out protocols with utilization > 90% — deploying into a near-full
+      // lending pool carries withdrawal risk (liquidity crunch).
+      const safeRates = selectedRates.filter(
+        (r) => r.utilizationRate == null || r.utilizationRate < 0.90,
+      );
       const deployProtocol =
-        selectedRates.slice().sort((a, b) => b.currentApy - a.currentApy)[0]
+        (safeRates.length > 0 ? safeRates : selectedRates)
+          .slice()
+          .sort((a, b) => b.currentApy - a.currentApy)[0]
           ?.normalizedProtocolId ?? "aave_v3";
       try {
         const deployResult = await deployInitialToProtocol(
