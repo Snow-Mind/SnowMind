@@ -237,7 +237,7 @@ function isValidateUserOpRevert(err) {
   return text.includes("validateuserop") && text.includes("revert")
 }
 
-async function getKernelClient(serializedPermission, sessionPrivateKey, options = { withPaymaster: true }) {
+async function getKernelClient(serializedPermission, sessionPrivateKey, options = { withPaymaster: true, forceRegularMode: false }) {
   const publicClient = createPublicClient({
     chain: CHAIN,
     transport: http(process.env.AVALANCHE_RPC_URL),
@@ -293,6 +293,29 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     permissionAccountAddress: permissionAccount.address,
     timestamp: new Date().toISOString(),
   }))
+
+  // ── Force regular mode: clear the cached enable signature ──
+  // After the first successful enable-mode UserOp, the permission is
+  // registered on-chain. Subsequent UserOps must NOT include the enable
+  // data, or the Kernel contract reverts with "duplicate permissionHash".
+  if (options.forceRegularMode) {
+    const kpm = permissionAccount.kernelPluginManager
+    if (kpm) {
+      if (typeof kpm.getPluginEnableSignature === "function") {
+        kpm.getPluginEnableSignature = async () => undefined
+      }
+      if (kpm.pluginEnableSignature !== undefined) {
+        kpm.pluginEnableSignature = undefined
+      }
+    }
+    console.log(JSON.stringify({
+      level: "info",
+      action: "force_regular_mode",
+      detail: "Cleared enable signature — using regular validation mode.",
+      smartAccount: permissionAccount.address,
+      timestamp: new Date().toISOString(),
+    }))
+  }
 
   // ── Diagnostic: verify on-chain state before building UserOp ──
   // Query the ECDSA validator module for the stored owner to compare with
@@ -958,24 +981,40 @@ export async function executeRebalance({
       .filter(Boolean).join(" ").toLowerCase()
     if (allText.includes("duplicate permissionhash")) {
       console.log(JSON.stringify({
-        level: "error", action: "duplicate_permissionHash_no_retry",
+        level: "warn", action: "duplicate_permissionHash_retry_regular",
         smartAccountAddress,
-        detail: "The permissionHash is already registered on-chain or in the bundler mempool. " +
-          "This usually means a concurrent rebalance attempt already submitted. " +
-          "The user may need to re-grant their session key to generate a fresh permissionHash.",
-        originalShortMessage: err?.shortMessage?.slice(0, 500),
-        originalMessage: err?.message?.slice(0, 500),
-        originalDetails: err?.details?.slice(0, 500),
-        originalCauseMessage: err?.cause?.message?.slice(0, 500),
-        originalCauseDetails: err?.cause?.details?.slice(0, 500),
-        originalCauseShortMessage: err?.cause?.shortMessage?.slice(0, 500),
-        allTextSnippet: allText.slice(0, 800),
+        detail: "Permission already registered on-chain. " +
+          "Retrying in regular (non-enable) validation mode.",
         timestamp: new Date().toISOString(),
       }))
-      throw new Error(
-        "duplicate permissionHash — this session key's permission was already submitted to the bundler. " +
-        "A concurrent rebalance likely already handled it, or the user needs to re-grant."
-      )
+      try {
+        // The permission was already registered on-chain by a previous
+        // enable-mode UserOp. Re-create the kernel client in regular mode
+        // so the SDK signs without the enable data.
+        const { client: regularClient } = await getKernelClient(
+          serializedPermission,
+          sessionPrivateKey || "",
+          { withPaymaster: true, forceRegularMode: true },
+        )
+        const retryTxHash = await regularClient.sendTransaction({ calls })
+        console.log(JSON.stringify({
+          level: "info", action: "duplicate_permissionHash_retry_succeeded",
+          smartAccountAddress, txHash: retryTxHash,
+          timestamp: new Date().toISOString(),
+        }))
+        return { txHash: retryTxHash, explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}` }
+      } catch (retryErr) {
+        const retryComponents = extractErrorComponents(retryErr)
+        console.error(JSON.stringify({
+          level: "error", action: "duplicate_permissionHash_retry_failed",
+          smartAccountAddress, ...retryComponents,
+          timestamp: new Date().toISOString(),
+        }))
+        throw new Error(
+          "duplicate permissionHash — permission already registered on-chain. " +
+          `Retry in regular mode also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+        )
+      }
     }
     // Retry 1: explicit paymaster error — try without paymaster
     if (isLikelyPaymasterError(err)) {
@@ -1213,10 +1252,32 @@ export async function executeWithdrawal({
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
     if (allText.includes("duplicate permissionhash")) {
-      throw new Error(
-        "duplicate permissionHash — this session key's permission was already submitted. " +
-        "The user may need to re-grant their session key."
-      )
+      console.log(JSON.stringify({
+        level: "warn", action: "duplicate_permissionHash_retry_regular",
+        smartAccountAddress,
+        detail: "Permission already registered on-chain. " +
+          "Retrying withdrawal in regular (non-enable) validation mode.",
+        timestamp: new Date().toISOString(),
+      }))
+      try {
+        const { client: regularClient } = await getKernelClient(
+          serializedPermission,
+          sessionPrivateKey || "",
+          { withPaymaster: true, forceRegularMode: true },
+        )
+        const retryTxHash = await regularClient.sendTransaction({ calls })
+        return {
+          txHash: retryTxHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
+          owner: onchainOwner,
+          callCount: calls.length,
+        }
+      } catch (retryErr) {
+        throw new Error(
+          "duplicate permissionHash — permission already registered on-chain. " +
+          `Retry in regular mode also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+        )
+      }
     }
     if (isLikelyPaymasterError(err)) {
       try {
