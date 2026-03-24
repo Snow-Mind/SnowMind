@@ -275,9 +275,19 @@ export default function OnboardingPage() {
   const [clientReady, setClientReady] = useState(false);
   useEffect(() => { setClientReady(true); }, []);
 
+  const setOnboardingInProgress = usePortfolioStore((s) => s.setOnboardingInProgress);
+
+  // Clear onboarding flag on unmount (safety net)
+  useEffect(() => {
+    return () => { setOnboardingInProgress(false); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-trigger deployment ONLY for genuinely new users (no stored smart account).
   // MUST wait for clientReady to avoid firing before Zustand hydration completes
   // — otherwise returning users get a MetaMask popup on every app launch.
+  // For returning users (store cleared on logout), derive the address and check
+  // the backend before triggering MetaMask popups.
   useEffect(() => {
     if (!clientReady || !wallet || deployGuardRef.current || deployPhase !== "idle" || formStep !== "account") return;
     // After hydration, check the actual persisted store value
@@ -288,11 +298,48 @@ export default function OnboardingPage() {
       deployGuardRef.current = true;
       setFormStep("strategy");
     } else {
-      // Genuinely new user — deploy smart account
-      handleAccountDeploy();
+      // Derive address first (no MetaMask signature), then check backend
+      checkBackendBeforeDeploy();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientReady, wallet, deployPhase, formStep]);
+
+  // Check if this wallet already has a registered smart account on the backend.
+  // If yes, restore the address and skip the deploy step entirely (no MetaMask popup).
+  // If no, proceed with full handleAccountDeploy for genuinely new users.
+  const checkBackendBeforeDeploy = async () => {
+    if (!wallet) return;
+    try {
+      const { kernelAccount, kernelClient, smartAccountAddress: derivedAddr } = await createSmartAccount(wallet);
+      // Query backend for this derived address
+      try {
+        const accountDetail = await api.getAccountDetail(derivedAddr);
+        if (accountDetail && accountDetail.address && accountDetail.address !== "") {
+          // Backend knows this account — returning user, no need to re-deploy
+          kernelAccountRef.current = kernelAccount;
+          kernelClientRef.current = kernelClient;
+          derivedAddressRef.current = derivedAddr;
+          setSmartAccountAddress(derivedAddr);
+          setDeployPhase("deployed");
+          deployGuardRef.current = true;
+          // If agent is active (has session key + funds), redirect will happen
+          // from layout. If not, let them re-activate from strategy step.
+          if (accountDetail.sessionKey?.isActive) {
+            setAgentActivated(true);
+          }
+          setFormStep("strategy");
+          return;
+        }
+      } catch {
+        // Backend doesn't know this account (404 or error) — new user
+      }
+      // New user — proceed with full deploy
+      handleAccountDeploy();
+    } catch {
+      // createSmartAccount failed — fall back to full deploy
+      handleAccountDeploy();
+    }
+  };
 
   // Deploy smart account on-chain & approve all protocols (Signature 1)
   const handleAccountDeploy = async () => {
@@ -301,6 +348,7 @@ export default function OnboardingPage() {
     deployGuardRef.current = true;
     setDeployPhase("deploying");
     setDeployError(null);
+    setOnboardingInProgress(true);
 
     try {
       const {
@@ -332,9 +380,11 @@ export default function OnboardingPage() {
       }, 50_000);
 
       setDeployPhase("deployed");
+      setOnboardingInProgress(false);
       toast.success("Smart account deployed & protocols approved!");
     } catch (err) {
       deployGuardRef.current = false;
+      setOnboardingInProgress(false);
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         setDeployPhase("idle");
@@ -353,6 +403,7 @@ export default function OnboardingPage() {
     if (activateGuardRef.current) return;
     activateGuardRef.current = true;
     setActivating(true);
+    setOnboardingInProgress(true);
 
     const effectiveSelectedProtocols = selectedProtocols;
     const amountWei = parseUnits(depositAmount, 6);
@@ -565,6 +616,7 @@ export default function OnboardingPage() {
 
       setActivationPhase("done");
       setAgentActivated(true);
+      setOnboardingInProgress(false);
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
       queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
       queryClient.invalidateQueries({ queryKey: ["account-detail"] });
@@ -574,6 +626,7 @@ export default function OnboardingPage() {
       setTimeout(() => router.push("/dashboard?tab=agent-log"), 2000);
     } catch (err) {
       activateGuardRef.current = false;
+      setOnboardingInProgress(false);
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         // User cancelled — go back to review state, don't show error phase

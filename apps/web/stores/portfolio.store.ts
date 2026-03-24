@@ -8,10 +8,12 @@ interface PortfolioState {
   totalDepositedUsd: string;
   totalYieldUsd: string;
   isAgentActivated: boolean;
+  isOnboardingInProgress: boolean;
   setSmartAccountAddress: (address: string) => void;
   setAllocations: (allocations: ProtocolAllocation[]) => void;
   setTotals: (deposited: string, yield_: string) => void;
   setAgentActivated: (activated: boolean) => void;
+  setOnboardingInProgress: (inProgress: boolean) => void;
   clearSmartAccount: () => void;
 }
 
@@ -23,13 +25,15 @@ export const usePortfolioStore = create<PortfolioState>()(
       totalDepositedUsd: "0",
       totalYieldUsd: "0",
       isAgentActivated: false,
+      isOnboardingInProgress: false,
       setSmartAccountAddress: (address) => set({ smartAccountAddress: address }),
       setAllocations: (allocations) => set({ allocations }),
       setTotals: (deposited, yield_) =>
         set({ totalDepositedUsd: deposited, totalYieldUsd: yield_ }),
       setAgentActivated: (activated) => set({ isAgentActivated: activated }),
+      setOnboardingInProgress: (inProgress) => set({ isOnboardingInProgress: inProgress }),
       clearSmartAccount: () =>
-        set({ smartAccountAddress: null, allocations: [], totalDepositedUsd: "0", totalYieldUsd: "0", isAgentActivated: false }),
+        set({ smartAccountAddress: null, allocations: [], totalDepositedUsd: "0", totalYieldUsd: "0", isAgentActivated: false, isOnboardingInProgress: false }),
     }),
     {
       name: "snowmind-portfolio",

@@ -10,9 +10,7 @@ export function useAuth() {
 
   const { logout } = useLogout({
     onSuccess: () => {
-      portfolioStore.setSmartAccountAddress("");
-      portfolioStore.setAllocations([]);
-      portfolioStore.setTotals("0", "0");
+      portfolioStore.clearSmartAccount();
     },
   });
 

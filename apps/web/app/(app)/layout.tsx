@@ -250,13 +250,17 @@ export default function AppLayout({
     }
   }, [pathname, router]);
 
-  // Gate: redirect to dashboard if agent IS active and on onboarding
+  // Gate: redirect to dashboard if agent IS active and on onboarding.
+  // NEVER redirect while onboarding operations are in progress — the user
+  // may be in the middle of signing a MetaMask transaction.
+  const isOnboardingInProgress = usePortfolioStore((s) => s.isOnboardingInProgress);
   useEffect(() => {
     if (!portfolio) return;
+    if (isOnboardingInProgress) return;
     if (isAgentActive && pathname === "/onboarding") {
       router.replace("/dashboard");
     }
-  }, [portfolio, isAgentActive, pathname, router]);
+  }, [portfolio, isAgentActive, pathname, router, isOnboardingInProgress]);
 
   // Don't render until auth is ready
   if (!ready) {
