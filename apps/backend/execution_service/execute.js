@@ -279,11 +279,42 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     timestamp: new Date().toISOString(),
   }))
 
+  // ── Force regular mode: modify serialized params BEFORE deserialization ──
+  // After the first successful enable-mode UserOp, the permission is
+  // registered on-chain. Subsequent UserOps must NOT include the enable
+  // data, or the Kernel contract reverts with "duplicate permissionHash".
+  // Setting isPreInstalled=true causes the SDK to:
+  //   1. Initialize pluginEnabled=true in the closure (skip enable envelope in getSignatureData)
+  //   2. Use VALIDATOR_MODE.DEFAULT in getNonceKey (not ENABLE)
+  //   3. Pass pluginEnableSignature=undefined to toKernelPluginManager
+  let permissionBlob = serializedPermission
+  if (options.forceRegularMode) {
+    try {
+      const decoded = JSON.parse(Buffer.from(permissionBlob, "base64").toString("utf-8"))
+      decoded.isPreInstalled = true
+      delete decoded.enableSignature
+      permissionBlob = Buffer.from(JSON.stringify(decoded)).toString("base64")
+      console.log(JSON.stringify({
+        level: "info",
+        action: "force_regular_mode",
+        detail: "Set isPreInstalled=true in serialized params — SDK will skip enable data.",
+        timestamp: new Date().toISOString(),
+      }))
+    } catch (e) {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "force_regular_mode_parse_failed",
+        error: e?.message?.slice(0, 200),
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  }
+
   const permissionAccount = await deserializePermissionAccount(
     publicClient,
     ENTRYPOINT,
     KERNEL_V3_1,
-    serializedPermission,
+    permissionBlob,
     sessionKeySigner,
   )
 
@@ -293,29 +324,6 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     permissionAccountAddress: permissionAccount.address,
     timestamp: new Date().toISOString(),
   }))
-
-  // ── Force regular mode: clear the cached enable signature ──
-  // After the first successful enable-mode UserOp, the permission is
-  // registered on-chain. Subsequent UserOps must NOT include the enable
-  // data, or the Kernel contract reverts with "duplicate permissionHash".
-  if (options.forceRegularMode) {
-    const kpm = permissionAccount.kernelPluginManager
-    if (kpm) {
-      if (typeof kpm.getPluginEnableSignature === "function") {
-        kpm.getPluginEnableSignature = async () => undefined
-      }
-      if (kpm.pluginEnableSignature !== undefined) {
-        kpm.pluginEnableSignature = undefined
-      }
-    }
-    console.log(JSON.stringify({
-      level: "info",
-      action: "force_regular_mode",
-      detail: "Cleared enable signature — using regular validation mode.",
-      smartAccount: permissionAccount.address,
-      timestamp: new Date().toISOString(),
-    }))
-  }
 
   // ── Diagnostic: verify on-chain state before building UserOp ──
   // Query the ECDSA validator module for the stored owner to compare with
@@ -1001,10 +1009,13 @@ export async function executeRebalance({
         }))
         return { txHash: retryTxHash, explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}` }
       } catch (retryErr) {
-        const retryComponents = extractErrorComponents(retryErr)
         console.error(JSON.stringify({
           level: "error", action: "duplicate_permissionHash_retry_failed",
-          smartAccountAddress, ...retryComponents,
+          smartAccountAddress,
+          error: formatExecutionError(retryErr),
+          shortMessage: retryErr?.shortMessage?.slice(0, 500),
+          details: retryErr?.details?.slice(0, 500),
+          causeMessage: retryErr?.cause?.message?.slice(0, 500),
           timestamp: new Date().toISOString(),
         }))
         throw new Error(
