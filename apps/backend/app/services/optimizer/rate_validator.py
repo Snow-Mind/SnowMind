@@ -209,9 +209,10 @@ class RateValidator:
         twap_rates = {}
 
         for protocol_id, spot_apy in rates.items():
-            # 1. Sanity bound check (before recording — reject immediately)
+            # 1. Sanity bound check (before recording — exclude this protocol)
             if not self.check_sanity(protocol_id, spot_apy):
-                return None  # Halt entirely
+                logger.warning("Excluding %s from this cycle due to sanity bound", protocol_id)
+                continue  # Exclude this protocol, don't halt everything
 
             # 2. Velocity check (suspicious spike?)
             if not self.check_velocity(protocol_id, spot_apy):

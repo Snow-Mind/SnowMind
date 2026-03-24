@@ -144,7 +144,19 @@ async def get_rebalance_status(
     _auth: dict = Depends(require_privy_auth),
 ):
     """Return the most recent rebalance result and overall status."""
-    account = await _lookup_account(db, address)
+    try:
+        account = await _lookup_account(db, address)
+    except HTTPException:
+        # Account not yet registered — return idle stub
+        addr = validate_eth_address(address)
+        return {
+            "smartAccountAddress": addr,
+            "lastRebalance": None,
+            "status": "idle",
+            "lastLog": None,
+            "reasonCode": "NOT_REGISTERED",
+            "reasonDetail": "Account not yet registered. Complete onboarding to get started.",
+        }
     addr = account["address"]
     account_id = account["id"]
     is_active = bool(account.get("is_active", True))
@@ -215,7 +227,11 @@ async def get_rebalance_history(
     offset: int = Query(default=0, ge=0),
 ):
     """Return paginated rebalance history for one account."""
-    account = await _lookup_account(db, address)
+    try:
+        account = await _lookup_account(db, address)
+    except HTTPException:
+        # Account not yet registered — return empty history
+        return RebalanceHistoryResponse(logs=[], total=0)
     addr = account["address"]
     account_id = account["id"]
 

@@ -38,7 +38,7 @@ class SessionKeyCreate(BaseModel):
 
 
 class AccountResponse(CamelModel):
-    id: UUID
+    id: str
     address: str
     owner_address: str
     is_active: bool

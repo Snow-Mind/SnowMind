@@ -351,6 +351,8 @@ function DepositModal({ onClose }: { onClose: () => void }) {
   const [amount, setAmount] = useState("");
   const [step, setStep] = useState<DepositStep>("idle");
   const [eoaBalance, setEoaBalance] = useState("0");
+  const [avaxBalance, setAvaxBalance] = useState("0");
+  const [showManualDeposit, setShowManualDeposit] = useState(false);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
@@ -358,19 +360,25 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
   const parsedAmount = parseFloat(amount);
   const eoaBalanceNum = parseFloat(eoaBalance);
+  const avaxBalanceNum = parseFloat(avaxBalance);
   const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
+  const hasGas = avaxBalanceNum > 0.001; // Need at least ~0.001 AVAX for gas
 
-  // Poll EOA balance
+  // Poll EOA balance (USDC + AVAX)
   useEffect(() => {
     if (!wallet) return;
     const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
     const check = async () => {
       try {
-        const balance = await publicClient.readContract({
-          address: CONTRACTS.USDC, abi: ERC20_TRANSFER_ABI, functionName: "balanceOf",
-          args: [wallet.address as `0x${string}`],
-        });
-        setEoaBalance(formatUnits(balance as bigint, 6));
+        const [usdcBal, avaxBal] = await Promise.all([
+          publicClient.readContract({
+            address: CONTRACTS.USDC, abi: ERC20_TRANSFER_ABI, functionName: "balanceOf",
+            args: [wallet.address as `0x${string}`],
+          }),
+          publicClient.getBalance({ address: wallet.address as `0x${string}` }),
+        ]);
+        setEoaBalance(formatUnits(usdcBal as bigint, 6));
+        setAvaxBalance(formatUnits(avaxBal as bigint, 18));
       } catch { /* ignore */ }
     };
     check();
@@ -380,6 +388,14 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
   async function handleDeposit() {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
+
+    // Check AVAX gas balance before initiating transaction
+    if (!hasGas) {
+      toast.error("You need AVAX in your wallet for gas fees. Send some AVAX to your wallet or use the manual deposit option below.");
+      setShowManualDeposit(true);
+      return;
+    }
+
     setStep("transferring");
     try {
       const provider = await wallet.getEthereumProvider();
@@ -389,9 +405,6 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       const [account] = await walletClient.getAddresses();
       const amountWei = parseUnits(parsedAmount.toString(), 6);
 
-      // Transfer USDC from EOA → smart account as idle balance.
-      // The optimizer will deploy it to the optimal protocol in the next cycle.
-      // This avoids a second MetaMask signature and lets the agent choose the best protocol.
       const transferHash = await walletClient.sendTransaction({
         account,
         to: CONTRACTS.USDC,
@@ -407,10 +420,22 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       setTimeout(onClose, 1500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("User denied") || msg.includes("User rejected")) toast.error("Transaction cancelled.");
-      else toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
+      if (msg.includes("User denied") || msg.includes("User rejected")) {
+        toast.error("Transaction cancelled.");
+      } else if (msg.includes("insufficient") || msg.includes("gas") || msg.includes("funds")) {
+        toast.error("Insufficient AVAX for gas fees. Use the manual deposit option to send USDC directly.");
+        setShowManualDeposit(true);
+      } else {
+        toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
+      }
       setStep("idle");
     }
+  }
+
+  function handleCopyAddress() {
+    if (!smartAccountAddress) return;
+    navigator.clipboard.writeText(smartAccountAddress);
+    toast.success("Smart account address copied! Send USDC (Avalanche C-Chain) to this address.");
   }
 
   return (
@@ -437,7 +462,7 @@ function DepositModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Available balance */}
-        <div className="flex items-center gap-2 mb-6">
+        <div className="flex items-center gap-2 mb-4">
           <span className="text-xs text-[#8A837C]">{eoaBalanceNum.toFixed(2)} USDC available</span>
           {eoaBalanceNum > 0 && (
             <button
@@ -449,6 +474,14 @@ function DepositModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
+        {/* Gas warning */}
+        {!hasGas && eoaBalanceNum > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-xs font-medium text-amber-800">You need a small amount of AVAX for gas fees.</p>
+            <p className="text-[10px] text-amber-600 mt-1">Send ~0.01 AVAX to your wallet ({wallet?.address?.slice(0, 6)}…{wallet?.address?.slice(-4)}) or use the manual deposit option below.</p>
+          </div>
+        )}
+
         {/* Deposit button */}
         <button
           onClick={handleDeposit}
@@ -459,6 +492,31 @@ function DepositModal({ onClose }: { onClose: () => void }) {
           {step === "done" && <CheckCircle2 className="h-4 w-4" />}
           {step === "idle" ? "Deposit" : step === "transferring" ? "Transferring…" : "Done!"}
         </button>
+
+        {/* Divider */}
+        <div className="flex items-center gap-3 my-4">
+          <div className="flex-1 h-px bg-[#E8E2DA]" />
+          <span className="text-[10px] text-[#8A837C]">OR</span>
+          <div className="flex-1 h-px bg-[#E8E2DA]" />
+        </div>
+
+        {/* Manual deposit option — always visible */}
+        <div className="rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] p-3">
+          <p className="text-xs font-medium text-[#1A1715] mb-1">Send USDC directly</p>
+          <p className="text-[10px] text-[#8A837C] mb-2">Send USDC on Avalanche C-Chain from any wallet or exchange to your smart account:</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded bg-white border border-[#E8E2DA] px-2 py-1.5 text-[10px] text-[#1A1715] font-mono truncate">
+              {smartAccountAddress}
+            </code>
+            <button
+              onClick={handleCopyAddress}
+              className="flex items-center gap-1 rounded border border-[#E8E2DA] px-2 py-1.5 text-[10px] font-medium text-[#1A1715] hover:bg-[#F5F0EB] transition-colors"
+            >
+              <Copy className="h-3 w-3" />
+              Copy
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
