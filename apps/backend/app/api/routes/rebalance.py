@@ -81,17 +81,38 @@ def _classify_reason(
 
 async def _lookup_account(db: Client, address: str) -> dict:
     """Resolve a checksummed address → account row, or raise 404."""
+    import asyncio
+    from postgrest.exceptions import APIError
+
     address = validate_eth_address(address)
-    acct = (
-        db.table("accounts")
-        .select("id, address, is_active")
-        .eq("address", address)
-        .limit(1)
-        .execute()
-    )
-    if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
-    return acct.data[0]
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            acct = (
+                db.table("accounts")
+                .select("id, address, is_active")
+                .eq("address", address)
+                .limit(1)
+                .execute()
+            )
+            if not acct.data:
+                raise HTTPException(status_code=404, detail="Account not found")
+            return acct.data[0]
+        except HTTPException:
+            raise
+        except APIError as exc:
+            last_err = exc
+            if exc.code == "502" or "502" in str(exc):
+                logger.warning("Supabase 502 on _lookup_account (attempt %d/3): %s", attempt + 1, exc)
+                if attempt < 2:
+                    await asyncio.sleep(1 * (attempt + 1))
+                    continue
+            raise HTTPException(status_code=502, detail="Database temporarily unavailable")
+        except Exception as exc:
+            last_err = exc
+            logger.error("Unexpected error in _lookup_account: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal error")
+    raise HTTPException(status_code=502, detail=f"Database unavailable after retries: {last_err}")
 
 
 # ── Response schemas ─────────────────────────────────────────────────────────

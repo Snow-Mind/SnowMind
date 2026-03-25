@@ -1,4 +1,4 @@
-export type ProtocolId = "benqi" | "aave_v3" | "euler_v2" | "spark" | "fluid" | "idle";
+export type ProtocolId = "benqi" | "aave_v3" | "euler_v2" | "spark" | "fluid" | "silo_savusd_usdc" | "silo_susdp_usdc" | "idle";
 
 export interface ProtocolAllocation {
   protocolId: ProtocolId;

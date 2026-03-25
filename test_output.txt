@@ -1,0 +1,120 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-8.3.3, pluggy-1.6.0 -- E:\SnowMind\apps\backend\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: E:\SnowMind\apps\backend
+configfile: pyproject.toml
+plugins: anyio-4.12.1, asyncio-0.24.0, cov-6.0.0
+asyncio: mode=Mode.AUTO, default_loop_scope=function
+collecting ... collected 82 items
+
+tests/fork/test_mainnet_adapters.py::TestAaveV3Mainnet::test_aave_get_rate_returns_valid_apy PASSED [  1%]
+tests/fork/test_mainnet_adapters.py::TestAaveV3Mainnet::test_aave_adapter_name PASSED [  2%]
+tests/fork/test_mainnet_adapters.py::TestBenqiMainnet::test_benqi_get_rate_returns_valid_apy PASSED [  3%]
+tests/fork/test_mainnet_adapters.py::TestBenqiMainnet::test_benqi_exchange_rate_is_sane PASSED [  4%]
+tests/fork/test_mainnet_adapters.py::TestCrossProtocol::test_all_active_adapters_return_rates PASSED [  6%]
+tests/fork/test_mainnet_adapters.py::TestCrossProtocol::test_waterfall_allocator_produces_valid_output PASSED [  7%]
+tests/integration/test_security.py::test_twap_excludes_spike PASSED      [  8%]
+tests/integration/test_security.py::test_rate_30pct_rejected PASSED      [  9%]
+tests/integration/test_security.py::test_defillama_divergence_warning PASSED [ 10%]
+tests/integration/test_security.py::test_rate_limiter_blocks_101st PASSED [ 12%]
+tests/integration/test_security.py::test_session_key_roundtrip PASSED    [ 13%]
+tests/integration/test_security.py::test_expiring_keys_detected PASSED   [ 14%]
+tests/integration/test_security.py::test_twap_confirmation_consistent PASSED [ 15%]
+tests/integration/test_security.py::test_twap_confirmation_divergent PASSED [ 17%]
+tests/integration/test_security.py::test_unusual_activity_high_volume PASSED [ 18%]
+tests/unit/test_execution_service_auth.py::test_post_adds_signed_headers_when_internal_key_present PASSED [ 19%]
+tests/unit/test_execution_service_auth.py::test_post_omits_signature_headers_without_internal_key PASSED [ 20%]
+tests/unit/test_fee_calculator.py::test_partial_withdrawal_proportional_fee PASSED [ 21%]
+tests/unit/test_fee_calculator.py::test_full_withdrawal_fee PASSED       [ 23%]
+tests/unit/test_fee_calculator.py::test_loss_protection_no_fee PASSED    [ 24%]
+tests/unit/test_fee_calculator.py::test_fee_exempt_zero_fee PASSED       [ 25%]
+tests/unit/test_fee_calculator.py::test_net_principal_update_with_fee PASSED [ 26%]
+tests/unit/test_fee_calculator.py::test_net_principal_update_fee_exempt PASSED [ 28%]
+tests/unit/test_fee_calculator.py::test_zero_profit_no_fee PASSED        [ 29%]
+tests/unit/test_fee_calculator.py::test_zero_withdraw_amount_raises PASSED [ 30%]
+tests/unit/test_fee_calculator.py::test_negative_withdraw_amount_raises PASSED [ 31%]
+tests/unit/test_fee_calculator.py::test_withdraw_exceeds_balance_raises PASSED [ 32%]
+tests/unit/test_fee_calculator.py::test_zero_balance_raises PASSED       [ 34%]
+tests/unit/test_fee_calculator.py::test_custom_fee_rate PASSED           [ 35%]
+tests/unit/test_fee_calculator.py::test_usdc_six_decimal_precision PASSED [ 36%]
+tests/unit/test_fee_calculator.py::test_record_deposit_new_account PASSED [ 37%]
+tests/unit/test_fee_calculator.py::test_record_deposit_existing_account PASSED [ 39%]
+tests/unit/test_fee_calculator.py::test_record_withdrawal_updates_cumulative PASSED [ 40%]
+tests/unit/test_fee_calculator.py::test_fee_never_exceeds_withdrawal_amount PASSED [ 41%]
+tests/unit/test_fee_calculator.py::test_fee_never_negative PASSED        [ 42%]
+tests/unit/test_fee_calculator.py::test_tiny_profit_dust_fee PASSED      [ 43%]
+tests/unit/test_fee_calculator.py::test_minimum_meaningful_fee PASSED    [ 45%]
+tests/unit/test_fee_calculator.py::test_sequential_withdrawals_cost_more_than_single PASSED [ 46%]
+tests/unit/test_fee_calculator.py::test_all_outputs_are_decimal PASSED   [ 47%]
+tests/unit/test_fee_calculator.py::test_whale_withdrawal PASSED          [ 48%]
+tests/unit/test_fee_calculator.py::test_penny_withdrawal PASSED          [ 50%]
+tests/unit/test_milp_solver.py::test_equal_apy_splits_both_active PASSED [ 51%]
+tests/unit/test_milp_solver.py::test_higher_apy_favoured_with_cap PASSED [ 52%]
+tests/unit/test_milp_solver.py::test_min_allocation_limits_active_protocols PASSED [ 53%]
+tests/unit/test_milp_solver.py::test_all_unavailable_returns_fallback PASSED [ 54%]
+tests/unit/test_milp_solver.py::test_pure_yield_ignores_risk_score PASSED [ 56%]
+tests/unit/test_milp_solver.py::test_rebalance_not_worth_it_small_delta PASSED [ 57%]
+tests/unit/test_milp_solver.py::test_rebalance_worth_it_large_delta_and_yield PASSED [ 58%]
+tests/unit/test_milp_solver.py::test_compute_delta PASSED                [ 59%]
+tests/unit/test_milp_solver.py::test_pick_best_protocol_returns_highest_apy PASSED [ 60%]
+tests/unit/test_milp_solver.py::test_pick_best_protocol_no_available_returns_infeasible PASSED [ 62%]
+tests/unit/test_milp_solver.py::test_solve_balanced_config PASSED        [ 63%]
+tests/unit/test_milp_solver.py::test_solve_diversified_config PASSED     [ 64%]
+tests/unit/test_milp_solver.py::test_routing_threshold_small_deposit PASSED [ 65%]
+tests/unit/test_milp_solver.py::test_routing_threshold_large_deposit_uses_milp PASSED [ 67%]
+tests/unit/test_milp_solver.py::test_compute_weighted_apy PASSED         [ 68%]
+tests/unit/test_optimizer_30day_avg.py::test_30day_avg_uses_utilization_and_liquidity_adjustments PASSED [ 69%]
+tests/unit/test_optimizer_30day_avg.py::test_30day_avg_falls_back_to_live_rate_when_no_snapshots PASSED [ 70%]
+tests/unit/test_rate_fetcher.py::test_placeholder PASSED                 [ 71%]
+tests/unit/test_rebalancer_guards.py::TestBalanceGuard::test_deposit_only_with_no_usdc_skips PASSED [ 73%]
+tests/unit/test_rebalancer_guards.py::TestBalanceGuard::test_withdrawal_plus_deposit_passes_guard PASSED [ 74%]
+tests/unit/test_rebalancer_guards.py::TestBalanceGuard::test_idle_usdc_covers_deposit PASSED [ 75%]
+tests/unit/test_waterfall_allocator.py::test_small_deposit_goes_to_best_protocol PASSED [ 76%]
+tests/unit/test_waterfall_allocator.py::test_large_deposit_splits_with_exposure_cap PASSED [ 78%]
+tests/unit/test_waterfall_allocator.py::test_tvl_cap_limits_allocation PASSED [ 79%]
+tests/unit/test_waterfall_allocator.py::test_no_protocol_beats_base_layer PASSED [ 80%]
+tests/unit/test_waterfall_allocator.py::test_base_layer_barely_beaten_above_margin PASSED [ 81%]
+tests/unit/test_waterfall_allocator.py::test_base_layer_not_beaten_below_margin PASSED [ 82%]
+tests/unit/test_waterfall_allocator.py::test_perday_gas_gate_approves PASSED [ 84%]
+tests/unit/test_waterfall_allocator.py::test_perday_gas_gate_rejects_marginal PASSED [ 85%]
+tests/unit/test_waterfall_allocator.py::test_no_protocols_returns_infeasible PASSED [ 86%]
+tests/unit/test_waterfall_allocator.py::test_output_has_all_required_fields PASSED [ 87%]
+tests/unit/test_waterfall_allocator.py::test_base_layer_only_gets_100_pct PASSED [ 89%]
+tests/unit/test_waterfall_allocator.py::test_waterfall_cascading_fill PASSED [ 90%]
+tests/unit/test_withdrawal_validation.py::test_dust_amount_rejected PASSED [ 91%]
+tests/unit/test_withdrawal_validation.py::test_maximum_amount_rejected PASSED [ 92%]
+tests/unit/test_withdrawal_validation.py::test_excess_precision_rejected PASSED [ 93%]
+tests/unit/test_withdrawal_validation.py::test_invalid_decimal_string_rejected PASSED [ 95%]
+tests/unit/test_withdrawal_validation.py::test_valid_amount_passes PASSED [ 96%]
+tests/unit/test_withdrawal_validation.py::test_minimum_valid_amount PASSED [ 97%]
+tests/unit/test_withdrawal_validation.py::test_maximum_valid_amount PASSED [ 98%]
+tests/unit/test_withdrawal_validation.py::test_preview_request_same_validation PASSED [100%]
+
+============================== warnings summary ===============================
+.venv\Lib\site-packages\starlette\formparsers.py:12
+  E:\SnowMind\apps\backend\.venv\Lib\site-packages\starlette\formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+.venv\Lib\site-packages\supabase\__init__.py:1
+  E:\SnowMind\apps\backend\.venv\Lib\site-packages\supabase\__init__.py:1: DeprecationWarning: The `gotrue` package is deprecated, is not going to receive updates in the future. Please, use `supabase_auth` instead.
+    from gotrue.errors import (
+
+.venv\Lib\site-packages\web3\providers\legacy_websocket.py:24
+  E:\SnowMind\apps\backend\.venv\Lib\site-packages\web3\providers\legacy_websocket.py:24: DeprecationWarning: websockets.client.connect is deprecated
+    from websockets.client import (
+
+.venv\Lib\site-packages\websockets\legacy\__init__.py:6
+  E:\SnowMind\apps\backend\.venv\Lib\site-packages\websockets\legacy\__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+.venv\Lib\site-packages\web3\providers\persistent\websocket.py:18
+.venv\Lib\site-packages\web3\providers\persistent\websocket.py:18
+  E:\SnowMind\apps\backend\.venv\Lib\site-packages\web3\providers\persistent\websocket.py:18: DeprecationWarning: websockets.WebSocketClientProtocol is deprecated
+    from websockets import (
+
+.venv\Lib\site-packages\web3\providers\persistent\websocket.py:21
+  E:\SnowMind\apps\backend\.venv\Lib\site-packages\web3\providers\persistent\websocket.py:21: DeprecationWarning: websockets.client.connect is deprecated
+    from websockets.client import (
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 82 passed, 7 warnings in 6.12s ========================

@@ -133,7 +133,7 @@ export default function DashboardPage() {
 
   // Protocols with current allocations > 0 (actively receiving yield)
   const activeAllocationIds = portfolio?.allocations
-    ?.filter((a) => a.amountUsdc > 0)
+    ?.filter((a) => Number(a.amountUsdc) > 0)
     .map((a) => a.protocolId)
     ?? [];
 
