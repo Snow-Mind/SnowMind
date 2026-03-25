@@ -497,7 +497,7 @@ export async function grantAndSerializeSessionKey(
         ],
       },
       // Permit2 USDC approve — Euler V2 (EVK) pulls tokens via Permit2
-      ...(contracts.PERMIT2 ? [{
+      ...(contracts.PERMIT2 ? ([{
         target: contracts.USDC,
         valueLimit: 0n,
         abi: ERC20_ABI,
@@ -506,9 +506,9 @@ export async function grantAndSerializeSessionKey(
           { condition: ParamCondition.EQUAL, value: contracts.PERMIT2 },
           null,
         ],
-      }] : []),
+      }] as CallPolicyPermission[]) : []),
       // Permit2.approve(USDC, euler_vault, amount, deadline) — set Permit2 allowance
-      ...(contracts.PERMIT2 ? [{
+      ...(contracts.PERMIT2 ? ([{
         target: contracts.PERMIT2,
         valueLimit: 0n,
         abi: PERMIT2_APPROVE_ABI,
@@ -519,7 +519,7 @@ export async function grantAndSerializeSessionKey(
           null,
           null,
         ],
-      }] : []),
+      }] as CallPolicyPermission[]) : []),
       // Silo savUSD/USDC USDC approve
       {
         target: contracts.USDC,

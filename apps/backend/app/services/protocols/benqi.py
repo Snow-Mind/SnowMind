@@ -353,8 +353,14 @@ class BenqiAdapter(BaseProtocolAdapter):
     # ── Helpers ──────────────────────────────────────────────────────────
 
     async def usdc_to_qi_tokens(self, usdc_amount: int) -> int:
-        """Convert a USDC amount (6 decimals) to equivalent qiToken amount."""
+        """Convert a USDC amount (6 decimals) to equivalent qiToken amount.
+
+        Compound V2 exchange rate formula:
+            exchangeRate = (cash + borrows - reserves) * 1e18 / totalSupply
+            underlying   = qiTokens * exchangeRate / 1e18
+            qiTokens     = underlying * 1e18 / exchangeRate
+        """
         pool = self._get_pool_contract()
         exchange_rate = await pool.functions.exchangeRateStored().call()
-        # qiTokens = usdc * 1e12 * 1e18 / exchangeRate
-        return (usdc_amount * 10**12 * 10**18) // exchange_rate
+        # qiTokens = usdc_raw(6dec) * 1e18 / exchangeRate
+        return (usdc_amount * 10**18) // exchange_rate
