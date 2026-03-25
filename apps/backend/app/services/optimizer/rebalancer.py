@@ -5,7 +5,7 @@ Transaction ordering: withdrawals FIRST, then deposits (ensure funds are availab
 
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from uuid import UUID
 
 import httpx
@@ -1005,6 +1005,29 @@ class Rebalancer:
                 smart_account_address,
             )
             return None
+
+        # ERC-4626 rounding protection: redeem(shares) may return 1-2 micro-USDC
+        # less than convertToAssets(shares) predicted (due to block timing and
+        # integer rounding).  The deposit amount (from target_allocations) was
+        # computed using balance reads from an earlier block, so it can exceed
+        # the actual USDC available after the withdrawal.  Cap deposits to
+        # available funds minus a small buffer to prevent the atomic UserOp
+        # batch from reverting on-chain.
+        if total_deposit_amt > Decimal("0") and total_deposit_amt > available_for_deposit - Decimal("0.000002"):
+            capped = available_for_deposit - Decimal("0.000002")
+            if capped > Decimal("0") and total_deposit_amt > capped:
+                ratio = capped / total_deposit_amt
+                deposits = [
+                    (pid, (amt * ratio).quantize(Decimal("0.000001"), rounding=ROUND_DOWN))
+                    for pid, amt in deposits
+                ]
+                logger.info(
+                    "Capped deposit amounts from $%.6f to $%.6f "
+                    "(ERC-4626 rounding protection) for %s",
+                    float(total_deposit_amt),
+                    float(sum(a for _, a in deposits)),
+                    smart_account_address,
+                )
 
         # Step 3: Get session key and call execution service
         session_record = get_active_session_key_record(db, UUID(account_id))

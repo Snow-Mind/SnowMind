@@ -1019,15 +1019,15 @@ export async function executeRebalance({
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
 
-    // Log full error details for diagnostics (truncated to avoid log bloat)
+    // Log full error details for diagnostics (2000 chars to capture revert reasons)
     console.error(JSON.stringify({
       level: "error", action: "regular_mode_failed_detail",
       smartAccountAddress,
-      shortMessage: err?.shortMessage?.slice(0, 500),
-      message: err?.message?.slice(0, 500),
-      details: err?.details?.slice(0, 500),
-      causeMessage: err?.cause?.message?.slice(0, 500),
-      causeDetails: err?.cause?.details?.slice(0, 500),
+      shortMessage: err?.shortMessage?.slice(0, 2000),
+      message: err?.message?.slice(0, 2000),
+      details: err?.details?.slice(0, 2000),
+      causeMessage: err?.cause?.message?.slice(0, 1000),
+      causeDetails: err?.cause?.details?.slice(0, 1000),
       timestamp: new Date().toISOString(),
     }))
 

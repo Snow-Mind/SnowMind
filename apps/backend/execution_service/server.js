@@ -34,8 +34,19 @@ process.on("uncaughtException", (err) => {
   process.exit(1)
 })
 process.on("unhandledRejection", (reason) => {
-  console.error("FATAL unhandled rejection:", reason)
-  process.exit(1)
+  // DO NOT crash the process on unhandled rejections.
+  // The ZeroDev SDK creates multiple KernelAccountClient instances during
+  // retry logic (regular mode → enable mode).  Background promises from
+  // failed clients (gas estimation callbacks, paymaster polling) can reject
+  // AFTER the outer catch block has handled the error.  Crashing on these
+  // kills the process and returns 503 for all in-flight requests.
+  console.error(JSON.stringify({
+    level: "error",
+    action: "unhandled_rejection",
+    reason: String(reason)?.slice(0, 1000),
+    stack: reason instanceof Error ? reason.stack?.slice(0, 500) : undefined,
+    timestamp: new Date().toISOString(),
+  }))
 })
 
 const app = express()
