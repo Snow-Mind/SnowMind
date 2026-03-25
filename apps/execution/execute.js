@@ -562,14 +562,59 @@ export async function executeRebalance({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
-  // Always use forceRegularMode: the permission is already registered on-chain
-  // by the frontend's initial enable UserOp. Using enable mode from the backend
-  // causes "duplicate permissionHash" (InvalidNonce) because the nonce was
-  // already consumed. Regular mode skips the enable envelope entirely.
+  // ── Pre-flight: inspect the serialized blob for enableSignature ──
+  // The blob is base64-encoded JSON. Check if it contains the enable
+  // signature that the frontend's createKernelAccount(sudo+regular) produced.
+  // If enableSignature is missing/empty, enable mode will always fail.
+  let blobHasEnableSig = false
+  let blobEnableSigLength = 0
+  try {
+    const decoded = JSON.parse(Buffer.from(serializedPermission, "base64").toString("utf-8"))
+    blobHasEnableSig = !!decoded.enableSignature && decoded.enableSignature.length > 2
+    blobEnableSigLength = decoded.enableSignature?.length || 0
+    console.log(JSON.stringify({
+      level: "info",
+      action: "blob_enable_sig_check",
+      smartAccountAddress,
+      blobHasEnableSig,
+      blobEnableSigLength,
+      blobIsPreInstalled: !!decoded.isPreInstalled,
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (e) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "blob_enable_sig_check_failed",
+      error: e?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
+  // ── Smart mode selection ──
+  // If the blob contains an enableSignature, try enable mode FIRST.
+  // This handles the common case where the session key has never been
+  // enabled on-chain (first rebalance after granting).
+  // If the blob does NOT have an enableSignature (or isPreInstalled=true),
+  // the permission was already enabled → use regular mode.
+  const useEnableModeFirst = blobHasEnableSig
+  const initialForceRegular = !useEnableModeFirst
+
+  console.log(JSON.stringify({
+    level: "info",
+    action: "mode_selection",
+    smartAccountAddress,
+    useEnableModeFirst,
+    initialForceRegular,
+    reason: useEnableModeFirst
+      ? "Blob contains enableSignature → try enable mode first to register permission on-chain"
+      : "Blob has no enableSignature → permission should already be on-chain, using regular mode",
+    timestamp: new Date().toISOString(),
+  }))
+
   const { client: kernelClient, publicClient: execPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
-    { withPaymaster: true, forceRegularMode: true },
+    { withPaymaster: true, forceRegularMode: initialForceRegular },
   )
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
@@ -846,6 +891,9 @@ export async function executeRebalance({
     }
 
     // Get the enable signature (cached from serialized blob)
+    // NOTE: If forceRegularMode was used, enableSignature was deleted from the
+    // deserialized blob, so this will be null. The blobEnableSigLength logged
+    // earlier (from the ORIGINAL blob) is the authoritative check.
     let enableSig = null
     if (typeof kpm?.getPluginEnableSignature === "function") {
       try {
@@ -1013,6 +1061,7 @@ export async function executeRebalance({
       action: "enable_signature_verification",
       smartAccountAddress,
       pluginEnabledOnChain,
+      pluginEnabledOnChainNote: "WARNING: checks action selector only, not specific permissionId",
       onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
       sdkNonce,
       onchainVersion,
@@ -1021,6 +1070,11 @@ export async function executeRebalance({
       enableDataLength: enableDataHex?.length ?? 0,
       enableDataHash,
       enableSigLength: enableSig?.length ?? 0,
+      enableSigLengthNote: initialForceRegular
+        ? "Expected 0 — forceRegularMode deletes enableSig from blob before deserialization"
+        : "From deserialized blob (enable mode)",
+      blobEnableSigLength,
+      blobEnableSigNote: "From ORIGINAL blob before any modification — authoritative check",
       enableSigHash,
       backendTypedDataHash,
       backendValidationId,
@@ -1069,6 +1123,18 @@ export async function executeRebalance({
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
+
+    // If enable mode was used (first-ever execution), the permission is now
+    // registered on-chain. Log success so we know future attempts can skip enable.
+    if (useEnableModeFirst) {
+      console.log(JSON.stringify({
+        level: "info", action: "enable_mode_succeeded",
+        smartAccountAddress,
+        detail: "Permission enabled on-chain via first UserOp. Future rebalances should use regular mode.",
+        timestamp: new Date().toISOString(),
+      }))
+    }
+
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
   } catch (err) {
     const allText = [err?.shortMessage, err?.message, err?.details,
@@ -1077,78 +1143,114 @@ export async function executeRebalance({
 
     // Log full error details for diagnostics (2000 chars to capture revert reasons)
     console.error(JSON.stringify({
-      level: "error", action: "regular_mode_failed_detail",
+      level: "error", action: "primary_mode_failed_detail",
       smartAccountAddress,
+      mode: useEnableModeFirst ? "enable" : "regular",
       shortMessage: err?.shortMessage?.slice(0, 2000),
-      message: err?.message?.slice(0, 2000),
       details: err?.details?.slice(0, 2000),
-      causeMessage: err?.cause?.message?.slice(0, 1000),
-      causeDetails: err?.cause?.details?.slice(0, 1000),
+      causeMessage: err?.cause?.message?.slice(0, 2000),
+      causeDetails: err?.cause?.details?.slice(0, 2000),
       timestamp: new Date().toISOString(),
     }))
 
-    // ── Retry 0: permission not yet enabled on-chain ──────────────
-    // With forceRegularMode=true, the first UserOp after a NEW session
-    // key will fail because the Kernel contract hasn't seen this
-    // permissionId yet.  Detect validation failures and retry with
-    // enable mode (forceRegularMode=false) so the SDK wraps the
-    // enable data into the UserOp.
-    const isPermissionNotEnabled = (
+    // ── Retry 0: try the opposite mode ──────────────────────────
+    // If we started with enable mode and it failed (e.g. permission
+    // was ALREADY registered → duplicate/invalidnonce), retry with
+    // regular mode. If we started with regular mode and it failed
+    // (permission not on-chain), retry with enable mode.
+    const isPermissionRelated = (
       allText.includes("aa24") ||
       allText.includes("signature error") ||
+      allText.includes("enablenotapproved") ||
+      allText.includes("duplicate permissionhash") ||
+      allText.includes("invalidnonce") ||
       (allText.includes("useroperation reverted") && allText.includes("simulation"))
     )
-    if (isPermissionNotEnabled) {
+
+    if (isPermissionRelated) {
+      const retryForceRegular = useEnableModeFirst // flip the mode
       console.log(JSON.stringify({
-        level: "warn", action: "permission_not_enabled_retry_enable",
+        level: "warn", action: "permission_mode_retry",
         smartAccountAddress,
-        detail: "Regular mode failed (permission may not be on-chain). " +
-          "Retrying with enable mode to register the permission.",
-        originalError: err?.shortMessage?.slice(0, 300),
+        primaryMode: useEnableModeFirst ? "enable" : "regular",
+        retryMode: retryForceRegular ? "regular" : "enable",
+        detail: useEnableModeFirst
+          ? "Enable mode failed (permission may already be on-chain). Retrying with regular mode."
+          : "Regular mode failed (permission may not be on-chain). Retrying with enable mode.",
+        originalError: err?.shortMessage?.slice(0, 500),
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: enableClient } = await getKernelClient(
+        const { client: retryClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: false },
+          { withPaymaster: true, forceRegularMode: retryForceRegular },
         )
-        const retryTxHash = await enableClient.sendTransaction({ calls })
+        const retryTxHash = await retryClient.sendTransaction({ calls })
         console.log(JSON.stringify({
-          level: "info", action: "permission_enable_retry_succeeded",
+          level: "info", action: "permission_mode_retry_succeeded",
           smartAccountAddress, txHash: retryTxHash,
+          retryMode: retryForceRegular ? "regular" : "enable",
           timestamp: new Date().toISOString(),
         }))
         return { txHash: retryTxHash, explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}` }
-      } catch (enableRetryErr) {
-        // Both modes failed — log fully and throw the more descriptive error
-        const enableText = [enableRetryErr?.shortMessage, enableRetryErr?.message,
-          enableRetryErr?.details, enableRetryErr?.cause?.message]
+      } catch (retryErr) {
+        // Both modes failed — log comprehensive details for debugging
+        const retryText = [retryErr?.shortMessage, retryErr?.message,
+          retryErr?.details, retryErr?.cause?.message, retryErr?.cause?.details]
           .filter(Boolean).join(" ").toLowerCase()
-        const isDuplicate = enableText.includes("duplicate permissionhash") ||
-          enableText.includes("invalidnonce")
+        const hasDuplicateHash = retryText.includes("duplicate permissionhash")
+        const hasInvalidNonce = retryText.includes("invalidnonce")
+        const hasEnableNotApproved = retryText.includes("enablenotapproved")
+
         console.error(JSON.stringify({
-          level: "error", action: "permission_enable_retry_failed",
+          level: "error", action: "both_modes_failed",
           smartAccountAddress,
-          regularModeError: err?.shortMessage?.slice(0, 300),
-          enableModeError: formatExecutionError(enableRetryErr),
-          isDuplicatePermission: isDuplicate,
+          primaryMode: useEnableModeFirst ? "enable" : "regular",
+          primaryError: err?.shortMessage?.slice(0, 500),
+          primaryDetails: err?.details?.slice(0, 500),
+          retryMode: retryForceRegular ? "regular" : "enable",
+          retryError: retryErr?.shortMessage?.slice(0, 500),
+          retryDetails: retryErr?.details?.slice(0, 500),
+          retryCauseMessage: retryErr?.cause?.message?.slice(0, 500),
+          retryCauseDetails: retryErr?.cause?.details?.slice(0, 500),
+          hasDuplicateHash,
+          hasInvalidNonce,
+          hasEnableNotApproved,
+          blobHasEnableSig,
+          blobEnableSigLength,
           timestamp: new Date().toISOString(),
         }))
-        // If enable mode says "duplicate" but regular mode also failed,
-        // the issue is with the inner calls, not the permission.
-        // Throw a clear message.
-        if (isDuplicate) {
+
+        // Determine the most useful error message
+        if (hasEnableNotApproved) {
           throw new Error(
-            "Permission IS registered on-chain (enable retry confirms) but " +
-            "regular mode also failed. The inner calls (withdrawals/deposits) " +
-            `are reverting: ${err?.shortMessage || err?.message || "unknown"}`
+            "EnableNotApproved: The enable signature in the serialized permission blob is " +
+            "invalid or was signed by a different key than the on-chain ECDSA validator owner. " +
+            "The user must re-grant the session key from the dashboard. " +
+            `Enable error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+          )
+        }
+        if (hasDuplicateHash && !retryForceRegular) {
+          // Enable retry got duplicate → permission IS registered, but regular mode also failed
+          // This means the inner calls (withdrawals/deposits) are reverting
+          throw new Error(
+            "Permission is registered on-chain (enable retry got 'duplicate permissionHash') " +
+            "but regular mode also failed. The inner calls (withdrawals/deposits) are reverting. " +
+            `Regular error: ${err?.shortMessage || err?.message || "unknown"}`
+          )
+        }
+        if (hasInvalidNonce && !hasDuplicateHash) {
+          throw new Error(
+            "Enable signature nonce mismatch: the serialized blob was signed with a different " +
+            "nonce than the on-chain currentNonce. The user must re-grant the session key. " +
+            `Error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
           )
         }
         throw new Error(
-          `Both regular and enable mode failed. ` +
-          `Regular: ${err?.shortMessage || err?.message || "unknown"} | ` +
-          `Enable: ${enableRetryErr?.shortMessage || enableRetryErr?.message || "unknown"}`
+          `Both enable and regular modes failed. ` +
+          `Primary (${useEnableModeFirst ? "enable" : "regular"}): ${err?.shortMessage || err?.message || "unknown"} | ` +
+          `Retry (${retryForceRegular ? "regular" : "enable"}): ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
         )
       }
     }
@@ -1227,11 +1329,18 @@ export async function executeWithdrawal({
     throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
   }
 
-  // Always use forceRegularMode — see executeRebalance comment for rationale.
+  // Use same smart mode selection as executeRebalance
+  let blobHasEnableSigWd = false
+  try {
+    const decoded = JSON.parse(Buffer.from(serializedPermission, "base64").toString("utf-8"))
+    blobHasEnableSigWd = !!decoded.enableSignature && decoded.enableSignature.length > 2
+  } catch { /* ignore */ }
+
+  const wdUseEnableFirst = blobHasEnableSigWd
   const { client: kernelClient, publicClient: wdPublicClient, permissionAccountAddress, permissionAccount } = await getKernelClient(
     serializedPermission,
     sessionPrivateKey || "",
-    { withPaymaster: true, forceRegularMode: true },
+    { withPaymaster: true, forceRegularMode: !wdUseEnableFirst },
   )
 
   if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
@@ -1388,49 +1497,53 @@ export async function executeWithdrawal({
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
 
-    // ── Retry 0: permission not yet enabled on-chain ──────────────
-    const isPermissionNotEnabled = (
+    // ── Retry 0: try the opposite mode ──────────────────────────
+    const isPermissionRelatedWd = (
       allText.includes("aa24") ||
       allText.includes("signature error") ||
+      allText.includes("enablenotapproved") ||
+      allText.includes("duplicate permissionhash") ||
+      allText.includes("invalidnonce") ||
       (allText.includes("useroperation reverted") && allText.includes("simulation"))
     )
-    if (isPermissionNotEnabled) {
+    if (isPermissionRelatedWd) {
+      const wdRetryForceRegular = wdUseEnableFirst // flip the mode
       console.log(JSON.stringify({
-        level: "warn", action: "withdrawal_permission_not_enabled_retry",
+        level: "warn", action: "withdrawal_permission_mode_retry",
         smartAccountAddress,
-        detail: "Regular mode failed. Retrying with enable mode.",
-        originalError: err?.shortMessage?.slice(0, 300),
+        primaryMode: wdUseEnableFirst ? "enable" : "regular",
+        retryMode: wdRetryForceRegular ? "regular" : "enable",
+        originalError: err?.shortMessage?.slice(0, 500),
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: enableClient } = await getKernelClient(
+        const { client: retryClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: false },
+          { withPaymaster: true, forceRegularMode: wdRetryForceRegular },
         )
-        const retryTxHash = await enableClient.sendTransaction({ calls })
+        const retryTxHash = await retryClient.sendTransaction({ calls })
         return {
           txHash: retryTxHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
           owner: onchainOwner,
           callCount: calls.length,
         }
-      } catch (enableRetryErr) {
-        const enableText = [enableRetryErr?.shortMessage, enableRetryErr?.message,
-          enableRetryErr?.details, enableRetryErr?.cause?.message]
+      } catch (retryErr) {
+        const retryText = [retryErr?.shortMessage, retryErr?.message,
+          retryErr?.details, retryErr?.cause?.message, retryErr?.cause?.details]
           .filter(Boolean).join(" ").toLowerCase()
-        const isDuplicate = enableText.includes("duplicate permissionhash") ||
-          enableText.includes("invalidnonce")
-        if (isDuplicate) {
+        const hasEnableNotApprovedWd = retryText.includes("enablenotapproved")
+        if (hasEnableNotApprovedWd) {
           throw new Error(
-            "Permission IS registered but inner calls are reverting: " +
-            `${err?.shortMessage || err?.message || "unknown"}`
+            "EnableNotApproved: enable signature invalid. User must re-grant session key. " +
+            `Error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
           )
         }
         throw new Error(
-          `Both regular and enable mode failed for withdrawal. ` +
-          `Regular: ${err?.shortMessage || "unknown"} | ` +
-          `Enable: ${enableRetryErr?.shortMessage || "unknown"}`
+          `Both modes failed for withdrawal. ` +
+          `Primary (${wdUseEnableFirst ? "enable" : "regular"}): ${err?.shortMessage || "unknown"} | ` +
+          `Retry (${wdRetryForceRegular ? "regular" : "enable"}): ${retryErr?.shortMessage || "unknown"}`
         )
       }
     }
