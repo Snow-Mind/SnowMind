@@ -119,3 +119,84 @@ async def platform_tvl(request: Request):
             "accounts_with_deposits": 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+
+@router.get("/platform/stats")
+@limiter.limit("60/minute")
+async def platform_stats(request: Request):
+    """Platform-wide analytics: total users, deposits, TVL, rebalances."""
+    try:
+        db = get_db()
+
+        # Total registered accounts
+        accounts = db.table("accounts").select("id, created_at").execute()
+        total_users = len(accounts.data) if accounts.data else 0
+
+        # Accounts with active session keys (active users)
+        now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        active_keys = (
+            db.table("session_keys")
+            .select("account_id")
+            .eq("is_active", True)
+            .gte("expires_at", now_z)
+            .execute()
+        )
+        active_users = len(set(r["account_id"] for r in active_keys.data)) if active_keys.data else 0
+
+        # Deposit tracking from account_yield_tracking
+        yield_rows = (
+            db.table("account_yield_tracking")
+            .select("account_id, cumulative_deposited")
+            .execute()
+        )
+        accounts_with_deposits = 0
+        total_deposited = Decimal("0")
+        if yield_rows.data:
+            for row in yield_rows.data:
+                amt = Decimal(str(row.get("cumulative_deposited", "0")))
+                if amt > Decimal("0"):
+                    accounts_with_deposits += 1
+                    total_deposited += amt
+
+        # Current TVL (on-chain allocations)
+        alloc_rows = (
+            db.table("allocations")
+            .select("amount_usdc")
+            .neq("protocol_id", "idle")
+            .execute()
+        )
+        current_tvl = sum(
+            Decimal(str(r["amount_usdc"]))
+            for r in (alloc_rows.data or [])
+            if r.get("amount_usdc")
+        )
+
+        # Rebalance stats
+        executed = (
+            db.table("rebalance_logs")
+            .select("id", count="exact")
+            .eq("status", "executed")
+            .execute()
+        )
+        total_rebalances = executed.count if executed.count is not None else 0
+
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "accounts_with_deposits": accounts_with_deposits,
+            "total_deposited_usd": str(total_deposited),
+            "current_tvl_usd": str(current_tvl),
+            "total_rebalances_executed": total_rebalances,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.warning("Platform stats query failed: %s", e)
+        return {
+            "total_users": 0,
+            "active_users": 0,
+            "accounts_with_deposits": 0,
+            "total_deposited_usd": "0",
+            "current_tvl_usd": "0",
+            "total_rebalances_executed": 0,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
