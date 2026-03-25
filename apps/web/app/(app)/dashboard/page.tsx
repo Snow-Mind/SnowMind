@@ -19,7 +19,6 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
-import { use30DayAverageApy } from "@/hooks/use30DayAverageApy";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
@@ -116,7 +115,6 @@ export default function DashboardPage() {
   useRealtimePortfolio(address);
 
   const { data: rates } = useProtocolRates();
-  const { data: rates30d, isLoading: rates30dLoading } = use30DayAverageApy();
 
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
@@ -136,35 +134,6 @@ export default function DashboardPage() {
     ?.filter((a) => Number(a.amountUsdc) > 0)
     .map((a) => a.protocolId)
     ?? [];
-
-  const comparison = (() => {
-    if (!rates30d || rates30d.length === 0) return null;
-
-    const selectedOrAll =
-      activeProtocolIds.length > 0
-        ? activeProtocolIds
-        : rates30d.filter((r) => r.isActive).map((r) => r.protocolId);
-
-    const candidateSet = new Set(selectedOrAll);
-    const snowmindCandidate = rates30d
-      .filter((r) => r.isActive && candidateSet.has(r.protocolId))
-      .sort((a, b) => Number(b.adjustedApy30d) - Number(a.adjustedApy30d))[0];
-
-    const aave = rates30d.find((r) => r.protocolId === "aave_v3");
-    if (!snowmindCandidate || !aave) return null;
-
-    const snowmindApy = Number(snowmindCandidate.adjustedApy30d) * 100;
-    const aaveApy = Number(aave.adjustedApy30d) * 100;
-    const edgeBps = (snowmindApy - aaveApy) * 100;
-
-    return {
-      snowmindApy,
-      aaveApy,
-      edgeBps,
-      protocolName: snowmindCandidate.name,
-      dataPoints: Math.min(Number(snowmindCandidate.dataPoints), Number(aave.dataPoints)),
-    };
-  })();
 
   // Error state
   if (portfolioError) {
@@ -297,48 +266,6 @@ export default function DashboardPage() {
       {/* Tab content */}
       {activeTab === "markets" && (
         <div className="space-y-4">
-          <div className="crystal-card p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-sm font-medium text-arctic">30D Performance Comparison</h2>
-                <p className="text-xs text-muted-foreground">
-                  SnowMind utilization/liquidity-adjusted 30-day APY vs Aave
-                </p>
-              </div>
-              <span className="rounded-full bg-glacier/10 px-2 py-1 text-[10px] text-glacier">
-                Last 30 days
-              </span>
-            </div>
-
-            {rates30dLoading ? (
-              <div className="mt-4 h-16 animate-pulse rounded-lg bg-[#E8E2DA]" />
-            ) : comparison ? (
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-glacier/20 bg-glacier/[0.05] p-3">
-                  <p className="text-[10px] uppercase tracking-wider text-[#8A837C]">SnowMind 30D</p>
-                  <p className="mt-1 font-mono text-lg font-semibold text-arctic">{formatPct(comparison.snowmindApy)}</p>
-                  <p className="text-[10px] text-muted-foreground">Best route: {comparison.protocolName}</p>
-                </div>
-                <div className="rounded-lg border border-border/60 bg-void-2/20 p-3">
-                  <p className="text-[10px] uppercase tracking-wider text-[#8A837C]">Aave 30D</p>
-                  <p className="mt-1 font-mono text-lg font-semibold text-arctic">{formatPct(comparison.aaveApy)}</p>
-                  <p className="text-[10px] text-muted-foreground">Aave V3 benchmark</p>
-                </div>
-                <div className={`rounded-lg border p-3 ${comparison.edgeBps >= 0 ? "border-emerald-300/50 bg-emerald-500/[0.06]" : "border-crimson/30 bg-crimson/[0.06]"}`}>
-                  <p className="text-[10px] uppercase tracking-wider text-[#8A837C]">SnowMind Edge</p>
-                  <p className={`mt-1 font-mono text-lg font-semibold ${comparison.edgeBps >= 0 ? "text-emerald-600" : "text-crimson"}`}>
-                    {comparison.edgeBps >= 0 ? "+" : ""}{comparison.edgeBps.toFixed(0)} bps
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">{comparison.dataPoints} daily snapshots</p>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 rounded-lg border border-border/60 bg-void-2/20 p-3 text-xs text-muted-foreground">
-                Not enough 30-day data yet for comparison.
-              </div>
-            )}
-          </div>
-
           {/* Live protocol rates */}
           <ErrorBoundary name="live-rates">
             <LiveRates 

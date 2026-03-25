@@ -15,4 +15,6 @@ export type {
   SessionKeyStatusResponse,
   AccountDetailResponse,
   DiversificationPreferenceResponse,
+  ApyTimeseriesPoint,
+  PlatformTvlResponse,
 } from "./api";

@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -86,3 +87,35 @@ async def health_detailed(request: Request, _key: str = Depends(require_api_key)
         "scheduler": scheduler_info,
         "protocols": protocols_info,
     }
+
+
+@router.get("/platform/tvl")
+@limiter.limit("60/minute")
+async def platform_tvl(request: Request):
+    """Total value locked across all SnowMind accounts.
+
+    Public endpoint — used on the landing page. Sums amount_usdc across
+    all active allocations (excluding idle) from the allocations table.
+    """
+    try:
+        db = get_db()
+        rows = (
+            db.table("allocations")
+            .select("amount_usdc")
+            .neq("protocol_id", "idle")
+            .execute()
+            .data
+        )
+        total = sum(Decimal(str(r["amount_usdc"])) for r in rows if r.get("amount_usdc"))
+        return {
+            "tvl_usd": str(total),
+            "accounts_with_deposits": len([r for r in rows if Decimal(str(r.get("amount_usdc", "0"))) > 0]),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.warning("Platform TVL query failed: %s", e)
+        return {
+            "tvl_usd": "0",
+            "accounts_with_deposits": 0,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }

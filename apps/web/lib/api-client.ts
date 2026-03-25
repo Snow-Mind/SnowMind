@@ -13,6 +13,8 @@ import type {
   AccountDetailResponse,
   DiversificationPreference,
   DiversificationPreferenceResponse,
+  ApyTimeseriesPoint,
+  PlatformTvlResponse,
 } from "@snowmind/shared-types";
 
 // ── Error types ────────────────────────────────────────────
@@ -241,5 +243,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  // Public endpoints (no auth) for landing page
+  getApyTimeseries: () =>
+    request<ApyTimeseriesPoint[]>("/api/v1/optimizer/rates/timeseries"),
+
+  getPlatformTvl: () =>
+    request<PlatformTvlResponse>("/api/v1/platform/tvl"),
 
 };

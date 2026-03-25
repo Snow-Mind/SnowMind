@@ -64,6 +64,18 @@ export interface Protocol30DayApyResponse {
   isActive: boolean;
 }
 
+export interface ApyTimeseriesPoint {
+  date: string;
+  snowmindApy: number;
+  aaveApy: number;
+}
+
+export interface PlatformTvlResponse {
+  tvlUsd: string;
+  accountsWithDeposits: number;
+  timestamp: string;
+}
+
 export interface OptimizerPreviewResponse {
   smartAccountAddress: string;
   proposedAllocations: {

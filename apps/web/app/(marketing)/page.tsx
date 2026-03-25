@@ -6,6 +6,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { GLSLHills } from "@/components/ui/glsl-hills";
 import { useAuth } from "@/hooks/useAuth";
+import ApyGrowthChart from "@/components/marketing/ApyGrowthChart";
 import {
   Shield,
   TrendingUp,
@@ -331,6 +332,9 @@ export default function LandingPage() {
           />
         </div>
       </section>
+
+      {/* ═══ APY GROWTH CHART ═══ */}
+      <ApyGrowthChart />
 
       {/* ═══ HOW IT WORKS ═══ */}
       <section

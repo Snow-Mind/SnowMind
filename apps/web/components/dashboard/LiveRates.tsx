@@ -58,7 +58,7 @@ export default function LiveRates({
             : isActive
               ? "border-[#E84142] bg-[#E84142]/[0.06]" // RED: Actively depositing
               : isSelected
-                ? "border-glacier/30 bg-glacier/[0.04]" // BLUE: Selected but not deployed yet
+                ? "border-[#E8E2DA] bg-[#FAFAF8]" // Neutral: Selected but not deployed yet
                 : "border-border/50 bg-void-2/30" // GRAY: Not selected
         }`}
       >
@@ -80,7 +80,7 @@ export default function LiveRates({
               </span>
             )}
             {isSelected && !hasAllocation && (
-              <span className="rounded-full bg-glacier/10 px-2 py-0.5 text-[10px] text-glacier">
+              <span className="rounded-full bg-[#E8E2DA] px-2 py-0.5 text-[10px] text-[#8A837C]">
                 Selected
               </span>
             )}

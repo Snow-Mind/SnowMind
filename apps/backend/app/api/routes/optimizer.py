@@ -443,6 +443,82 @@ async def get_30day_average_apy(request: Request, db: Client = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to calculate historical APY")
 
 
+# ── GET /rates/timeseries — daily APY timeseries for chart display ────────────
+
+class ApyTimeseriesPoint(CamelModel):
+    """Single data point in the APY timeseries."""
+    date: str
+    snowmind_apy: Decimal
+    aave_apy: Decimal
+
+
+@router.get("/rates/timeseries", response_model=list[ApyTimeseriesPoint])
+@limiter.limit("60/minute")
+async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
+    """Return daily APY timeseries for SnowMind best route vs Aave benchmark.
+
+    Used by the landing page growth chart. Public endpoint, no auth required.
+    Returns up to 30 days of daily data points.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        thirty_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=30)
+        ).date().isoformat()
+
+        snapshots = (
+            db.table("daily_apy_snapshots")
+            .select("protocol_id, apy, date")
+            .gte("date", thirty_days_ago)
+            .order("date")
+            .execute()
+            .data
+        )
+
+        if not snapshots:
+            return []
+
+        # Group by date, tracking best non-aave active protocol and aave
+        by_date: dict[str, dict[str, Decimal]] = {}
+        for snap in snapshots:
+            d = snap["date"]
+            pid = snap["protocol_id"]
+            try:
+                apy = Decimal(str(snap["apy"]))
+            except Exception:
+                continue
+            if d not in by_date:
+                by_date[d] = {}
+            by_date[d][pid] = apy
+
+        # Build timeseries: SnowMind = best active protocol APY, Aave = aave_v3
+        active_pids = set(ACTIVE_ADAPTERS.keys())
+        out: list[ApyTimeseriesPoint] = []
+        for date_str in sorted(by_date.keys()):
+            day_rates = by_date[date_str]
+            aave_apy = day_rates.get("aave_v3", Decimal("0"))
+
+            # SnowMind picks the best active protocol on each day
+            best_apy = Decimal("0")
+            for pid, apy in day_rates.items():
+                if pid in active_pids and apy > best_apy:
+                    best_apy = apy
+
+            out.append(
+                ApyTimeseriesPoint(
+                    date=date_str,
+                    snowmind_apy=best_apy,
+                    aave_apy=aave_apy,
+                )
+            )
+
+        return out
+    except Exception as e:
+        logger.error("Failed to build APY timeseries: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to build timeseries")
+
+
 # ── POST /run — waterfall dry-run with risk tolerance (frontend preview) ──────
 
 @router.post("/run", response_model=OptimizerPreviewOutput)
