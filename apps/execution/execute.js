@@ -153,6 +153,27 @@ const ERC20_ABI = [
   },
 ]
 
+// ── Permit2 (Uniswap canonical) — same address on ALL EVM chains ──────────
+// Euler V2 (EVK) vaults use Permit2 for token transfers instead of standard
+// ERC-20 transferFrom.  Deposits require: USDC.approve(PERMIT2, amount) +
+// PERMIT2.approve(USDC, euler_vault, amount, deadline) before euler.deposit().
+const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+
+const PERMIT2_ABI = [
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+    ],
+    outputs: [],
+  },
+]
+
 const REGISTRY_ABI = [
   {
     name: "logRebalance",
@@ -653,8 +674,43 @@ export async function executeRebalance({
   }
   for (const [protocol, totalAmount] of depositAmountsPerProtocol) {
     const spender = resolveContractKey(protocol, contracts)
-    if (spender) {
-      // ERC-20 approve race-condition protection: set to 0 first, then exact amount
+    if (!spender) continue
+
+    if (protocol === "euler_v2") {
+      // Euler V2 (EVK) uses Permit2 for token transfers.
+      // Flow: USDC.approve(Permit2) → Permit2.approve(USDC, euler, amt, deadline) → euler.deposit()
+      const permit2Addr = contracts.PERMIT2 || PERMIT2_ADDRESS
+      calls.push({
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [permit2Addr, 0n],
+        }),
+      })
+      calls.push({
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [permit2Addr, totalAmount],
+        }),
+      })
+      // Set Permit2 allowance for the Euler vault with 1-hour expiry
+      const permit2Deadline = BigInt(Math.floor(Date.now() / 1000) + 3600)
+      calls.push({
+        to: permit2Addr,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: PERMIT2_ABI,
+          functionName: "approve",
+          args: [contracts.USDC, spender, totalAmount, permit2Deadline],
+        }),
+      })
+    } else {
+      // Standard ERC-20 approve race-condition protection: set to 0 first, then exact amount
       calls.push({
         to: contracts.USDC,
         value: 0n,

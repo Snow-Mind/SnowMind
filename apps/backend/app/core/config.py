@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     SILO_SAVUSD_VAULT: str = "0x606fe9a70338e798a292CA22C1F28C829F24048E"  # bUSDC-142 (Silo1 from savUSD/USDC SiloConfig)
     SILO_SUSDP_VAULT: str = "0x8ad697a333569ca6f04c8c063e9807747ef169c1"  # bUSDC-162 (Silo1 from sUSDp/USDC SiloConfig)
     USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC (6 decimals)
+    PERMIT2: str = "0x000000000022D473030F116dDEE9F6B43aC78BA3"  # Uniswap Permit2 (Euler V2 deposits)
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 
     # ── Spark-specific addresses ─────────────────────────────

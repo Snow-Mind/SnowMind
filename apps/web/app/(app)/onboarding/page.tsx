@@ -377,6 +377,7 @@ export default function OnboardingPage() {
         EULER_VAULT: CONTRACTS.EULER_VAULT,
         SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
         SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+        PERMIT2: CONTRACTS.PERMIT2,
       }, 50_000);
 
       setDeployPhase("deployed");
@@ -534,6 +535,7 @@ export default function OnboardingPage() {
           SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
           USDC: CONTRACTS.USDC,
           TREASURY: CONTRACTS.TREASURY,
+          PERMIT2: CONTRACTS.PERMIT2,
           REGISTRY: CONTRACTS.REGISTRY,
         },
         {

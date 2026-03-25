@@ -40,6 +40,9 @@ export const CONTRACTS = {
   // Native USDC on Avalanche mainnet (Circle-issued)
   USDC:        (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E') as `0x${string}`,
 
+  // Permit2 (Uniswap canonical) — required for Euler V2 (EVK) deposits
+  PERMIT2:     '0x000000000022D473030F116dDEE9F6B43aC78BA3' as `0x${string}`,
+
   // ZeroDev / ERC-4337
   ENTRYPOINT_V07: '0x0000000071727De22E5E9d8BAf0edAc6f37da032' as `0x${string}`,
 

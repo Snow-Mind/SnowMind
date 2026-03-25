@@ -88,6 +88,7 @@ export default function SessionKeyStatus() {
             SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
             USDC: CONTRACTS.USDC,
             TREASURY: CONTRACTS.TREASURY,
+            PERMIT2: CONTRACTS.PERMIT2,
           },
           {
             maxAmountUSDC: 10000,

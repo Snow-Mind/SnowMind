@@ -130,6 +130,22 @@ export const ERC4626_VAULT_ABI = [
   },
 ] as const
 
+// Permit2 ABI — Euler V2 (EVK) uses Permit2 for token transfers instead of
+// standard ERC-20 transferFrom.  approve(token, spender, amount, expiration)
+// sets a per-spender allowance with an expiry timestamp.
+export const PERMIT2_APPROVE_ABI = [
+  {
+    name: "approve", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "token",      type: "address" },
+      { name: "spender",    type: "address" },
+      { name: "amount",     type: "uint160" },
+      { name: "expiration", type: "uint48" },
+    ],
+    outputs: [],
+  },
+] as const
+
 // SnowMindRegistry ABI — logRebalance (on-chain audit trail for rebalance ops)
 const REGISTRY_ABI = [
   {
@@ -319,7 +335,7 @@ export async function createSmartAccount(walletClient: WalletClientLike | PrivyW
 
 export async function approveAllProtocols(
   kernelClient: KernelClientLike,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}` },
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}`; PERMIT2?: `0x${string}` },
   maxAmountUSDC: number = 50_000,
 ): Promise<{ txHash: string; explorerUrl: string }> {
 
@@ -332,6 +348,8 @@ export async function approveAllProtocols(
     contracts.EULER_VAULT,
     contracts.SILO_SAVUSD_VAULT,
     contracts.SILO_SUSDP_VAULT,
+    // Permit2: Euler V2 (EVK) pulls USDC via Permit2, not direct transferFrom
+    ...(contracts.PERMIT2 ? [contracts.PERMIT2] : []),
   ]
     .filter(addr => addr !== '0x0000000000000000000000000000000000000000')
     .map(spender => ({
@@ -366,6 +384,7 @@ export async function grantAndSerializeSessionKey(
     SILO_SUSDP_VAULT:  `0x${string}`
     USDC:         `0x${string}`
     TREASURY:     `0x${string}`
+    PERMIT2?:     `0x${string}`
     REGISTRY?:    `0x${string}`
   },
   config: {
@@ -477,6 +496,30 @@ export async function grantAndSerializeSessionKey(
           null,
         ],
       },
+      // Permit2 USDC approve — Euler V2 (EVK) pulls tokens via Permit2
+      ...(contracts.PERMIT2 ? [{
+        target: contracts.USDC,
+        valueLimit: 0n,
+        abi: ERC20_ABI,
+        functionName: "approve" as const,
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.PERMIT2 },
+          null,
+        ],
+      }] : []),
+      // Permit2.approve(USDC, euler_vault, amount, deadline) — set Permit2 allowance
+      ...(contracts.PERMIT2 ? [{
+        target: contracts.PERMIT2,
+        valueLimit: 0n,
+        abi: PERMIT2_APPROVE_ABI,
+        functionName: "approve" as const,
+        args: [
+          { condition: ParamCondition.EQUAL, value: contracts.USDC },
+          { condition: ParamCondition.EQUAL, value: contracts.EULER_VAULT },
+          null,
+          null,
+        ],
+      }] : []),
       // Silo savUSD/USDC USDC approve
       {
         target: contracts.USDC,

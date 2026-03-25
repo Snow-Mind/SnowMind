@@ -84,6 +84,7 @@ class ExecutionService:
                 "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
                 "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
                 "USDC": settings.USDC_ADDRESS,
+                "PERMIT2": settings.PERMIT2,
                 "REGISTRY": settings.REGISTRY_CONTRACT_ADDRESS,
             },
         }
