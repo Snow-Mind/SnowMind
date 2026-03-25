@@ -258,6 +258,52 @@ function isValidateUserOpRevert(err) {
   return text.includes("validateuserop") && text.includes("revert")
 }
 
+/**
+ * Extract structured error info from ERC-4337 bundler errors.
+ * Bundler errors wrap the actual revert reason deeply — this walks the cause
+ * chain and extracts:
+ *   - AA error code (AA23, AA24, AA25, AA41, etc.)
+ *   - The hex revert data (if present)
+ *   - Any decoded reason string
+ */
+function extractBundlerErrorInfo(err) {
+  const fullText = []
+  let walkErr = err
+  for (let depth = 0; walkErr && depth < 6; depth++) {
+    if (walkErr.message) fullText.push(walkErr.message)
+    if (walkErr.shortMessage) fullText.push(walkErr.shortMessage)
+    if (walkErr.details) fullText.push(walkErr.details)
+    if (walkErr.metaMessages) fullText.push(...walkErr.metaMessages)
+    walkErr = walkErr.cause
+  }
+  const joined = fullText.join(" ")
+
+  // Extract AA error code
+  const aaMatch = joined.match(/AA(\d{2})/i)
+  const aaCode = aaMatch ? `AA${aaMatch[1]}` : null
+
+  // Extract hex revert data (0x followed by hex)
+  const revertMatch = joined.match(/0x[0-9a-fA-F]{8,}/)
+  const revertData = revertMatch ? revertMatch[0].slice(0, 200) : null
+
+  // Try to decode common Kernel error selectors from revert data
+  let decodedKernelError = null
+  if (revertData && revertData.length >= 10) {
+    const errorSelector = revertData.slice(0, 10).toLowerCase()
+    const KERNEL_ERRORS = {
+      "0x756688fe": "EnableNotApproved",
+      "0x5c427cd9": "PolicySignatureOrderError",
+      "0xb3c44269": "PermissionNotAllowedForAction",
+      "0x44e18ef4": "PermissionNotAllowedForSignature",
+      "0xda7a5e2e": "InvalidCallPhase",
+      "0x756688ff": "PolicyFailed",
+    }
+    decodedKernelError = KERNEL_ERRORS[errorSelector] || null
+  }
+
+  return { aaCode, revertData, decodedKernelError, fullTextLength: joined.length }
+}
+
 async function getKernelClient(serializedPermission, sessionPrivateKey, options = { withPaymaster: true, forceRegularMode: false }) {
   const publicClient = createPublicClient({
     chain: CHAIN,
@@ -842,7 +888,52 @@ export async function executeRebalance({
     throw new Error("No executable calls generated for rebalance")
   }
 
+  // ── Pre-flight balance diagnostic: check USDC + vault share balances ──
+  try {
+    const usdcBalance = await execPublicClient.readContract({
+      address: contracts.USDC,
+      abi: [{ name: "balanceOf", type: "function", stateMutability: "view",
+              inputs: [{ name: "account", type: "address" }],
+              outputs: [{ name: "", type: "uint256" }] }],
+      functionName: "balanceOf",
+      args: [smartAccountAddress],
+    })
+    console.log(JSON.stringify({
+      level: "info", action: "preflight_usdc_balance",
+      smartAccountAddress,
+      usdcBalance: usdcBalance.toString(),
+      usdcBalanceFormatted: `$${(Number(usdcBalance) / 1e6).toFixed(6)}`,
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (e) {
+    console.log(JSON.stringify({
+      level: "warn", action: "preflight_usdc_balance_failed",
+      error: e?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
   // Log the call targets for debugging session key / policy mismatches
+  // Decode function selectors to human-readable names
+  const KNOWN_SELECTORS = {
+    "0x095ea7b3": "approve(address,spender,uint256,amount)",
+    "0xa9059cbb": "transfer(address,uint256)",
+    "0x6e553f65": "deposit(uint256,address)",
+    "0xb460af94": "withdraw(uint256,address,address)",
+    "0xba087652": "redeem(uint256,address,address)",
+    "0x617ba037": "supply(address,uint256,address,uint16)",
+    "0x69328dec": "aaveWithdraw(address,uint256,address)",
+    "0xa0712d68": "mint(uint256)",
+    "0xdb006a75": "benqiRedeem(uint256)",
+    "0x87517c45": "permit2Approve(address,address,uint160,uint48)",
+  }
+  const callDetails = calls.map((c, i) => ({
+    index: i,
+    target: c.to,
+    selector: c.data?.slice(0, 10) || "none",
+    decoded: KNOWN_SELECTORS[c.data?.slice(0, 10)] || "unknown",
+    dataLength: c.data?.length || 0,
+  }))
   console.log(JSON.stringify({
     level: "info",
     action: "rebalance_calls_built",
@@ -850,6 +941,7 @@ export async function executeRebalance({
     permissionAccountAddress,
     callCount: calls.length,
     callTargets: calls.map((c) => c.to),
+    callDetails,
     timestamp: new Date().toISOString(),
   }))
 
@@ -869,6 +961,94 @@ export async function executeRebalance({
     console.log(JSON.stringify({
       level: "warn", action: "preflight_check_failed",
       smartAccountAddress, error: preflightErr?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
+  // ── Individual call simulation (eth_call) ──
+  // Simulate each call as if sent directly FROM the smart account (msg.sender = smart account).
+  // This bypasses ERC-4337 validation and tests whether the inner DeFi calls would succeed.
+  // If a call reverts here, it will also revert inside the UserOp.
+  try {
+    for (let i = 0; i < calls.length; i++) {
+      const call = calls[i]
+      try {
+        await execPublicClient.call({
+          account: smartAccountAddress,
+          to: call.to,
+          data: call.data,
+          value: call.value || 0n,
+        })
+        console.log(JSON.stringify({
+          level: "info", action: "call_simulation_ok",
+          smartAccountAddress, callIndex: i, target: call.to,
+          selector: call.data?.slice(0, 10) || "none",
+          timestamp: new Date().toISOString(),
+        }))
+      } catch (simErr) {
+        console.error(JSON.stringify({
+          level: "error", action: "call_simulation_REVERTED",
+          smartAccountAddress, callIndex: i, target: call.to,
+          selector: call.data?.slice(0, 10) || "none",
+          error: simErr?.message?.slice(0, 2000),
+          shortMessage: simErr?.shortMessage?.slice(0, 1000),
+          details: simErr?.details?.slice(0, 1000),
+          causeMessage: simErr?.cause?.message?.slice(0, 1000),
+          timestamp: new Date().toISOString(),
+        }))
+      }
+    }
+  } catch (simBatchErr) {
+    console.log(JSON.stringify({
+      level: "warn", action: "call_simulation_batch_error",
+      error: simBatchErr?.message?.slice(0, 500),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
+  // ── Simulate full batch via Kernel's execute(calls) ──
+  // Encode the full batched call exactly as the Kernel will execute it.
+  // This tests the complete batch atomicity (prior calls affect later calls).
+  try {
+    const batchCallData = encodeFunctionData({
+      abi: [{
+        name: "execute",
+        type: "function",
+        stateMutability: "payable",
+        inputs: [
+          { name: "execMode", type: "bytes32" },
+          { name: "executionCalldata", type: "bytes" },
+        ],
+        outputs: [],
+      }],
+      functionName: "execute",
+      args: [
+        // ExecMode: BATCH mode (0x01 at byte 0, rest 0)
+        "0x0100000000000000000000000000000000000000000000000000000000000000",
+        encodeAbiParameters(
+          parseAbiParameters("(address to, uint256 value, bytes data)[]"),
+          [calls.map(c => [c.to, c.value || 0n, c.data])],
+        ),
+      ],
+    })
+    await execPublicClient.call({
+      account: smartAccountAddress,
+      to: smartAccountAddress,
+      data: batchCallData,
+    })
+    console.log(JSON.stringify({
+      level: "info", action: "batch_simulation_ok",
+      smartAccountAddress, callCount: calls.length,
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (batchSimErr) {
+    console.error(JSON.stringify({
+      level: "error", action: "batch_simulation_REVERTED",
+      smartAccountAddress, callCount: calls.length,
+      error: batchSimErr?.message?.slice(0, 3000),
+      shortMessage: batchSimErr?.shortMessage?.slice(0, 1000),
+      details: batchSimErr?.details?.slice(0, 2000),
+      causeMessage: batchSimErr?.cause?.message?.slice(0, 2000),
       timestamp: new Date().toISOString(),
     }))
   }
@@ -1141,15 +1321,37 @@ export async function executeRebalance({
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
 
-    // Log full error details for diagnostics (2000 chars to capture revert reasons)
+    // Extract structured bundler error info (AA codes, revert data)
+    const bundlerInfo = extractBundlerErrorInfo(err)
+
+    // Log full error details for diagnostics — UNTRUNCATED to capture full revert reasons
+    // Walk the entire cause chain to extract deeply nested bundler error info
+    const errChain = []
+    let errWalk = err
+    for (let depth = 0; errWalk && depth < 5; depth++) {
+      errChain.push({
+        depth,
+        name: errWalk?.name,
+        shortMessage: errWalk?.shortMessage,
+        message: errWalk?.message?.slice(0, 5000),
+        details: errWalk?.details?.slice(0, 5000),
+        code: errWalk?.code,
+        metaMessages: errWalk?.metaMessages,
+      })
+      errWalk = errWalk?.cause
+    }
     console.error(JSON.stringify({
       level: "error", action: "primary_mode_failed_detail",
       smartAccountAddress,
       mode: useEnableModeFirst ? "enable" : "regular",
-      shortMessage: err?.shortMessage?.slice(0, 2000),
-      details: err?.details?.slice(0, 2000),
-      causeMessage: err?.cause?.message?.slice(0, 2000),
-      causeDetails: err?.cause?.details?.slice(0, 2000),
+      shortMessage: err?.shortMessage?.slice(0, 5000),
+      details: err?.details?.slice(0, 5000),
+      causeMessage: err?.cause?.message?.slice(0, 5000),
+      causeDetails: err?.cause?.details?.slice(0, 5000),
+      deepCause: err?.cause?.cause?.message?.slice(0, 3000),
+      deepCauseDetails: err?.cause?.cause?.details?.slice(0, 3000),
+      errorChain: errChain,
+      bundlerInfo,
       timestamp: new Date().toISOString(),
     }))
 
@@ -1203,17 +1405,25 @@ export async function executeRebalance({
         const hasInvalidNonce = retryText.includes("invalidnonce")
         const hasEnableNotApproved = retryText.includes("enablenotapproved")
 
+        // Extract structured bundler error info for retry error
+        const retryBundlerInfo = extractBundlerErrorInfo(retryErr)
+
         console.error(JSON.stringify({
           level: "error", action: "both_modes_failed",
           smartAccountAddress,
           primaryMode: useEnableModeFirst ? "enable" : "regular",
-          primaryError: err?.shortMessage?.slice(0, 500),
-          primaryDetails: err?.details?.slice(0, 500),
+          primaryError: err?.shortMessage?.slice(0, 3000),
+          primaryDetails: err?.details?.slice(0, 3000),
+          primaryCauseMsg: err?.cause?.message?.slice(0, 3000),
+          primaryDeepCause: err?.cause?.cause?.message?.slice(0, 2000),
+          primaryBundlerInfo: bundlerInfo,
           retryMode: retryForceRegular ? "regular" : "enable",
-          retryError: retryErr?.shortMessage?.slice(0, 500),
-          retryDetails: retryErr?.details?.slice(0, 500),
-          retryCauseMessage: retryErr?.cause?.message?.slice(0, 500),
-          retryCauseDetails: retryErr?.cause?.details?.slice(0, 500),
+          retryError: retryErr?.shortMessage?.slice(0, 3000),
+          retryDetails: retryErr?.details?.slice(0, 3000),
+          retryCauseMessage: retryErr?.cause?.message?.slice(0, 3000),
+          retryCauseDetails: retryErr?.cause?.details?.slice(0, 3000),
+          retryDeepCause: retryErr?.cause?.cause?.message?.slice(0, 2000),
+          retryBundlerInfo,
           hasDuplicateHash,
           hasInvalidNonce,
           hasEnableNotApproved,
@@ -1247,6 +1457,43 @@ export async function executeRebalance({
             `Error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
           )
         }
+
+        // ── Retry 2: both modes failed — try WITHOUT paymaster ──────────
+        // The paymaster can cause "UserOperation reverted during simulation"
+        // if its validatePaymasterUserOp reverts. This masks the real error.
+        // Try enable mode without paymaster to rule out paymaster issues.
+        console.log(JSON.stringify({
+          level: "warn", action: "both_modes_failed_trying_no_paymaster",
+          smartAccountAddress,
+          mode: useEnableModeFirst ? "enable" : "regular",
+          timestamp: new Date().toISOString(),
+        }))
+        try {
+          const { client: noPaymasterClient } = await getKernelClient(
+            serializedPermission,
+            sessionPrivateKey || "",
+            { withPaymaster: false, forceRegularMode: !useEnableModeFirst },
+          )
+          const noPaymasterTxHash = await noPaymasterClient.sendTransaction({ calls })
+          console.log(JSON.stringify({
+            level: "info", action: "no_paymaster_retry_succeeded",
+            smartAccountAddress, txHash: noPaymasterTxHash,
+            timestamp: new Date().toISOString(),
+          }))
+          return { txHash: noPaymasterTxHash, explorerUrl: `${EXPLORER_BASE}/tx/${noPaymasterTxHash}` }
+        } catch (noPaymasterErr) {
+          const noPaymasterBundlerInfo = extractBundlerErrorInfo(noPaymasterErr)
+          console.error(JSON.stringify({
+            level: "error", action: "no_paymaster_retry_also_failed",
+            smartAccountAddress,
+            error: noPaymasterErr?.shortMessage?.slice(0, 3000),
+            details: noPaymasterErr?.details?.slice(0, 3000),
+            causeMessage: noPaymasterErr?.cause?.message?.slice(0, 3000),
+            bundlerInfo: noPaymasterBundlerInfo,
+            timestamp: new Date().toISOString(),
+          }))
+        }
+
         throw new Error(
           `Both enable and regular modes failed. ` +
           `Primary (${useEnableModeFirst ? "enable" : "regular"}): ${err?.shortMessage || err?.message || "unknown"} | ` +
@@ -1496,6 +1743,18 @@ export async function executeWithdrawal({
     const allText = [err?.shortMessage, err?.message, err?.details,
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
+
+    const wdBundlerInfo = extractBundlerErrorInfo(err)
+    console.error(JSON.stringify({
+      level: "error", action: "withdrawal_primary_failed_detail",
+      smartAccountAddress,
+      mode: wdUseEnableFirst ? "enable" : "regular",
+      shortMessage: err?.shortMessage?.slice(0, 5000),
+      details: err?.details?.slice(0, 5000),
+      causeMessage: err?.cause?.message?.slice(0, 5000),
+      bundlerInfo: wdBundlerInfo,
+      timestamp: new Date().toISOString(),
+    }))
 
     // ── Retry 0: try the opposite mode ──────────────────────────
     const isPermissionRelatedWd = (
