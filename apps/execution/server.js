@@ -4,9 +4,9 @@ import {
 } from "./auth.js"
 import { executeRebalance, executeWithdrawal } from "./execute.js"
 
-const VERSION = "1.0.0"
+const VERSION = "1.1.0"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
-const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 30000)
+const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 60000)
 const recentNonces = new Map()
 // Per-sender concurrency lock: prevents two concurrent UserOps for the same
 // smart account from being submitted to the bundler simultaneously.
@@ -50,8 +50,21 @@ if (missing.length > 0) {
 
 // ── Process-level error handlers — crash loud, never hang silently ───────────
 process.on("uncaughtException", (err) => {
-  console.error("FATAL uncaught exception:", err)
-  process.exit(1)
+  // DO NOT crash the process on uncaught exceptions.
+  // The ZeroDev SDK creates multiple KernelAccountClient instances during
+  // retry logic (regular mode → enable mode). When a client fails and is
+  // abandoned, its background processes (HTTP transports, gas estimation
+  // callbacks, bundler long-polls) can throw synchronous errors AFTER the
+  // outer catch block has moved on. Crashing on these kills the process
+  // and returns 503 for ALL in-flight requests, including the retry that
+  // would have succeeded.
+  console.error(JSON.stringify({
+    level: "error",
+    action: "uncaught_exception",
+    message: err?.message?.slice(0, 1000),
+    stack: err?.stack?.slice(0, 500),
+    timestamp: new Date().toISOString(),
+  }))
 })
 process.on("unhandledRejection", (reason) => {
   // DO NOT crash the process on unhandled rejections.

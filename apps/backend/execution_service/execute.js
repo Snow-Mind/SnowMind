@@ -153,6 +153,27 @@ const ERC20_ABI = [
   },
 ]
 
+// ── Permit2 (Uniswap canonical) — same address on ALL EVM chains ──────────
+// Euler V2 (EVK) vaults use Permit2 for token transfers instead of standard
+// ERC-20 transferFrom.  Deposits require: USDC.approve(PERMIT2, amount) +
+// PERMIT2.approve(USDC, euler_vault, amount, deadline) before euler.deposit().
+const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+
+const PERMIT2_ABI = [
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+    ],
+    outputs: [],
+  },
+]
+
 const REGISTRY_ABI = [
   {
     name: "logRebalance",
@@ -301,12 +322,12 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
         timestamp: new Date().toISOString(),
       }))
     } catch (e) {
-      console.log(JSON.stringify({
-        level: "warn",
-        action: "force_regular_mode_parse_failed",
-        error: e?.message?.slice(0, 200),
-        timestamp: new Date().toISOString(),
-      }))
+      // If we can't parse the permission blob in regular mode, the blob
+      // is corrupt and MUST NOT be used as-is (it would attempt enable
+      // mode and fail with "duplicate permissionHash").
+      throw new Error(
+        `forceRegularMode: failed to parse serialized permission blob: ${e?.message?.slice(0, 200)}`
+      )
     }
   }
 
@@ -426,6 +447,53 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
  * - MAX → redeem(shareBalance, receiver, owner) — requires backend to pass actual share balance.
  * NEVER use redeem() with USDC amounts — shares ≠ assets when share price > 1.0.
  */
+/**
+ * Verify the smart account actually holds vault shares before building
+ * a withdrawal call.  If the account has 0 shares, the on-chain redeem/
+ * withdraw will revert ("burn amount exceeds balance"), which reverts
+ * the entire atomic UserOp.  Catching this BEFORE submission prevents
+ * the infinite failure loop of stale-DB → impossible withdrawal → revert
+ * → retry next cycle → same failure.
+ */
+async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddress, protocolName) {
+  try {
+    const shareBalance = await publicClient.readContract({
+      address: vaultAddress,
+      abi: ERC4626_ABI,
+      functionName: "balanceOf",
+      args: [accountAddress],
+    })
+    if (shareBalance === 0n) {
+      throw new Error(
+        `${protocolName} withdrawal skipped: account ${accountAddress} has 0 vault shares ` +
+        `in ${vaultAddress}. DB allocation is stale — reconciling.`
+      )
+    }
+    console.log(JSON.stringify({
+      level: "info",
+      action: "vault_share_balance_verified",
+      protocol: protocolName,
+      vaultAddress,
+      accountAddress,
+      shareBalance: shareBalance.toString(),
+      timestamp: new Date().toISOString(),
+    }))
+  } catch (err) {
+    if (err.message?.includes("withdrawal skipped")) {
+      throw err // Re-throw our own guard error
+    }
+    // RPC failure — log warning but don't block the withdrawal
+    // (the on-chain transaction will tell us if it works)
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "vault_share_balance_check_failed",
+      protocol: protocolName,
+      error: err?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+}
+
 function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAccountAddress) {
   if (amountUSDC === "MAX") {
     if (!shareBalance) {
@@ -546,12 +614,16 @@ export async function executeRebalance({
         data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [BigInt(qiTokenAmount)] }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SPARK_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SPARK_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.EULER_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.EULER_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SAVUSD_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SILO_SAVUSD_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SILO_SUSDP_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     }
   }
@@ -602,8 +674,43 @@ export async function executeRebalance({
   }
   for (const [protocol, totalAmount] of depositAmountsPerProtocol) {
     const spender = resolveContractKey(protocol, contracts)
-    if (spender) {
-      // ERC-20 approve race-condition protection: set to 0 first, then exact amount
+    if (!spender) continue
+
+    if (protocol === "euler_v2") {
+      // Euler V2 (EVK) uses Permit2 for token transfers.
+      // Flow: USDC.approve(Permit2) → Permit2.approve(USDC, euler, amt, deadline) → euler.deposit()
+      const permit2Addr = contracts.PERMIT2 || PERMIT2_ADDRESS
+      calls.push({
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [permit2Addr, 0n],
+        }),
+      })
+      calls.push({
+        to: contracts.USDC,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [permit2Addr, totalAmount],
+        }),
+      })
+      // Set Permit2 allowance for the Euler vault with 1-hour expiry
+      const permit2Deadline = BigInt(Math.floor(Date.now() / 1000) + 3600)
+      calls.push({
+        to: permit2Addr,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: PERMIT2_ABI,
+          functionName: "approve",
+          args: [contracts.USDC, spender, totalAmount, permit2Deadline],
+        }),
+      })
+    } else {
+      // Standard ERC-20 approve race-condition protection: set to 0 first, then exact amount
       calls.push({
         to: contracts.USDC,
         value: 0n,
@@ -964,48 +1071,84 @@ export async function executeRebalance({
     const txHash = await kernelClient.sendTransaction({ calls })
     return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
   } catch (err) {
-    // Non-retryable errors: these are on-chain / bundler state issues.
-    // Retrying will always produce the same result, so fail fast.
     const allText = [err?.shortMessage, err?.message, err?.details,
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
-    if (allText.includes("duplicate permissionhash")) {
+
+    // Log full error details for diagnostics (2000 chars to capture revert reasons)
+    console.error(JSON.stringify({
+      level: "error", action: "regular_mode_failed_detail",
+      smartAccountAddress,
+      shortMessage: err?.shortMessage?.slice(0, 2000),
+      message: err?.message?.slice(0, 2000),
+      details: err?.details?.slice(0, 2000),
+      causeMessage: err?.cause?.message?.slice(0, 1000),
+      causeDetails: err?.cause?.details?.slice(0, 1000),
+      timestamp: new Date().toISOString(),
+    }))
+
+    // ── Retry 0: permission not yet enabled on-chain ──────────────
+    // With forceRegularMode=true, the first UserOp after a NEW session
+    // key will fail because the Kernel contract hasn't seen this
+    // permissionId yet.  Detect validation failures and retry with
+    // enable mode (forceRegularMode=false) so the SDK wraps the
+    // enable data into the UserOp.
+    const isPermissionNotEnabled = (
+      allText.includes("aa24") ||
+      allText.includes("signature error") ||
+      (allText.includes("useroperation reverted") && allText.includes("simulation"))
+    )
+    if (isPermissionNotEnabled) {
       console.log(JSON.stringify({
-        level: "warn", action: "duplicate_permissionHash_retry_regular",
+        level: "warn", action: "permission_not_enabled_retry_enable",
         smartAccountAddress,
-        detail: "Permission already registered on-chain. " +
-          "Retrying in regular (non-enable) validation mode.",
+        detail: "Regular mode failed (permission may not be on-chain). " +
+          "Retrying with enable mode to register the permission.",
+        originalError: err?.shortMessage?.slice(0, 300),
         timestamp: new Date().toISOString(),
       }))
       try {
-        // The permission was already registered on-chain by a previous
-        // enable-mode UserOp. Re-create the kernel client in regular mode
-        // so the SDK signs without the enable data.
-        const { client: regularClient } = await getKernelClient(
+        const { client: enableClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: true },
+          { withPaymaster: true, forceRegularMode: false },
         )
-        const retryTxHash = await regularClient.sendTransaction({ calls })
+        const retryTxHash = await enableClient.sendTransaction({ calls })
         console.log(JSON.stringify({
-          level: "info", action: "duplicate_permissionHash_retry_succeeded",
+          level: "info", action: "permission_enable_retry_succeeded",
           smartAccountAddress, txHash: retryTxHash,
           timestamp: new Date().toISOString(),
         }))
         return { txHash: retryTxHash, explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}` }
-      } catch (retryErr) {
+      } catch (enableRetryErr) {
+        // Both modes failed — log fully and throw the more descriptive error
+        const enableText = [enableRetryErr?.shortMessage, enableRetryErr?.message,
+          enableRetryErr?.details, enableRetryErr?.cause?.message]
+          .filter(Boolean).join(" ").toLowerCase()
+        const isDuplicate = enableText.includes("duplicate permissionhash") ||
+          enableText.includes("invalidnonce")
         console.error(JSON.stringify({
-          level: "error", action: "duplicate_permissionHash_retry_failed",
+          level: "error", action: "permission_enable_retry_failed",
           smartAccountAddress,
-          error: formatExecutionError(retryErr),
-          shortMessage: retryErr?.shortMessage?.slice(0, 500),
-          details: retryErr?.details?.slice(0, 500),
-          causeMessage: retryErr?.cause?.message?.slice(0, 500),
+          regularModeError: err?.shortMessage?.slice(0, 300),
+          enableModeError: formatExecutionError(enableRetryErr),
+          isDuplicatePermission: isDuplicate,
           timestamp: new Date().toISOString(),
         }))
+        // If enable mode says "duplicate" but regular mode also failed,
+        // the issue is with the inner calls, not the permission.
+        // Throw a clear message.
+        if (isDuplicate) {
+          throw new Error(
+            "Permission IS registered on-chain (enable retry confirms) but " +
+            "regular mode also failed. The inner calls (withdrawals/deposits) " +
+            `are reverting: ${err?.shortMessage || err?.message || "unknown"}`
+          )
+        }
         throw new Error(
-          "duplicate permissionHash — permission already registered on-chain. " +
-          `Retry in regular mode also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+          `Both regular and enable mode failed. ` +
+          `Regular: ${err?.shortMessage || err?.message || "unknown"} | ` +
+          `Enable: ${enableRetryErr?.shortMessage || enableRetryErr?.message || "unknown"}`
         )
       }
     }
@@ -1241,35 +1384,53 @@ export async function executeWithdrawal({
       callCount: calls.length,
     }
   } catch (err) {
-    // Non-retryable: duplicate permissionHash is an on-chain/mempool state issue
     const allText = [err?.shortMessage, err?.message, err?.details,
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
-    if (allText.includes("duplicate permissionhash")) {
+
+    // ── Retry 0: permission not yet enabled on-chain ──────────────
+    const isPermissionNotEnabled = (
+      allText.includes("aa24") ||
+      allText.includes("signature error") ||
+      (allText.includes("useroperation reverted") && allText.includes("simulation"))
+    )
+    if (isPermissionNotEnabled) {
       console.log(JSON.stringify({
-        level: "warn", action: "duplicate_permissionHash_retry_regular",
+        level: "warn", action: "withdrawal_permission_not_enabled_retry",
         smartAccountAddress,
-        detail: "Permission already registered on-chain. " +
-          "Retrying withdrawal in regular (non-enable) validation mode.",
+        detail: "Regular mode failed. Retrying with enable mode.",
+        originalError: err?.shortMessage?.slice(0, 300),
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: regularClient } = await getKernelClient(
+        const { client: enableClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: true },
+          { withPaymaster: true, forceRegularMode: false },
         )
-        const retryTxHash = await regularClient.sendTransaction({ calls })
+        const retryTxHash = await enableClient.sendTransaction({ calls })
         return {
           txHash: retryTxHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
           owner: onchainOwner,
           callCount: calls.length,
         }
-      } catch (retryErr) {
+      } catch (enableRetryErr) {
+        const enableText = [enableRetryErr?.shortMessage, enableRetryErr?.message,
+          enableRetryErr?.details, enableRetryErr?.cause?.message]
+          .filter(Boolean).join(" ").toLowerCase()
+        const isDuplicate = enableText.includes("duplicate permissionhash") ||
+          enableText.includes("invalidnonce")
+        if (isDuplicate) {
+          throw new Error(
+            "Permission IS registered but inner calls are reverting: " +
+            `${err?.shortMessage || err?.message || "unknown"}`
+          )
+        }
         throw new Error(
-          "duplicate permissionHash — permission already registered on-chain. " +
-          `Retry in regular mode also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+          `Both regular and enable mode failed for withdrawal. ` +
+          `Regular: ${err?.shortMessage || "unknown"} | ` +
+          `Enable: ${enableRetryErr?.shortMessage || "unknown"}`
         )
       }
     }
