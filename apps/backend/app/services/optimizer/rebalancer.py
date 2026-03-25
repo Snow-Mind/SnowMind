@@ -260,12 +260,14 @@ class Rebalancer:
                 logger.warning("Failed to sync allocations DB: %s", exc)
 
         # 4a. On-chain balance discovery — if allocations table is empty,
-        # scan ALL protocols (not just session-key-allowed) for existing
-        # positions. This handles the case where funds were deployed to a
-        # protocol outside the session key's scope (e.g. frontend bug) and
-        # ensures the rebalancer can still detect them for portfolio tracking.
+        # scan ALL known protocol adapters for existing positions.
+        # CRITICAL: must NOT limit to twap_rates/allowed_rates because
+        # protocols that temporarily fail rate validation (e.g. Euler with
+        # high DefiLlama divergence from 9Summits incentives) would be
+        # excluded, causing the rebalancer to miss real on-chain positions
+        # and report "No deposited balance" when funds are deployed.
         if not current:
-            all_protocol_ids = set(twap_rates.keys()) | set(allowed_rates.keys())
+            all_protocol_ids = set(self._protocol_addresses.keys())
             discovered = await self._discover_onchain_balances(
                 smart_account_address, all_protocol_ids,
             )

@@ -48,7 +48,7 @@ class RateValidator:
     # periods.  Use a wider threshold for these to avoid false halts.
     _PROTOCOL_DIVERGENCE_OVERRIDES: dict[str, Decimal] = {
         "spark":             Decimal("0.20"),  # 20% — now using actual elapsed time, tighter is safe
-        "euler_v2":          Decimal("0.25"),  # 25% — ERC-4626 vault
+        "euler_v2":          Decimal("0.60"),  # 60% — ERC-4626 vault + 9Summits incentive rewards inflate on-chain rate vs DefiLlama base-only
         "silo_savusd_usdc":  Decimal("0.25"),  # 25% — Silo vault (tightened from 30%)
         "silo_susdp_usdc":   Decimal("0.25"),  # 25% — Silo vault (tightened from 30%)
     }

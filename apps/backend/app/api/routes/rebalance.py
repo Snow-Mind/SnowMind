@@ -14,7 +14,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_db, get_supabase
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth, require_api_key
+from app.core.security import require_privy_auth
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryResponse
@@ -140,35 +140,6 @@ async def trigger_rebalance(
         raise HTTPException(status_code=400, detail="Account is inactive")
 
     from app.services.optimizer.rebalancer import Rebalancer
-
-    rebalancer = Rebalancer()
-    result = await rebalancer.check_and_rebalance(
-        account_id=account["id"],
-        smart_account_address=account["address"],
-    )
-
-    return RebalanceTriggerResponse(
-        smart_account_address=account["address"],
-        status=result.get("status", "unknown"),
-        detail=result,
-    )
-
-
-# ── POST /{address}/admin-trigger — admin-only rebalance trigger (API key) ──
-
-@router.post("/{address}/admin-trigger", response_model=RebalanceTriggerResponse)
-@limiter.limit("10/minute")
-async def admin_trigger_rebalance(
-    request: Request,
-    address: str,
-    db: Client = Depends(get_db),
-    _key: str = Depends(require_api_key),
-):
-    """Admin-only: trigger a rebalance check using API key auth (no Privy needed)."""
-    account = await _lookup_account(db, address)
-
-    if not account.get("is_active", True):
-        raise HTTPException(status_code=400, detail="Account is inactive")
 
     rebalancer = Rebalancer()
     result = await rebalancer.check_and_rebalance(
