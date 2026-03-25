@@ -530,19 +530,19 @@ class Rebalancer:
                 )
 
         for pid in ranked_candidates:
-            if remaining_to_allocate <= Decimal("0"):
-                break  # Enough healthy capacity found
+            # NOTE: Do NOT early-stop based on remaining_to_allocate.
+            # The allocator must see ALL healthy candidates to find the
+            # best APY, even when current positions already cover capacity.
+            # Without this, a lower-APY current position (e.g. Benqi 3.50%)
+            # causes the early-stop to skip a higher-APY candidate (e.g.
+            # Silo 3.54%), making the allocator propose no improvement.
             if pid in health_results:
                 continue  # Already checked (current position)
 
-            # Health-check this ONE candidate (targeted, not blanket)
             hr = await _check_one(pid, Decimal("0"))
             health_results[pid] = hr
 
             if hr.is_deposit_safe:
-                remaining_to_allocate -= min(
-                    remaining_to_allocate, _estimate_capacity(pid)
-                )
                 logger.info(
                     "Candidate %s passed health check (TWAP APY: %.2f%%)",
                     pid, float(apy_by_protocol.get(pid, Decimal("0")) * 100),
@@ -655,17 +655,19 @@ class Rebalancer:
         #     Bypass for initial deployments: idle USDC at 0% → any protocol is
         #     better than idle regardless of deposit size. Gas is paymaster-sponsored.
         #     (is_initial_deployment computed above at step 6)
-        if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
-            daily_gain = apy_improvement * total_usd / Decimal("365")
-            gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
-            if daily_gain < gas_cost:
-                return await self._log(
-                    db,
-                    account_id,
-                    "skipped",
-                    reason=f"Profitability gate: daily gain ${float(daily_gain):.4f} < gas ${float(gas_cost):.4f}",
-                    proposed=result_allocations,
-                )
+        #     TEMPORARILY DISABLED for testing — uncomment when moving to production.
+        # if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
+        #     daily_gain = apy_improvement * total_usd / Decimal("365")
+        #     gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
+        #     breakeven_days = Decimal(str(self.settings.PROFITABILITY_BREAKEVEN_DAYS))
+        #     if daily_gain * breakeven_days < gas_cost:
+        #         return await self._log(
+        #             db,
+        #             account_id,
+        #             "skipped",
+        #             reason=f"Profitability gate: {int(breakeven_days)}d gain ${float(daily_gain * breakeven_days):.4f} < gas ${float(gas_cost):.4f}",
+        #             proposed=result_allocations,
+        #         )
 
         # 8c. Max single rebalance value — cap per-operation movement
         max_rebalance = Decimal(str(self.settings.MAX_SINGLE_REBALANCE_USD))

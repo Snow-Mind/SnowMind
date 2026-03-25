@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     INTERNAL_SERVICE_KEY: str = ""  # Shared secret for backend ↔ executor auth
 
     # ── Scheduler ────────────────────────────────────────────
-    REBALANCE_CHECK_INTERVAL: int = 1800  # 30 minutes (seconds)
+    REBALANCE_CHECK_INTERVAL: int = 360  # 6 minutes (seconds)
     MIN_REBALANCE_INTERVAL_HOURS: int = 6  # Time gate: skip if < 6h ago
     SCHEDULER_LOCK_TTL_MINUTES: int = 35  # Lock expires after 35 min
 
@@ -116,6 +116,7 @@ class Settings(BaseSettings):
     CIRCUIT_BREAKER_COOLDOWN_SECONDS: int = 60  # Seconds before half-open retry
     RPC_CONCURRENCY_LIMIT: int = 3       # Max concurrent RPC calls to avoid 429
     GAS_COST_ESTIMATE_USD: float = 0.008  # Realistic Avalanche UserOp gas cost
+    PROFITABILITY_BREAKEVEN_DAYS: int = 7  # Rebalance allowed if gas is recouped within N days
     TWAP_SNAPSHOT_COUNT: int = 3         # Number of snapshots for TWAP calculation
     TWAP_WINDOW_MINUTES: int = 15         # Backward-compatible oracle TWAP window
     SPARK_DEPLOYMENT_RATIO: float = 0.90  # Spark deploys only 90% (10% instant-redemption buffer)
