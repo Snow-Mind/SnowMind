@@ -8,10 +8,14 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface LiveRatesProps {
-  activeProtocolIds?: string[];
+  activeProtocolIds?: string[]; // Selected protocols from onboarding
+  activeAllocationIds?: string[]; // Protocols with current allocations > 0
 }
 
-export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
+export default function LiveRates({ 
+  activeProtocolIds = [],
+  activeAllocationIds = []
+}: LiveRatesProps) {
   const { data: rates, isLoading, dataUpdatedAt, isFetching } = useProtocolRates();
   const queryClient = useQueryClient();
 
@@ -41,15 +45,21 @@ export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
       PROTOCOL_CONFIG[r.protocolId as keyof typeof PROTOCOL_CONFIG];
     if (!meta) return null;
 
+    const isSelected = activeProtocolIds.includes(r.protocolId);
+    const hasAllocation = activeAllocationIds.includes(r.protocolId);
+    const isActive = isSelected && hasAllocation; // Actively depositing
+
     return (
       <div
         key={r.protocolId}
         className={`rounded-xl border p-4 transition-colors ${
           r.isComingSoon
             ? "border-border/20 bg-void-2/10 opacity-50"
-            : activeProtocolIds.includes(r.protocolId)
-              ? "border-[#E84142] bg-[#E84142]/[0.06]"
-              : "border-border/50 bg-void-2/30"
+            : isActive
+              ? "border-[#E84142] bg-[#E84142]/[0.06]" // RED: Actively depositing
+              : isSelected
+                ? "border-glacier/30 bg-glacier/[0.04]" // BLUE: Selected but not deployed yet
+                : "border-border/50 bg-void-2/30" // GRAY: Not selected
         }`}
       >
         <div className="flex items-center justify-between">
@@ -67,6 +77,11 @@ export default function LiveRates({ activeProtocolIds = [] }: LiveRatesProps) {
             {r.isComingSoon && (
               <span className="rounded-full bg-amber/10 px-2 py-0.5 text-[10px] text-amber">
                 Coming Soon
+              </span>
+            )}
+            {isSelected && !hasAllocation && (
+              <span className="rounded-full bg-glacier/10 px-2 py-0.5 text-[10px] text-glacier">
+                Selected
               </span>
             )}
           </div>

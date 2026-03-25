@@ -51,6 +51,19 @@ export interface ProtocolRateResponse {
   lastUpdated: number;
 }
 
+export interface Protocol30DayApyResponse {
+  protocolId: ProtocolId;
+  name: string;
+  avgApy30d: number;
+  adjustedApy30d: number;
+  currentApy: number;
+  apyChange: number;
+  dataPoints: number;
+  utilizationRate: number | null;
+  avgTvlUsd30d: number | null;
+  isActive: boolean;
+}
+
 export interface OptimizerPreviewResponse {
   smartAccountAddress: string;
   proposedAllocations: {

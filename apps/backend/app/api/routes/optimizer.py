@@ -63,6 +63,20 @@ class OptimizerPreviewOutput(CamelModel):
     solve_time_ms: float
 
 
+class AverageApyResponse(CamelModel):
+    """30-day average APY for a protocol."""
+    protocol_id: str
+    name: str
+    avg_apy_30d: Decimal  # Average APY over last 30 days
+    adjusted_apy_30d: Decimal  # 30-day APY adjusted for utilization and liquidity
+    current_apy: Decimal  # Latest spot APY
+    apy_change: Decimal  # Current - 30d avg (positive = better now)
+    data_points: int  # Number of days with data
+    utilization_rate: Decimal | None = None
+    avg_tvl_usd_30d: Decimal | None = None
+    is_active: bool
+
+
 class RunOptimizerRequest(BaseModel):
     account_address: str
     risk_tolerance: str = "moderate"  # conservative | moderate | aggressive
@@ -293,6 +307,140 @@ async def get_all_rates(request: Request):
             )
         )
     return out
+
+
+# ── GET /rates/30day-avg — 30-day average APY for each protocol ────────────────
+
+@router.get("/rates/30day-avg", response_model=list[AverageApyResponse])
+@limiter.limit("60/minute")
+async def get_30day_average_apy(request: Request, db: Client = Depends(get_db)):
+    """Calculate 30-day average APY from daily_apy_snapshots.
+    
+    Useful for comparing with competitors like Aave/Spark who show historical
+    APY trends. Helps users understand if rates are currently attractive or
+    have been trending down.
+    """
+    from datetime import datetime, timedelta, timezone
+    
+    try:
+        # Get live rates for current APY
+        live_rates = await _rate_fetcher.fetch_all_rates()
+        
+        # Calculate 30 days ago
+        thirty_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=30)
+        ).date().isoformat()
+        
+        # Fetch 30-day snapshot history
+        snapshots = (
+            db.table("daily_apy_snapshots")
+            .select("protocol_id, apy, tvl_usd, date")
+            .gte("date", thirty_days_ago)
+            .order("protocol_id, date")
+            .execute()
+            .data
+        )
+        
+        # Group by protocol for APY and TVL rolling windows
+        protocol_apys: dict[str, list[Decimal]] = {}
+        protocol_tvls: dict[str, list[Decimal]] = {}
+        for snap in snapshots:
+            pid = snap["protocol_id"]
+            try:
+                apy = Decimal(str(snap["apy"]))
+                if pid not in protocol_apys:
+                    protocol_apys[pid] = []
+                protocol_apys[pid].append(apy)
+
+                if snap.get("tvl_usd") is not None:
+                    tvl = Decimal(str(snap["tvl_usd"]))
+                    if pid not in protocol_tvls:
+                        protocol_tvls[pid] = []
+                    protocol_tvls[pid].append(tvl)
+            except Exception as e:
+                logger.warning("Invalid APY snapshot for %s: %s", pid, e)
+        
+        # Build response
+        out: list[AverageApyResponse] = []
+        for pid, adapter in ALL_ADAPTERS.items():
+            apy_values = protocol_apys.get(pid, [])
+            is_active = pid in ACTIVE_ADAPTERS
+            live_rate = live_rates.get(pid)
+
+            utilization_rate: Decimal | None = None
+            if live_rate is not None and live_rate.utilization_rate is not None:
+                try:
+                    utilization_rate = Decimal(str(live_rate.utilization_rate))
+                except Exception:
+                    utilization_rate = None
+
+            # Utilization factor in [0.50, 1.00].
+            # This softly down-weights low-utilization markets while avoiding
+            # over-penalization of structurally lower-utilization venues.
+            utilization_factor = Decimal("1.00")
+            if utilization_rate is not None:
+                util_clamped = min(max(utilization_rate, Decimal("0")), Decimal("1"))
+                utilization_factor = Decimal("0.50") + (util_clamped * Decimal("0.50"))
+
+            # Liquidity factor in [0.85, 1.00] based on 30d average TVL.
+            # Full weight reaches around $50M TVL.
+            avg_tvl_usd_30d: Decimal | None = None
+            liquidity_factor = Decimal("1.00")
+            tvl_values = protocol_tvls.get(pid, [])
+            if tvl_values:
+                avg_tvl_usd_30d = sum(tvl_values) / Decimal(len(tvl_values))
+                tvl_ratio = min(avg_tvl_usd_30d / Decimal("50000000"), Decimal("1"))
+                liquidity_factor = Decimal("0.85") + (tvl_ratio * Decimal("0.15"))
+            
+            if not apy_values:
+                # No historical data — fallback to current APY
+                current_apy = live_rate.apy if live_rate else Decimal("0")
+                adjusted_apy_30d = current_apy * utilization_factor * liquidity_factor
+                out.append(
+                    AverageApyResponse(
+                        protocol_id=pid,
+                        name=adapter.name,
+                        avg_apy_30d=current_apy,
+                        adjusted_apy_30d=adjusted_apy_30d,
+                        current_apy=current_apy,
+                        apy_change=Decimal("0"),
+                        data_points=0,
+                        utilization_rate=utilization_rate,
+                        avg_tvl_usd_30d=avg_tvl_usd_30d,
+                        is_active=is_active,
+                    )
+                )
+                continue
+            
+            # Calculate average
+            avg_apy = sum(apy_values) / Decimal(len(apy_values))
+            adjusted_apy_30d = avg_apy * utilization_factor * liquidity_factor
+            
+            # Get current APY
+            current_apy = live_rate.apy if live_rate else apy_values[-1]  # Use latest snapshot if live fetch failed
+            
+            # Calculate change (positive = better now)
+            apy_change = current_apy - avg_apy
+            
+            out.append(
+                AverageApyResponse(
+                    protocol_id=pid,
+                    name=adapter.name,
+                    avg_apy_30d=avg_apy,
+                    adjusted_apy_30d=adjusted_apy_30d,
+                    current_apy=current_apy,
+                    apy_change=apy_change,
+                    data_points=len(apy_values),
+                    utilization_rate=utilization_rate,
+                    avg_tvl_usd_30d=avg_tvl_usd_30d,
+                    is_active=is_active,
+                )
+            )
+        
+        return out
+    except Exception as e:
+        logger.error("Failed to calculate 30-day average APY: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to calculate historical APY")
 
 
 # ── POST /run — waterfall dry-run with risk tolerance (frontend preview) ──────

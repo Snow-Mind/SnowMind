@@ -8,6 +8,7 @@ import type {
   RegisterAccountRequest,
   RegisterAccountResponse,
   ProtocolRateResponse,
+  Protocol30DayApyResponse,
   OptimizerPreviewResponse,
   AccountDetailResponse,
   DiversificationPreference,
@@ -117,6 +118,9 @@ export const api = {
   // Protocol Rates
   getCurrentRates: () =>
     request<ProtocolRateResponse[]>("/api/v1/optimizer/rates"),
+
+  get30DayAverageApy: () =>
+    request<Protocol30DayApyResponse[]>("/api/v1/optimizer/rates/30day-avg"),
 
   // Optimizer
   runOptimizer: (address: string) =>

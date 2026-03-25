@@ -6,6 +6,7 @@ export type {
   GetPortfolioResponse,
   RunOptimizerResponse,
   ProtocolRateResponse,
+  Protocol30DayApyResponse,
   OptimizerPreviewResponse,
   RebalanceLogEntry,
   RebalanceStatusResponse,
