@@ -80,21 +80,24 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal:
     return Decimal("0")
 
 
-async def _get_protocol_apy(protocol_id: str) -> Decimal:
-    """Get current live APY for a protocol."""
-    for attempt in range(2):
-        try:
-            adapter = get_adapter(protocol_id)
-            rate = await adapter.get_rate()
-            return rate.apy
-        except Exception as exc:
-            err_str = str(exc)
-            if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
-                from app.core.rpc import get_rpc_manager
-                get_rpc_manager().report_rate_limit()
-                continue  # retry with rotated provider
-            return Decimal("0")
-    return Decimal("0")
+async def _get_live_apys() -> dict[str, Decimal]:
+    """Get live APYs from the rate fetcher (uses 24h snapshots for vaults).
+
+    CRITICAL: Do NOT call adapter.get_rate() directly for ERC-4626 vaults
+    (Euler, Spark, Silo). The rate_fetcher passes the 24h convertToAssets
+    snapshot to vault adapters, producing stable APYs. Calling get_rate()
+    without the snapshot falls back to short-term share-price observation
+    (~60s window) which produces wildly inaccurate APYs when rewards
+    accrue in lumps (e.g. Euler 9Summits: measured 18% vs actual 6%).
+    """
+    from app.services.optimizer.rate_fetcher import RateFetcher
+    try:
+        fetcher = RateFetcher()
+        rates = await fetcher.fetch_all_rates()
+        return {pid: rate.apy for pid, rate in rates.items()}
+    except Exception as exc:
+        logger.warning("Rate fetcher failed in portfolio: %s", exc)
+        return {}
 
 
 # ── GET /portfolio/{address} ──────────────────────────────
@@ -155,20 +158,19 @@ async def get_portfolio(
             )
         )
 
-    # ── Parallel on-chain reads: protocol balances + idle USDC + APYs ──────
-    # This eliminates sequential RPC latency (was ~13 serial calls → one gather).
+    # ── Parallel on-chain reads: protocol balances + idle USDC ────────────
+    # APYs come from the rate_fetcher cache (uses 24h snapshots for vaults).
     protocol_ids = list(ACTIVE_ADAPTERS.keys())
 
     balance_tasks = [_get_protocol_balance(address, pid) for pid in protocol_ids]
-    apy_tasks = [_get_protocol_apy(pid) for pid in protocol_ids]
     idle_task = _get_idle_usdc(address)
+    apy_task = _get_live_apys()
 
-    # Run all RPC calls concurrently
-    results = await asyncio.gather(*balance_tasks, *apy_tasks, idle_task)
-    n = len(protocol_ids)
-    onchain_balances = dict(zip(protocol_ids, results[:n]))
-    live_apys = dict(zip(protocol_ids, results[n:2*n]))
-    idle_usdc = results[2*n]
+    # Run balance reads + APY fetch concurrently
+    balance_results = await asyncio.gather(*balance_tasks, idle_task, apy_task)
+    onchain_balances = dict(zip(protocol_ids, balance_results[:len(protocol_ids)]))
+    idle_usdc = balance_results[len(protocol_ids)]
+    live_apys = balance_results[len(protocol_ids) + 1]
 
     # Reconcile DB allocations against on-chain reality:
     #   - If on-chain > 0 and DB differs significantly → use on-chain
