@@ -22,7 +22,7 @@ from app.services.optimizer.milp_solver import (
 logger = logging.getLogger("snowmind")
 
 _ZERO = Decimal("0")
-_ONE = Decimal("1")
+_DUST = Decimal("0.10")  # $0.10 dust threshold — filter sub-dime allocations
 
 
 def waterfall_allocate(
@@ -83,20 +83,20 @@ def waterfall_allocate(
         cap = min(exposure_cap, tvl_cap)
 
         alloc = min(remaining, cap)
-        if alloc > _ONE:  # filter dust
+        if alloc > _DUST:  # filter dust
             allocations[p.protocol_id] = alloc.quantize(Decimal("0.01"))
             remaining -= alloc
 
     # Park remainder in base layer (or all if nothing beat the base)
-    if remaining > _ONE and base is not None:
+    if remaining > _DUST and base is not None:
         allocations[base_layer_protocol_id] = remaining.quantize(Decimal("0.01"))
         remaining = _ZERO
-    elif remaining > _ONE and candidates:
+    elif remaining > _DUST and candidates:
         # No base layer available — give overflow to the best candidate
         best_pid = candidates[0].protocol_id
         allocations[best_pid] = allocations.get(best_pid, _ZERO) + remaining
         remaining = _ZERO
-    elif remaining > _ONE:
+    elif remaining > _DUST:
         # Nothing available at all
         return _empty_output(inp)
 
@@ -104,7 +104,7 @@ def waterfall_allocate(
 
     rates = {p.protocol_id: p.apy for p in available}
     weighted_apy = compute_weighted_apy(allocations, rates)
-    total_alloc = sum(allocations.values(), _ZERO) or _ONE
+    total_alloc = sum(allocations.values(), _ZERO) or Decimal("1")
     weighted_risk = sum(
         (allocations.get(p.protocol_id, _ZERO) / total_alloc) * p.risk_score
         for p in available
