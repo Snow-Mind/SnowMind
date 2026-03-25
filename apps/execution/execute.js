@@ -1019,6 +1019,18 @@ export async function executeRebalance({
       err?.cause?.message, err?.cause?.details]
       .filter(Boolean).join(" ").toLowerCase()
 
+    // Log full error details for diagnostics (truncated to avoid log bloat)
+    console.error(JSON.stringify({
+      level: "error", action: "regular_mode_failed_detail",
+      smartAccountAddress,
+      shortMessage: err?.shortMessage?.slice(0, 500),
+      message: err?.message?.slice(0, 500),
+      details: err?.details?.slice(0, 500),
+      causeMessage: err?.cause?.message?.slice(0, 500),
+      causeDetails: err?.cause?.details?.slice(0, 500),
+      timestamp: new Date().toISOString(),
+    }))
+
     // ── Retry 0: permission not yet enabled on-chain ──────────────
     // With forceRegularMode=true, the first UserOp after a NEW session
     // key will fail because the Kernel contract hasn't seen this

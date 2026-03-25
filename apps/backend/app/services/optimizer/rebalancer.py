@@ -1027,7 +1027,14 @@ class Rebalancer:
                 account_id,
             )
 
+        # Track which protocols are being fully exited (in current but not in target)
+        full_exit_protocols = frozenset(
+            pid for pid in current
+            if pid not in target_allocations and current.get(pid, Decimal("0")) > _MOVE_DUST
+        )
+
         # Build withdrawal/deposit instructions for the Node.js execution service
+        _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
         exec_withdrawals = []
         for protocol_id, amount_usd in withdrawals:
             entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount_usd)}
@@ -1036,6 +1043,25 @@ class Rebalancer:
                 amount_wei = int(Decimal(str(amount_usd)) * Decimal("1e6"))
                 qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
                 entry["qiTokenAmount"] = str(qi_amount)
+            elif protocol_id in _ERC4626_PROTOCOLS and protocol_id in full_exit_protocols:
+                # Full exit from ERC-4626 vault: use redeem(shares) instead of
+                # withdraw(assets) to avoid share-rounding revert.
+                # ERC-4626 withdraw() rounds UP shares to burn, which can exceed
+                # the user's balance by 1 share on a full exit.
+                adapter = get_adapter(protocol_id)
+                try:
+                    share_balance = await adapter.get_shares(smart_account_address)
+                    entry["amountUSDC"] = "MAX"
+                    entry["shareBalance"] = str(int(share_balance))
+                    logger.info(
+                        "Full exit from %s: using redeem(shares=%s) instead of withdraw(assets)",
+                        protocol_id, share_balance,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read share balance for %s/%s: %s — falling back to withdraw(assets)",
+                        smart_account_address, protocol_id, exc,
+                    )
             exec_withdrawals.append(entry)
 
         exec_deposits = [
