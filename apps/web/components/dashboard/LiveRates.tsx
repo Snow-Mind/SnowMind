@@ -79,11 +79,6 @@ export default function LiveRates({
                 Coming Soon
               </span>
             )}
-            {isSelected && !hasAllocation && (
-              <span className="rounded-full bg-[#E8E2DA] px-2 py-0.5 text-[10px] text-[#8A837C]">
-                Selected
-              </span>
-            )}
           </div>
           {!r.isComingSoon && (
             <div className="flex items-center gap-1">
