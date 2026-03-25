@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -21,6 +22,7 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
+import { api } from "@/lib/api-client";
 import type { Portfolio } from "@snowmind/shared-types";
 
 function deriveOverviewStats(p: Portfolio) {
@@ -99,11 +101,22 @@ export default function DashboardPage() {
     data: historyData,
   } = useRebalanceHistory(address);
 
+  // Fetch account detail to get allowedProtocols (selected markets during onboarding)
+  const {
+    data: accountDetail,
+    isLoading: accountLoading,
+  } = useQuery({
+    queryKey: ["account-detail", address],
+    queryFn: () => (address ? api.getAccountDetail(address) : Promise.reject("No address")),
+    enabled: !!address,
+    staleTime: 60000, // 1 minute
+  });
+
   useRealtimePortfolio(address);
 
   const { data: rates } = useProtocolRates();
 
-  const isLoading = portfolioLoading || rebalanceLoading;
+  const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
 
   // Best available APY across active protocols (shown when blended APY is 0)
@@ -112,12 +125,9 @@ export default function DashboardPage() {
     .sort((a, b) => b.currentApy - a.currentApy)[0];
   const projectedApy = bestRate ? bestRate.currentApy * 100 : 0;
 
-  // Active protocol IDs for highlighting in LiveRates
-  const activeProtocolIds = portfolio
-    ? portfolio.allocations
-        .filter((a) => a.protocolId !== "idle" && Number(a.amountUsdc) > 0)
-        .map((a) => a.protocolId)
-    : [];
+  // Active protocol IDs = user's selected protocols during onboarding (allowedProtocols in session key)
+  // NOT based on current portfolio allocations, so it shows what user chose, not just current holdings
+  const activeProtocolIds = accountDetail?.sessionKey?.allowedProtocols ?? [];
 
   // Error state
   if (portfolioError) {

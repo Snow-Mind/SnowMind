@@ -55,12 +55,6 @@ export const EXPLORER = {
   contract: (addr: string) => `${explorerBase}/address/${addr}#code`,
 }
 
-const pimlicoChain = 'avalanche'
-export const PIMLICO = {
-  rpc: `https://api.pimlico.io/v2/${pimlicoChain}/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`,
-  bundlerRpc: `https://api.pimlico.io/v1/${pimlicoChain}/rpc?apikey=${process.env.NEXT_PUBLIC_PIMLICO_API_KEY}`,
-}
-
 // ── Protocol metadata — drives ALL UI rendering ─────────────────────────────
 // Only 3 protocols for mainnet beta. Add new protocols by adding entries here.
 export const PROTOCOL_CONFIG = {

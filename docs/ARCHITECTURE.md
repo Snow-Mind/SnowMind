@@ -14,14 +14,14 @@ SnowMind is an autonomous, non-custodial AI yield optimizer on Avalanche C-Chain
 ┌──────────────────▼─────────────────────────────────────────┐
 │  BACKEND (FastAPI · Railway)                               │
 │  Rate Fetcher → Waterfall Allocator → Rebalance Engine      │
-│  Session Key Manager → Pimlico Bundler → On-chain          │
+│  Session Key Manager → ZeroDev RPC → On-chain          │
 │  Supabase (PostgreSQL) for state persistence               │
-└──────────────────┬─────────────────────────────────────────┘
+└──────────────────────────────────────────────└
                    │ ERC-4337 UserOperations
-┌──────────────────▼─────────────────────────────────────────┐
+┌──────────────────────────────────────────────┐
 │  AVALANCHE C-CHAIN (On-chain)                              │
 │  ZeroDev Kernel v3.1 Smart Accounts                        │
-│  Pimlico Paymaster (gas sponsoring)                        │
+│  ZeroDev Paymaster (gas sponsoring)                        │
 │  Aave V3 (supply/withdraw) · Benqi (mint/redeem)           │
 │  SnowMindRegistry (immutable event log)                    │
 └────────────────────────────────────────────────────────────┘
@@ -53,7 +53,7 @@ A normal wallet (EOA) requires manual signing for every transaction. A **smart a
 ```
 AI Agent creates UserOperation
         ↓
-Pimlico Bundler validates and bundles UserOp
+Pimlico/ZeroDev bundler validates and bundles UserOp
         ↓
 EntryPoint contract receives the bundle
         ↓
@@ -267,7 +267,7 @@ Never stored in plaintext. Decrypted only in-memory when building a UserOperatio
 | Vercel | Frontend hosting | Mumbai (bom1) |
 | Railway | Backend hosting | Auto |
 | Supabase | PostgreSQL + RLS | (nearest) |
-| Pimlico | ERC-4337 bundler + paymaster | Avalanche Mainnet |
+| Bundler/Paymaster | ZeroDev | ERC-4337 UserOp execution + gas sponsorship | Avalanche Mainnet |
 | ZeroDev | Smart account SDK + deployment | Avalanche |
 | Snowtrace | Block explorer (verification) | Avalanche |
 

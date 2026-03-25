@@ -61,8 +61,8 @@ Think of it as a yield routing layer with your risk rules, not ours. Every user 
 │  session_keys    │  │  → deserialize session  │
 │  allocations     │  │  → build UserOperation  │
 │  rebalance_logs  │  │  → sign with session key│
-│  rate_snapshots  │  │  → send to Pimlico      │
-│  daily_apy_snaps │  │  → fallback: Alchemy AA │
+│  rate_snapshots  │  │  → send to ZeroDev      │
+│  daily_apy_snaps │  │  (gas-sponsored)        │
 │  protocol_health │  └──────────┬──────────────┘
 │  user_prefs      │             │
 │  yield_tracking  │             │ UserOperation (ERC-4337)
@@ -364,7 +364,7 @@ SCHEDULER FIRES (every 30 minutes)
       Withdrawal order: lowest-APY current position first
       Deposit order: highest-APY target first
       All calls batched in one atomic UserOperation
-    Send to Execution Service → Pimlico (fallback: Alchemy AA API)
+    Send to Execution Service → ZeroDev RPC (gas-sponsored via paymaster)
     On success: update allocations, write rebalance_log, reset circuit breakers
     On failure: increment circuit_breaker_counter for involved protocols, log failure
 
@@ -534,7 +534,7 @@ Layer 5: Infrastructure Security
   ├─ Supabase RLS: users can only read their own accounts/allocations
   ├─ Session keys: USING (false) policy — frontend cannot read them ever
   ├─ Audit log: every session key operation logged to session_key_audit
-  └─ Fallback bundler: Pimlico primary, Alchemy AA API as fallback
+  └─ Bundler: ZeroDev with gas sponsorship via ZeroDev Paymaster
 
 Layer 6: Platform Caps (Guarded Beta)
   ├─ $50,000 total platform deposit cap
@@ -843,8 +843,7 @@ contract SnowMindRegistry {
 | Frontend | Next.js 15, React, TypeScript | Hosted on Vercel |
 | Auth | Privy | Social login + wallet connection |
 | Smart Accounts | ZeroDev SDK, Kernel v3.1 | ERC-4337 with session keys |
-| Bundler (primary) | Pimlico | UserOp packaging + submission |
-| Bundler (fallback) | Alchemy AA API | Activated on Pimlico failure |
+| Bundler | ZeroDev | UserOp packaging + submission + gas sponsorship |
 | Paymaster | ZeroDev | Gas sponsorship — zero gas for users |
 | Backend | FastAPI, Python 3.12 | Scheduler, optimizer, API |
 | Execution Service | Node.js sidecar | UserOp signing + submission |

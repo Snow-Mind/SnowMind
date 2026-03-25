@@ -29,7 +29,7 @@ SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and
 2. **Smart account is created** → ZeroDev deploys an ERC-4337 smart account for the user on Avalanche. The user's EOA (MetaMask/embedded wallet) is the owner.
 3. **User deposits USDC** → Transfers native USDC into their smart account and approves a **session key** (valid 7 days) that allows SnowMind's backend to move funds between whitelisted protocols on their behalf.
 4. **The Waterfall Allocator runs every 30 minutes** → It checks current APYs, picks the best protocol, and decides if a rebalance is worth the gas cost.
-5. **If a rebalance is needed** → The backend calls the Node.js execution service, which uses the session key to submit a UserOperation (ERC-4337) via Pimlico's bundler. Funds move from one protocol to another in a single transaction.
+5. **If a rebalance is needed** → The backend calls the Node.js execution service, which uses the session key to submit a UserOperation (ERC-4337) via ZeroDev's bundler. Funds move from one protocol to another in a single transaction. ZeroDev's paymaster sponsors the gas cost (zero-cost for users).
 6. **User withdraws anytime** → Emergency withdrawal pulls all funds back to the smart account. A 10% fee is charged only on profits (yield earned), not on principal.
 
 ### The Waterfall Allocator
@@ -98,7 +98,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 │   Supabase DB   │   │   Execution Service (Node.js)   │
 │                 │   │   localhost:3001 (Railway)       │
 │  accounts       │   │                                 │
-│  session_keys   │   │   ZeroDev SDK → Pimlico bundler │
+│  session_keys   │   │   ZeroDev SDK → ZeroDev RPC     │
 │  allocations    │   │   → Avalanche C-Chain            │
 │  rebalance_logs │   │   UserOps (ERC-4337)            │
 │  rate_snapshots │   │                                 │
@@ -127,7 +127,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 | Backend | FastAPI (Python) | Rate fetching, waterfall allocation, rebalance orchestration |
 | Execution Service | Node.js, ZeroDev SDK | Dedicated apps/execution service that verifies signed backend requests, blocks replay, and submits UserOperations |
 | Database | Supabase (PostgreSQL) | Accounts, allocations, logs, rate history |
-| Bundler | Pimlico | Bundles ERC-4337 UserOps and submits to Avalanche |
+| Bundler & Paymaster | ZeroDev | Bundles ERC-4337 UserOps + gas sponsorship |
 | Smart Accounts | ZeroDev (Kernel v3) | ERC-4337 smart accounts with session key support |
 | Auth | Privy | Social login + embedded wallets |
 
@@ -188,8 +188,6 @@ AVALANCHE_RPC_URL=https://api.avax.network/ext/bc/C/rpc
 INFURA_RPC_URL=https://avalanche-mainnet.infura.io/v3/YOUR_INFURA_KEY
 ALCHEMY_RPC_URL=https://avax-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 AVALANCHE_CHAIN_ID=43114
-PIMLICO_API_KEY=your_pimlico_api_key
-ALCHEMY_AA_API_KEY=your_alchemy_aa_api_key
 ZERODEV_PROJECT_ID=your_zerodev_project_id
 
 # ── Contract Addresses (Avalanche Mainnet) ───────────────────
@@ -294,15 +292,14 @@ NEXT_PUBLIC_BENQI_POOL_ADDRESS=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
 NEXT_PUBLIC_SPARK_VAULT_ADDRESS=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
 NEXT_PUBLIC_EULER_VAULT_ADDRESS=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
 NEXT_PUBLIC_TREASURY_ADDRESS=0x_YOUR_GNOSIS_SAFE_MULTISIG_ADDRESS
-NEXT_PUBLIC_PIMLICO_API_KEY=your_pimlico_api_key
-```
+# ── ZeroDev (Account Abstraction) ───────────────────────────
+NEXT_PUBLIC_ZERODEV_PROJECT_ID=your_zerodev_project_id
 
 **Important**: `NEXT_PUBLIC_CHAIN_ID` must be set to `43114` in production.
 
 ### 4C. Execution Service (runs alongside backend on Railway)
 
 ```bash
-PIMLICO_API_KEY=your_pimlico_api_key
 ZERODEV_PROJECT_ID=your_zerodev_project_id
 AVALANCHE_CHAIN_ID=43114
 INTERNAL_SERVICE_KEY=your_shared_secret_matching_backend
@@ -579,25 +576,15 @@ Then, from the Gnosis Safe, execute `acceptOwnership()` on the registry.
 4. Copy the **Service Role Key** (Settings → API → service_role) → `SUPABASE_SERVICE_KEY`
 5. Open the **SQL Editor** and run all 5 migrations from Section 5 above, **in order**
 
-### Step 4: Configure Pimlico for Mainnet
-
-1. Go to [https://dashboard.pimlico.io/](https://dashboard.pimlico.io/)
-2. Ensure your API key supports **Avalanche** (chain ID 43114)
-4. The backend automatically constructs the Pimlico URL:
-   - Mainnet: `https://api.pimlico.io/v2/avalanche/rpc?apikey=YOUR_KEY`
-
-### Step 5: Configure ZeroDev for Mainnet
+### Step 4: Configure ZeroDev for Mainnet
 
 1. Go to [https://dashboard.zerodev.app/](https://dashboard.zerodev.app/)
 2. Create a new project or update your existing one to support **Avalanche mainnet** (chain ID 43114)
 3. Copy the Project ID → `ZERODEV_PROJECT_ID` (both backend and frontend)
-4. Ensure your ZeroDev project has bundler/paymaster enabled for Avalanche mainnet.
-5. Ensure your paymaster policy covers mainnet operations (gas sponsorship).
+4. Ensure your ZeroDev project has bundler/paymaster enabled for Avalanche mainnet
+5. Ensure your paymaster has sufficient balance for gas sponsorship (monitor in ZeroDev dashboard)
 
-Note: current frontend/backend code paths use `ZERODEV_PROJECT_ID` (and Pimlico API key on backend).
-Dedicated frontend `NEXT_PUBLIC_BUNDLER_URL` / `NEXT_PUBLIC_PAYMASTER_URL` vars are not required by the current implementation.
-
-### Step 6: Deploy Backend to Railway
+### Step 5: Deploy Backend to Railway
 
 1. Push the `dev` branch to GitHub
 2. In Railway, create a **new environment** called "production" (or update the existing one)
@@ -718,8 +705,7 @@ Before going live, verify each item:
 - [ ] Registry address set in env vars (both backend and frontend)
 - [ ] Gnosis Safe multisig created → set as TREASURY_ADDRESS
 - [ ] Registry ownership transferred to multisig
-- [ ] Pimlico API key works on Avalanche mainnet
-- [ ] ZeroDev project configured for Avalanche mainnet
+- [ ] ZeroDev project configured for Avalanche mainnet with paymaster balance sufficient
 
 ### Protocol Adapters
 - [ ] Fork tests pass (`pytest tests/fork/test_mainnet_adapters.py`)
@@ -743,7 +729,6 @@ All variables below must be set and non-empty before launch.
 
 - [ ] Backend: `SUPABASE_URL`
 - [ ] Backend: `SUPABASE_SERVICE_KEY`
-- [ ] Backend: `PIMLICO_API_KEY`
 - [ ] Backend: `ZERODEV_PROJECT_ID`
 - [ ] Backend: `REGISTRY_CONTRACT_ADDRESS`
 - [ ] Backend: `TREASURY_ADDRESS`
@@ -759,7 +744,7 @@ All variables below must be set and non-empty before launch.
 - [ ] Frontend: `NEXT_PUBLIC_CHAIN_ID=43114`
 - [ ] Frontend: `NEXT_PUBLIC_REGISTRY_ADDRESS`
 - [ ] Frontend: `NEXT_PUBLIC_TREASURY_ADDRESS`
-- [ ] Frontend: `NEXT_PUBLIC_PIMLICO_API_KEY`
+- [ ] Execution Service: `ZERODEV_PROJECT_ID` (must match backend)
 - [ ] Execution Service: `INTERNAL_SERVICE_KEY` (must exactly match backend)
 - [ ] Execution Service: `INTERNAL_REQUEST_TTL_SECONDS`
 
