@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     # ── Optimizer Thresholds ─────────────────────────────────
     # All thresholds from ARCHITECTURE.md — change in ONE place only.
     TVL_CAP_PCT: float = 0.075           # Max 7.5% of Aave/Benqi pool TVL (Spark: no cap)
-    BEAT_MARGIN: float = 0.001           # 0.1% — skip rebalance if improvement below this
+    BEAT_MARGIN: float = 0.0001          # 0.01% — skip rebalance if improvement below this
     MIN_BALANCE_USD: float = 10.0        # Skip rebalance if total balance < $10 (dust)
     MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (Aave/Benqi only)
     VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)

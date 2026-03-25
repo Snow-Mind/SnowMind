@@ -30,7 +30,7 @@ def waterfall_allocate(
     tvl_by_protocol: dict[str, Decimal],
     tvl_cap_pct: Decimal = Decimal("0.075"),
     max_exposure_pct: Decimal = Decimal("1.00"),
-    base_beat_margin: Decimal = Decimal("0.001"),
+    base_beat_margin: Decimal = Decimal("0.0001"),
     base_layer_protocol_id: str = "spark",
 ) -> OptimizerOutput:
     """Waterfall allocation: fill highest-APY protocols first, park remainder in base layer.

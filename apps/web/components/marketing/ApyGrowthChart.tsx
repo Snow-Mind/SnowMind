@@ -135,7 +135,7 @@ export default function ApyGrowthChart() {
                 tickLine={false}
                 tick={{ fill: "#8A837C", fontSize: 11 }}
                 tickFormatter={(v: number) => `${v}%`}
-                domain={["auto", "auto"]}
+                domain={[0, "auto"]}
               />
               <Tooltip
                 contentStyle={{

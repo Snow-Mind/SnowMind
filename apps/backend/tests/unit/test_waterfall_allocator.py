@@ -76,12 +76,12 @@ def test_small_deposit_goes_to_best_protocol():
         tvl_by_protocol=tvl,
         tvl_cap_pct=D("0.075"),
         max_exposure_pct=D("1.00"),  # max_yield mode
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 1 — Small deposit", result)
 
     assert result.status == "optimal"
-    # benqi at 5% beats Aave V3 (3.75%) by 1.25% > 0.1% margin
+    # benqi at 5% beats Aave V3 (3.75%) by 1.25% > 0.01% margin
     assert "benqi" in result.allocations
     assert float(result.allocations["benqi"]) == pytest.approx(2000.0, abs=1.0)
     # No base layer in this test — all funds to best candidate
@@ -111,7 +111,7 @@ def test_large_deposit_splits_with_exposure_cap():
         tvl_by_protocol=tvl,
         tvl_cap_pct=D("0.075"),
         max_exposure_pct=D("0.40"),  # 40% = $20K cap per protocol
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 2 — Large deposit split", result)
 
@@ -148,7 +148,7 @@ def test_tvl_cap_limits_allocation():
         tvl_by_protocol=tvl,
         tvl_cap_pct=D("0.075"),
         max_exposure_pct=D("1.00"),
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 3 — TVL cap", result)
 
@@ -180,7 +180,7 @@ def test_no_protocol_beats_base_layer():
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl,
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 4 — No protocol beats base layer", result)
 
@@ -194,10 +194,10 @@ def test_no_protocol_beats_base_layer():
 # ── Test 5: Base layer barely beaten (above margin) ─────────────────────────
 
 def test_base_layer_barely_beaten_above_margin():
-    """Benqi at 3.87%, Aave at 3.75%, margin 0.10%. Diff = 0.12% > margin → allocate."""
+    """Benqi at 3.761%, Aave at 3.75%, margin 0.01%. Diff = 0.011% > margin → allocate."""
     protocols = _make_protocols({
         "aave_v3": "0.0375",
-        "benqi": "0.0387",
+        "benqi": "0.03761",
     })
     tvl = _make_tvl({
         "aave_v3": "100000000",
@@ -211,7 +211,7 @@ def test_base_layer_barely_beaten_above_margin():
         inp=inp,
         tvl_by_protocol=tvl,
         max_exposure_pct=D("1.00"),
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 5 — Base layer barely beaten", result)
 
@@ -222,10 +222,10 @@ def test_base_layer_barely_beaten_above_margin():
 # ── Test 6: Base layer not beaten enough (below margin) ─────────────────────
 
 def test_base_layer_not_beaten_below_margin():
-    """Benqi at 3.759%, Spark at 3.75%, margin 0.10%. Diff = 0.009% < margin → Spark."""
+    """Benqi at 3.7509%, Spark at 3.75%, margin 0.01%. Diff = 0.0009% < margin → Spark."""
     protocols = _make_protocols({
         "spark": "0.0375",
-        "benqi": "0.03759",
+        "benqi": "0.037509",
     })
     tvl = _make_tvl({
         "spark": "136000000",
@@ -238,7 +238,7 @@ def test_base_layer_not_beaten_below_margin():
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl,
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 6 — Base layer not beaten enough", result)
 
@@ -376,7 +376,7 @@ def test_waterfall_cascading_fill():
         inp=inp,
         tvl_by_protocol=tvl,
         max_exposure_pct=D("0.30"),  # 30% = $30K per protocol
-        base_beat_margin=D("0.001"),
+        base_beat_margin=D("0.0001"),
     )
     _print_result("Test 12 — Cascading waterfall", result)
 
