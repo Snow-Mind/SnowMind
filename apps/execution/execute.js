@@ -676,49 +676,71 @@ export async function executeRebalance({
       }
 
       if (blobPermissionIdForMode) {
-        // Construct the REGULAR mode nonce key for this permissionId.
+        // Construct BOTH regular and enable mode nonce keys for this permissionId.
         // Kernel v3.1 nonce layout (uint256 → upper 192 bits = key):
         //   byte 0 = mode (0x00=default/regular, 0x01=enable)
         //   byte 1 = validationType (0x02=PERMISSION)
         //   bytes 2-5 = permissionId (4 bytes)
         //   bytes 6-23 = zeros
-        // For regular mode queries, byte 0 = 0x00 (default).
+        // We must check BOTH keys because:
+        //   - If enable seq > 0: a previous enable-mode UserOp was mined for this
+        //     permissionId → permission IS installed → must use regular mode.
+        //   - If regular seq > 0: a previous regular-mode UserOp succeeded.
+        //   - If BOTH are 0: permission has never been used → try enable mode.
+        // Previously we only checked the regular key, which missed the case where
+        // enable mode succeeded (installing the permission) but the inner calls
+        // reverted → regular seq stays 0 → code incorrectly retried enable mode
+        // → "duplicate permissionHash" revert.
         const permIdBigInt = BigInt(blobPermissionIdForMode)
         const regularNonceKey = (2n << 176n) | (permIdBigInt << 144n)
+        const enableNonceKey = (1n << 184n) | (2n << 176n) | (permIdBigInt << 144n)
 
         const ENTRYPOINT_ADDR = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
-        const fullNonce = await tempPublicClient.readContract({
-          address: ENTRYPOINT_ADDR,
-          abi: [{
-            name: "getNonce",
-            type: "function",
-            stateMutability: "view",
-            inputs: [{ name: "sender", type: "address" }, { name: "key", type: "uint192" }],
-            outputs: [{ type: "uint256" }],
-          }],
-          functionName: "getNonce",
-          args: [smartAccountAddress, regularNonceKey],
-        })
+        const nonceAbi = [{
+          name: "getNonce",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "sender", type: "address" }, { name: "key", type: "uint192" }],
+          outputs: [{ type: "uint256" }],
+        }]
+        const [regularFullNonce, enableFullNonce] = await Promise.all([
+          tempPublicClient.readContract({
+            address: ENTRYPOINT_ADDR,
+            abi: nonceAbi,
+            functionName: "getNonce",
+            args: [smartAccountAddress, regularNonceKey],
+          }),
+          tempPublicClient.readContract({
+            address: ENTRYPOINT_ADDR,
+            abi: nonceAbi,
+            functionName: "getNonce",
+            args: [smartAccountAddress, enableNonceKey],
+          }),
+        ])
 
         // EntryPoint.getNonce returns (key << 64 | sequenceNumber).
         // Extract only the sequence number (lower 64 bits) to check
         // actual usage, because any non-zero key makes the full value > 0.
-        const sequenceNumber = fullNonce & ((1n << 64n) - 1n)
-        entryPointNonceForMode = sequenceNumber
+        const regularSeq = regularFullNonce & ((1n << 64n) - 1n)
+        const enableSeq = enableFullNonce & ((1n << 64n) - 1n)
+        entryPointNonceForMode = regularSeq > 0n ? regularSeq : enableSeq
 
-        if (sequenceNumber > 0n) {
-          // This permissionId has completed at least one regular-mode UserOp.
-          // The permission IS enabled on-chain → skip enable mode.
+        if (regularSeq > 0n || enableSeq > 0n) {
+          // This permissionId has been used in enable or regular mode.
+          // The permission IS registered on-chain → skip enable mode.
           useEnableModeFirst = false
           console.log(JSON.stringify({
             level: "info",
             action: "mode_selection_entrypoint_nonce_override",
             smartAccountAddress,
             permissionId: blobPermissionIdForMode,
-            entryPointNonce: sequenceNumber.toString(),
+            regularSeq: regularSeq.toString(),
+            enableSeq: enableSeq.toString(),
             regularNonceKey: "0x" + regularNonceKey.toString(16).padStart(48, "0"),
-            detail: "EntryPoint sequence > 0 for this permissionId's regular-mode key. " +
-              "Permission already enabled. Using regular mode.",
+            enableNonceKey: "0x" + enableNonceKey.toString(16).padStart(48, "0"),
+            detail: enableSeq > 0n
+              ? "Enable-mode sequence > 0 → permission was installed by a previous enable UserOp. Using regular mode."
+              : "Regular-mode sequence > 0 → permission already used in regular mode. Using regular mode.",
             timestamp: new Date().toISOString(),
           }))
         } else {
@@ -727,9 +749,10 @@ export async function executeRebalance({
             action: "mode_selection_entrypoint_nonce_zero",
             smartAccountAddress,
             permissionId: blobPermissionIdForMode,
-            entryPointNonce: "0",
-            detail: "EntryPoint nonce = 0 for this permissionId. " +
-              "Permission has NOT been used in regular mode. Using enable mode.",
+            regularSeq: "0",
+            enableSeq: "0",
+            detail: "EntryPoint nonce = 0 for BOTH enable and regular keys. " +
+              "Permission has NOT been installed for this permissionId. Using enable mode.",
             timestamp: new Date().toISOString(),
           }))
         }
@@ -1575,26 +1598,38 @@ export async function executeRebalance({
             `Enable error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
           )
         }
-        // Deadlock detection — works regardless of mode order:
-        //   Scenario A (enable-first): primary=duplicate permissionHash, retry=AA23
-        //   Scenario B (regular-first / nonce pre-check): primary=AA23, retry=duplicate permissionHash
-        // In both cases the permission is on-chain but the validator can't validate it.
-        // The user MUST re-grant a new session key (new signer → new permissionId → new permissionHash).
-        // NOTE: must check for specific "duplicate permissionhash" text, NOT just retryForceRegular,
-        // because retryForceRegular is always true when primary is enable mode (too broad).
-        const isDeadlock =
+        // ── Permission hash conflict detection ──
+        // "duplicate permissionHash" = the Kernel smart contract already has
+        // a permission with the same policy hash installed on-chain.
+        // This can happen two ways:
+        //   A. SAME session key: a previous enable-mode UserOp mined successfully
+        //      (installed the permission) but the inner DeFi calls reverted.
+        //      Fix: use regular mode (the nonce pre-check should have caught this,
+        //      but if it didn't, this is a safety net).
+        //   B. DIFFERENT session key: the user re-granted, producing a new
+        //      permissionId but the same permissionHash (policies unchanged).
+        //      Fix: the backend should recover the ORIGINAL session key whose
+        //      permission IS installed on-chain and use it in regular mode.
+        //
+        // In NEITHER case should we throw "DEADLOCK" (which deactivates the
+        // session key). Deactivation forces re-grant → new key with same hash
+        // collision → infinite loop. Instead, throw PERMISSION_RECOVERY_NEEDED
+        // so the backend can try to recover the working session key.
+        const hasDuplicateHashConflict =
           (primaryHasDuplicateHash && retryHasAA23) ||
           (hasDuplicateHash && primaryHasAA23)
-        if (isDeadlock) {
+        if (hasDuplicateHashConflict) {
           const regularErr = retryForceRegular
             ? (retryErr?.shortMessage || retryErr?.message)
             : (err?.shortMessage || err?.message)
           throw new Error(
-            "DEADLOCK: Permission permissionHash is already on-chain (enable: duplicate permissionHash) " +
-            "but regular mode also failed (AA23: validator state inconsistent). " +
-            "The session key's signer/permissionId may be stale. " +
-            "The user MUST re-grant the session key from the dashboard to generate a new signer " +
-            "and produce a fresh permissionId. " +
+            "PERMISSION_RECOVERY_NEEDED: Permission policies are already installed on-chain " +
+            "(enable mode: duplicate permissionHash) but the current session key's permissionId " +
+            "is not the one installed (regular mode: AA23). This happens when a user re-grants " +
+            "their session key — the new key has a different permissionId but the same policy hash. " +
+            "The backend should try the most recently deactivated session key for this account, " +
+            "which may have the matching permissionId installed on-chain. " +
+            "DO NOT deactivate the session key — that would force another re-grant and repeat the cycle. " +
             `Regular error: ${regularErr || "unknown"}`
           )
         }

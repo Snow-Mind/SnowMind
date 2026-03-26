@@ -419,6 +419,99 @@ def revoke_session_key(db: Client, account_id: UUID) -> int:
     return count
 
 
+def get_deactivated_session_key_records(
+    db: Client, account_id: UUID, limit: int = 5
+) -> list[dict]:
+    """Fetch recently deactivated session keys for an account.
+
+    Used for PERMISSION_RECOVERY_NEEDED: when a re-granted session key
+    can't install its permission (duplicate permissionHash), we try
+    previously deactivated keys whose permission may still be installed
+    on-chain.
+
+    Returns up to *limit* dicts (most recent first), each with keys:
+      ``key_id``, ``serialized_permission``, ``session_private_key``,
+      ``allowed_protocols``.
+    Keys that fail decryption or lack a ``session_private_key`` are
+    silently skipped.
+    """
+    result = (
+        db.table("session_keys")
+        .select("id, serialized_permission, expires_at, allowed_protocols")
+        .eq("account_id", str(account_id))
+        .eq("is_active", False)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    if not result.data:
+        return []
+
+    records: list[dict] = []
+    for row in result.data:
+        try:
+            decrypted = decrypt_session_key(row["serialized_permission"])
+            session_private_key = ""
+            serialized_permission = decrypted
+            try:
+                parsed = json.loads(decrypted)
+                if isinstance(parsed, dict) and "approval" in parsed:
+                    serialized_permission = parsed["approval"]
+                    session_private_key = parsed.get("sessionPrivateKey", "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            if not session_private_key:
+                continue  # Legacy key without private key — unusable
+
+            raw_allowed = row.get("allowed_protocols")
+            allowed_protocols = (
+                [str(p) for p in raw_allowed]
+                if isinstance(raw_allowed, list) and raw_allowed
+                else ["aave_v3", "benqi", "spark", "euler_v2",
+                      "silo_savusd_usdc", "silo_susdp_usdc"]
+            )
+            records.append({
+                "key_id": row["id"],
+                "serialized_permission": serialized_permission,
+                "session_private_key": session_private_key,
+                "allowed_protocols": allowed_protocols,
+            })
+        except Exception:
+            logger.debug(
+                "Skipping deactivated key %s — decryption failed",
+                row.get("id", "?"),
+            )
+    return records
+
+
+def reactivate_session_key(db: Client, account_id: UUID, key_id: str) -> bool:
+    """Reactivate a specific deactivated session key by its row id.
+
+    First deactivates all currently active keys for the account, then
+    reactivates the specified key.  Returns True on success.
+    """
+    # Deactivate any currently active keys
+    db.table("session_keys").update({"is_active": False}).eq(
+        "account_id", str(account_id)
+    ).eq("is_active", True).execute()
+
+    # Reactivate the specific key
+    result = (
+        db.table("session_keys")
+        .update({"is_active": True})
+        .eq("id", key_id)
+        .eq("account_id", str(account_id))
+        .execute()
+    )
+    success = bool(result.data)
+    if success:
+        logger.info(
+            "Reactivated session key %s for account %s", key_id, account_id
+        )
+    return success
+
+
 # ── Session-key monitoring ───────────────────────────────────────────────────
 
 # Operational constants

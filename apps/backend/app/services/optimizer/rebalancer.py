@@ -17,6 +17,8 @@ from app.services.execution.executor import ExecutionService
 from app.services.execution.session_key import (
     get_active_session_key,
     get_active_session_key_record,
+    get_deactivated_session_key_records,
+    reactivate_session_key,
     revoke_session_key,
 )
 from app.services.optimizer.allocator import (
@@ -935,6 +937,71 @@ class Rebalancer:
                     smart_account_address,
                 )
                 raise
+
+            # PERMISSION_RECOVERY_NEEDED: The current session key can't install
+            # its permission (duplicate hash from a previous grant) and can't
+            # use regular mode (different permissionId). Try deactivated keys
+            # whose permission may still be installed on-chain.
+            if "PERMISSION_RECOVERY_NEEDED" in err_msg:
+                logger.warning(
+                    "PERMISSION_RECOVERY_NEEDED for %s — trying old session keys",
+                    smart_account_address,
+                )
+                if account_id:
+                    db = get_supabase()
+                    old_keys = get_deactivated_session_key_records(
+                        db, UUID(account_id), limit=5
+                    )
+                    for old_key in old_keys:
+                        try:
+                            logger.info(
+                                "Trying deactivated key %s for %s",
+                                old_key["key_id"],
+                                smart_account_address,
+                            )
+                            result = await ExecutionService().execute_rebalance(
+                                serialized_permission=old_key[
+                                    "serialized_permission"
+                                ],
+                                smart_account_address=smart_account_address,
+                                withdrawals=withdrawals,
+                                deposits=deposits,
+                                session_private_key=old_key[
+                                    "session_private_key"
+                                ],
+                                fee_transfer=fee_transfer,
+                                user_transfer=user_transfer,
+                            )
+                            # Old key worked! Reactivate it.
+                            logger.info(
+                                "Old session key %s succeeded for %s — "
+                                "reactivating",
+                                old_key["key_id"],
+                                smart_account_address,
+                            )
+                            reactivate_session_key(
+                                db, UUID(account_id), old_key["key_id"]
+                            )
+                            return result["txHash"]
+                        except Exception as recovery_err:
+                            logger.debug(
+                                "Old key %s failed for %s: %s",
+                                old_key["key_id"],
+                                smart_account_address,
+                                str(recovery_err)[:200],
+                            )
+                            continue
+                    # No old key worked — log and skip (do NOT deactivate)
+                    logger.error(
+                        "All old session keys failed for %s. "
+                        "User must re-grant from dashboard. "
+                        "NOT deactivating current key to avoid re-grant loop.",
+                        smart_account_address,
+                    )
+                raise ValueError(
+                    f"PERMISSION_RECOVERY_NEEDED for {smart_account_address} "
+                    f"— no working session key found"
+                ) from exc
 
             # DEADLOCK = gas policy exhausted on-chain → regular mode AA23,
             # and permission is already installed → enable mode "duplicate permissionHash".
