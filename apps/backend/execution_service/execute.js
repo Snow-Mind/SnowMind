@@ -1496,11 +1496,13 @@ export async function executeRebalance({
         }))
 
         // Determine the most useful error message
-        // Check if PRIMARY (enable) failed with duplicate permissionHash
+        // Check if PRIMARY failed with duplicate permissionHash or AA23
         const primaryText = [err?.shortMessage, err?.message,
           err?.details, err?.cause?.message, err?.cause?.details]
           .filter(Boolean).join(" ").toLowerCase()
         const primaryHasDuplicateHash = primaryText.includes("duplicate permissionhash")
+        const primaryHasAA23 = primaryText.includes("aa23")
+        const retryHasAA23 = retryText.includes("aa23")
 
         if (hasEnableNotApproved) {
           throw new Error(
@@ -1510,23 +1512,30 @@ export async function executeRebalance({
             `Enable error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
           )
         }
-        // Deadlock: enable failed with "duplicate permissionHash" AND regular also failed.
-        // This means the permission was previously enabled with this permissionId, but
-        // the on-chain validator state is inconsistent (e.g. isInitialized=false).
-        // The user MUST re-grant a new session key (which produces a new signer address
-        // → new permissionId → new permissionHash) to break the deadlock.
-        if (primaryHasDuplicateHash && retryForceRegular) {
+        // Deadlock detection — works regardless of mode order:
+        //   Scenario A (enable-first): primary=duplicate permissionHash, retry=AA23
+        //   Scenario B (regular-first / nonce pre-check): primary=AA23, retry=duplicate permissionHash
+        // In both cases the permission is on-chain but the validator can't validate it.
+        // The user MUST re-grant a new session key (new signer → new permissionId → new permissionHash).
+        const isDeadlock =
+          (primaryHasDuplicateHash && (retryHasAA23 || retryForceRegular)) ||
+          (hasDuplicateHash && primaryHasAA23)
+        if (isDeadlock) {
+          const regularErr = retryForceRegular
+            ? (retryErr?.shortMessage || retryErr?.message)
+            : (err?.shortMessage || err?.message)
           throw new Error(
             "DEADLOCK: Permission permissionHash is already on-chain (enable: duplicate permissionHash) " +
             "but regular mode also failed (AA23: validator state inconsistent). " +
             "The session key's signer/permissionId may be stale. " +
             "The user MUST re-grant the session key from the dashboard to generate a new signer " +
             "and produce a fresh permissionId. " +
-            `Regular error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+            `Regular error: ${regularErr || "unknown"}`
           )
         }
         if (hasDuplicateHash && !retryForceRegular) {
           // Enable retry got duplicate → permission IS registered, but regular mode also failed
+          // AND primary was NOT AA23 (that's the deadlock case above)
           // This means the inner calls (withdrawals/deposits) are reverting
           throw new Error(
             "Permission is registered on-chain (enable retry got 'duplicate permissionHash') " +

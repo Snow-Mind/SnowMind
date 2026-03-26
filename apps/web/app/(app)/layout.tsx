@@ -11,6 +11,7 @@ import {
   ChevronDown,
   LogOut,
   Settings,
+  Key,
   X,
   Loader2,
   CheckCircle2,
@@ -123,6 +124,15 @@ function TopBar({
                     >
                       <Settings className="h-3.5 w-3.5 text-[#8A837C]" />
                       Agent account details
+                    </button>
+                  )}
+                  {isAgentActive && (
+                    <button
+                      onClick={() => { setAccountOpen(false); router.push("/settings"); }}
+                      className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
+                    >
+                      <Key className="h-3.5 w-3.5 text-[#8A837C]" />
+                      Settings
                     </button>
                   )}
                   {isAgentActive && (
