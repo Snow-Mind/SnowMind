@@ -967,7 +967,7 @@ class Rebalancer:
                 if account_id:
                     db = get_supabase()
                     old_keys = get_deactivated_session_key_records(
-                        db, UUID(account_id), limit=50
+                        db, UUID(account_id), limit=5
                     )
                     for old_key in old_keys:
                         try:
@@ -1011,7 +1011,10 @@ class Rebalancer:
                     # No old key worked — log and skip (do NOT deactivate)
                     logger.error(
                         "All old session keys failed for %s. "
-                        "User must re-grant from dashboard. "
+                        "This happens because the on-chain permissionHash belongs "
+                        "to a session key signer that is no longer available. "
+                        "User must re-grant from dashboard (frontend must include "
+                        "gasNonce for unique permissionHash). "
                         "NOT deactivating current key to avoid re-grant loop.",
                         smart_account_address,
                     )

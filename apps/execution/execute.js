@@ -1755,8 +1755,9 @@ export async function executeRebalance({
             "(enable mode: duplicate permissionHash) but the current session key's permissionId " +
             "is not the one installed (regular mode: AA23). This happens when a user re-grants " +
             "their session key — the new key has a different permissionId but the same policy hash. " +
-            "The backend should try the most recently deactivated session key for this account, " +
-            "which may have the matching permissionId installed on-chain. " +
+            "The frontend MUST include a unique gasNonce in the gas policy so each grant produces " +
+            "a distinct permissionHash. If the frontend already has gasNonce, ensure it is deployed " +
+            "to production (merge dev→main for Vercel). After deploying, user must re-grant. " +
             "DO NOT deactivate the session key — that would force another re-grant and repeat the cycle. " +
             `Regular error: ${regularErr || "unknown"}`
           )

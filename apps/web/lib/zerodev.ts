@@ -748,10 +748,14 @@ export async function grantAndSerializeSessionKey(
   // user re-grants with identical policies, the hash collides with the existing
   // on-chain permission → enable mode fails ("duplicate permissionHash") and
   // regular mode fails (new permissionId never installed). Adding a small
-  // unique nonce (~1-2 microAVAX) to the gas limit produces a distinct hash
-  // each grant while keeping the effective cap at ~10 AVAX.
-  const gasNonce = BigInt(Date.now() % 1_000_000_000)
+  // unique nonce to the gas limit produces a distinct hash each grant while
+  // keeping the effective cap at ~10 AVAX.
+  // Use full Date.now() (millisecond timestamp, ~1.7×10^12) instead of modulo
+  // to guarantee uniqueness across all grants. The effective gas cap becomes
+  // 10.000001774... AVAX — negligible difference.
+  const gasNonce = BigInt(Date.now())
   const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) + gasNonce })
+  console.log(`[ZeroDev] Gas policy nonce: ${gasNonce} → effective cap: ${(parseUnits("10", 18) + gasNonce).toString()} wei`)
 
   // Rate limit: max rebalances per day
   const rateLimitPolicy = toRateLimitPolicy({
