@@ -98,12 +98,19 @@ export default function SessionKeyStatus() {
           },
         );
 
+      // Preserve the user's original protocol selections from their existing
+      // session key. Only fall back to ACTIVE_PROTOCOLS for brand-new grants.
+      const existingProtocols = sk?.allowedProtocols;
+      const protocols = existingProtocols && existingProtocols.length > 0
+        ? existingProtocols
+        : ACTIVE_PROTOCOLS as unknown as string[];
+
       await api.storeSessionKey(smartAccountAddress, {
         serializedPermission,
         sessionPrivateKey,
         sessionKeyAddress,
         expiresAt,
-        allowedProtocols: ACTIVE_PROTOCOLS as unknown as string[],
+        allowedProtocols: protocols,
         force: true,
       });
 

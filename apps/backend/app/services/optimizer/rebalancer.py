@@ -167,12 +167,12 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No spot rates available")
 
-        # 2. Validate with TWAP + DefiLlama + velocity check
+        # 2. Validate with TWAP + velocity check
         spot_rates = {pid: rate.apy for pid, rate in spot_rates_raw.items()}
         validated_rates = await self.rate_validator.validate_all(spot_rates)
         if validated_rates is None:
             return await self._log(db, account_id, "skipped",
-                                   reason="Rate validation failed (sanity/velocity/DefiLlama)")
+                                   reason="Rate validation failed (sanity/velocity)")
 
         # Rebuild ProtocolRate-like mapping with TWAP-smoothed APYs
         twap_rates = {}
@@ -277,10 +277,10 @@ class Rebalancer:
         # 4a. On-chain balance discovery — if allocations table is empty,
         # scan ALL known protocol adapters for existing positions.
         # CRITICAL: must NOT limit to twap_rates/allowed_rates because
-        # protocols that temporarily fail rate validation (e.g. Euler with
-        # high DefiLlama divergence from 9Summits incentives) would be
-        # excluded, causing the rebalancer to miss real on-chain positions
-        # and report "No deposited balance" when funds are deployed.
+        # protocols that temporarily fail rate validation (e.g. velocity
+        # spike) would be excluded, causing the rebalancer to miss real
+        # on-chain positions and report "No deposited balance" when funds
+        # are deployed.
         if not current:
             all_protocol_ids = set(self._protocol_addresses.keys())
             discovered = await self._discover_onchain_balances(
@@ -571,11 +571,9 @@ class Rebalancer:
         # ── 5d. Determine global rebalance flag ─────────────────────
         global_flag = RebalanceFlag.NONE
         for hr in health_results.values():
-            if hr.flag == RebalanceFlag.EMERGENCY_EXIT:
-                global_flag = RebalanceFlag.EMERGENCY_EXIT
-                break
             if hr.flag == RebalanceFlag.FORCED_REBALANCE:
                 global_flag = RebalanceFlag.FORCED_REBALANCE
+                break
 
         if unhealthy_positions and global_flag == RebalanceFlag.NONE:
             global_flag = RebalanceFlag.FORCED_REBALANCE

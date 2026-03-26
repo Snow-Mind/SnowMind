@@ -1,16 +1,14 @@
-"""Rate sanity checks, anomaly detection, and DefiLlama cross-validation.
+"""Rate sanity checks, anomaly detection, and TWAP smoothing.
 
 Validation pipeline (per rate):
   1. Sanity bound  →  0 < rate < 25 %   (REJECT if violated)
   2. Spike check   →  compare against TWAP history (WARN + use TWAP)
-  3. DefiLlama     →  cross-validate (WARN if >2 % divergence)
 """
 
 import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-import httpx
 from supabase import Client
 
 from app.core.config import get_settings
@@ -26,16 +24,6 @@ class ValidationResult:
     is_valid: bool
     use_rate: Decimal          # the final rate the caller should use
     warnings: list[str] = field(default_factory=list)
-
-
-# DefiLlama pool-ID mapping for Avalanche mainnet pools.
-# Missing pool IDs are treated as non-fatal and only skip cross-validation.
-_DEFILLAMA_POOL_MAP: dict[str, str] = {
-    "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",
-    "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",
-    "spark":   "e96cbd55-a0a0-446a-89ba-ada6e2991d50",
-    "euler_v2": "e1db168e-7c9d-4285-9d3f-ba83a9ecf105",
-}
 
 
 class RateValidator:
@@ -97,11 +85,6 @@ class RateValidator:
                 # Keep the spot rate but flag it
                 warnings.append("Proceeding with caution — no TWAP fallback")
 
-        # ── Stage 3: DefiLlama cross-validation ─────────────────────────
-        defillama_warnings = await self._cross_validate_defillama(
-            protocol_id, use_rate
-        )
-        warnings.extend(defillama_warnings)
 
         # Persist the snapshot for future TWAP
         await self._twap.record_snapshot(protocol_id, rate, source)
@@ -143,63 +126,3 @@ class RateValidator:
             len(rates),
         )
         return accepted
-
-    # ── DefiLlama cross-validation ───────────────────────────────────────────
-
-    async def _cross_validate_defillama(
-        self, protocol_id: str, on_chain_rate: Decimal
-    ) -> list[str]:
-        """Compare on-chain rate against DefiLlama yield API."""
-        pool_id = _DEFILLAMA_POOL_MAP.get(protocol_id)
-        if pool_id is None:
-            return []  # no mapping → skip
-
-        base = self._settings.DEFILLAMA_BASE_URL.rstrip("/")
-        threshold = Decimal(str(self._settings.RATE_DIVERGENCE_THRESHOLD))
-        url = f"{base}/chart/{pool_id}"
-
-        warnings: list[str] = []
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                data = resp.json()
-
-            # DefiLlama ``/chart/{pool}`` returns ``{status, data: [{...}]}``
-            points = data.get("data") or []
-            if not points:
-                return []
-
-            latest = points[-1]
-            dl_apy = Decimal(str(latest.get("apy", latest.get("apyBase", 0))))
-            if dl_apy <= 0:
-                return []
-
-            # Convert on-chain rate (decimal, e.g. 0.045) to percentage if
-            # DefiLlama reports in percent (e.g. 4.5).
-            on_chain_pct = on_chain_rate * 100
-            divergence = abs(on_chain_pct - dl_apy) / dl_apy
-
-            if divergence > threshold:
-                msg = (
-                    f"DefiLlama divergence for {protocol_id}: "
-                    f"on_chain={on_chain_pct:.4f}% vs DL={dl_apy:.4f}% "
-                    f"(Δ={divergence:.4f} > {threshold})"
-                )
-                logger.warning(msg)
-                warnings.append(msg)
-
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "DefiLlama cross-validation failed for %s: %s",
-                protocol_id,
-                exc,
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.warning(
-                "DefiLlama response parsing error for %s: %s",
-                protocol_id,
-                exc,
-            )
-
-        return warnings

@@ -3,7 +3,6 @@
 Covers:
 - TWAP outlier exclusion (flash-loan defence)
 - Rate sanity bounds (>25 % rejection)
-- DefiLlama cross-validation divergence warning
 - In-memory rate limiter (429 on 101st req in 60 s)
 - Session key encrypt/decrypt round-trip
 - Session key expiry monitoring
@@ -81,58 +80,7 @@ async def test_rate_30pct_rejected():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. DefiLlama cross-validation — 3 % divergence triggers warning
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_defillama_divergence_warning():
-    """If DefiLlama APY diverges >2 % from on-chain, a warning is generated."""
-    from app.services.oracle.validator import RateValidator
-
-    mock_db = MagicMock()
-    validator = RateValidator(mock_db)
-
-    # Stub out spike detection + TWAP recording so they don't touch DB
-    validator._twap.detect_rate_spike = AsyncMock(return_value=False)
-    validator._twap.record_snapshot = AsyncMock()
-
-    # Stub _cross_validate_defillama to simulate a 3 % divergence
-    on_chain_rate = Decimal("0.045")  # 4.5 %
-    # DefiLlama says 4.0 % → divergence = |4.5 - 4.0| / 4.0 = 12.5 %
-    defillama_response = {
-        "status": "success",
-        "data": [{"apy": 4.0, "timestamp": "2026-01-01"}],
-    }
-
-    with patch("app.services.oracle.validator.httpx.AsyncClient") as MockClient:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = defillama_response
-        mock_resp.raise_for_status = MagicMock()
-
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.return_value = mock_resp
-        mock_client_instance.__aenter__ = AsyncMock(
-            return_value=mock_client_instance
-        )
-        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
-        MockClient.return_value = mock_client_instance
-
-        result = await validator.validate_single_rate(
-            "aave_v3", on_chain_rate, source="on_chain"
-        )
-
-    assert result.is_valid is True
-    # Should have a DefiLlama divergence warning
-    divergence_warnings = [
-        w for w in result.warnings if "DefiLlama divergence" in w
-    ]
-    assert len(divergence_warnings) == 1
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 4. Rate limiter — 101st request in 60 s returns blocked
+# 3. Rate limiter — 101st request in 60 s returns blocked
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -151,7 +99,7 @@ def test_rate_limiter_blocks_101st():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. Session key encrypt → decrypt round-trip
+# 4. Session key encrypt → decrypt round-trip
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -182,7 +130,7 @@ def test_session_key_roundtrip():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 6. Session key monitoring — key expiring in 5 days appears
+# 5. Session key monitoring — key expiring in 5 days appears
 # ═══════════════════════════════════════════════════════════════════════════════
 
 

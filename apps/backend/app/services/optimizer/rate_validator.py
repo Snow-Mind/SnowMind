@@ -1,9 +1,7 @@
 # apps/backend/app/services/optimizer/rate_validator.py
 # Implements all three safety layers from Section 8 of the deep-dive doc.
 
-import asyncio
 import time
-import httpx
 from decimal import Decimal
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -22,43 +20,21 @@ class RateReading:
 
 class RateValidator:
     """
-    Implements the three safety requirements from deep-dive doc Section 8.2, 8.3:
+    Implements safety requirements from deep-dive doc Section 8.2, 8.3:
     1. TWAP: 10–15 min average, not spot reads
-    2. DefiLlama cross-validation: divergence > 2% → halt
-    3. Rate velocity check: spike > X% between reads → flag
+    2. Rate velocity check: spike > X% between reads → flag
     """
 
     TWAP_WINDOW_SECONDS = 900        # 15 minutes
-    DEFILLAMA_DIVERGENCE_THRESHOLD = Decimal("0.15")  # 15% default for lending pools
     VELOCITY_SPIKE_THRESHOLD = Decimal("0.25")        # 25% jump between reads
     SANITY_MAX_APY = Decimal("0.25")                  # 25% APY — flag anything above
     MAX_SINGLE_MOVE_PCT = Decimal("0.30")             # Doc: cap single rebalance at 30%
-
-    # Protocol IDs to DefiLlama pool IDs on Avalanche
-    DEFILLAMA_POOL_IDS = {
-        "aave_v3": "c4b05318-88af-4536-a834-f5fc8940d2d3",   # Aave v3 Avalanche USDC
-        "benqi":   "ff59b165-64e0-4868-a6db-6049b5135358",   # Benqi USDC
-        "euler_v2": "e1db168e-7c9d-4285-9d3f-ba83a9ecf105",  # Euler V2 Avalanche USDC
-        "spark":   "e96cbd55-a0a0-446a-89ba-ada6e2991d50",   # Spark Savings Avalanche USDC
-    }
-
-    # Vault-style protocols (convertToAssets / share-price based APY) have
-    # naturally higher divergence from DefiLlama because their on-chain rate
-    # is a point-in-time daily delta while DefiLlama averages over longer
-    # periods.  Use a wider threshold for these to avoid false halts.
-    _PROTOCOL_DIVERGENCE_OVERRIDES: dict[str, Decimal] = {
-        "spark":             Decimal("0.20"),  # 20% — now using actual elapsed time, tighter is safe
-        "euler_v2":          Decimal("1.50"),  # 150% — 9Summits incentive rewards add ~2-3% on top of base lending rate, causing on-chain APY to be 50-80% higher than DefiLlama (which reports base only). Sanity check (25% max APY) still guards against extreme values.
-        "silo_savusd_usdc":  Decimal("0.25"),  # 25% — Silo vault (tightened from 30%)
-        "silo_susdp_usdc":   Decimal("0.25"),  # 25% — Silo vault (tightened from 30%)
-    }
 
     def __init__(self):
         self._settings = get_settings()
         self._readings: dict[str, deque[RateReading]] = defaultdict(
             lambda: deque(maxlen=50)
         )
-        self._defillama_cache: dict[str, tuple[Decimal, float]] = {}
 
     def record_reading(self, protocol_id: str, apy: Decimal) -> None:
         self._readings[protocol_id].append(RateReading(
@@ -136,69 +112,6 @@ class RateValidator:
             return False
         return True
 
-    async def validate_with_defillama(
-        self, protocol_id: str, on_chain_apy: Decimal
-    ) -> bool:
-        """
-        Doc: "Compare on-chain reads with DefiLlama API. If diverge > 2%, halt."
-        Returns True if validated, False if divergence too high.
-        """
-        pool_id = self.DEFILLAMA_POOL_IDS.get(protocol_id)
-        if not pool_id:
-            logger.warning("No DefiLlama pool ID for %s, skipping validation", protocol_id)
-            return True  # Cannot validate, assume OK
-
-        # Cache DefiLlama response for 5 minutes (it's slow)
-        cached = self._defillama_cache.get(protocol_id)
-        if cached and time.time() - cached[1] < 300:
-            defillama_apy = cached[0]
-        else:
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(
-                        f"https://yields.llama.fi/chart/{pool_id}"
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    points = data.get("data") or []
-                    if not points:
-                        logger.debug("DefiLlama returned empty data for %s", protocol_id)
-                        return True
-                    # Latest APY from DefiLlama (as decimal, not percent)
-                    latest_apy = points[-1].get("apy", points[-1].get("apyBase", 0))
-                    defillama_apy = Decimal(str(latest_apy)) / Decimal("100")
-                    self._defillama_cache[protocol_id] = (defillama_apy, time.time())
-            except Exception as e:
-                logger.warning("DefiLlama check failed for %s: %s", protocol_id, e)
-                return True  # Network failure — don't block on it
-
-        if defillama_apy == 0:
-            return True
-
-        threshold = self._PROTOCOL_DIVERGENCE_OVERRIDES.get(
-            protocol_id, self.DEFILLAMA_DIVERGENCE_THRESHOLD
-        )
-        divergence = abs(on_chain_apy - defillama_apy) / defillama_apy
-        if divergence > threshold:
-            logger.warning(
-                "DefiLlama divergence on %s: on-chain=%.2f%% DefiLlama=%.2f%% "
-                "divergence=%.1f%% > threshold=%.0f%% — skipping this cycle",
-                protocol_id,
-                float(on_chain_apy * 100),
-                float(defillama_apy * 100),
-                float(divergence * 100),
-                float(threshold * 100),
-            )
-            return False
-
-        logger.info(
-            "DefiLlama validated %s: on-chain=%.2f%% ≈ DefiLlama=%.2f%%",
-            protocol_id,
-            float(on_chain_apy * 100),
-            float(defillama_apy * 100),
-        )
-        return True
-
     async def validate_all(
         self, rates: dict[str, Decimal]
     ) -> dict[str, Decimal] | None:
@@ -224,12 +137,7 @@ class RateValidator:
             # 3. Record reading (for TWAP accumulation)
             self.record_reading(protocol_id, spot_apy)
 
-            # 4. DefiLlama validation
-            if not await self.validate_with_defillama(protocol_id, spot_apy):
-                logger.warning("Skipping %s this cycle due to DefiLlama divergence", protocol_id)
-                continue  # Exclude this protocol, don't halt entirely
-
-            # 5. Get TWAP rate (fallback to spot if insufficient history)
+            # 4. Get TWAP rate (fallback to spot if insufficient history)
             twap = self.get_twap(protocol_id)
             twap_rates[protocol_id] = twap if twap is not None else spot_apy
 

@@ -9,7 +9,7 @@ Aave/Benqi checks:
   - Reserve/comptroller pause flags
   - Utilization > 90% → HIGH_UTILIZATION (exclude from new deposits)
   - Velocity check: >25% APY change in 30 min → exclude
-  - Exploit detection: APY > 2× yesterday avg AND utilization > 90% → EMERGENCY_EXIT
+  - Exploit detection: APY > 2× yesterday avg AND utilization > 90% → FORCED_REBALANCE
   - Sanity bound: TWAP APY > 25% → exclude
   - 7-day stability: >50% relative swing → exclude from new deposits
   - TVL cap auto-withdraw: position > 15% of pool TVL → FORCED_REBALANCE
@@ -38,8 +38,7 @@ logger = logging.getLogger("snowmind.health_checker")
 class RebalanceFlag(Enum):
     """Flags that affect rebalance behavior."""
     NONE = "none"
-    FORCED_REBALANCE = "forced_rebalance"     # Bypass steps 3, 16, 18
-    EMERGENCY_EXIT = "emergency_exit"          # Bypass steps 3, 16, 18 + immediate action
+    FORCED_REBALANCE = "forced_rebalance"     # Bypass beat-margin, time-cooldown, delta gates
 
 
 @dataclass
@@ -84,7 +83,7 @@ async def check_protocol_health(
     if protocol_health.status == ProtocolStatus.EMERGENCY:
         result.is_healthy = False
         result.is_deposit_safe = False
-        result.flag = RebalanceFlag.EMERGENCY_EXIT
+        result.flag = RebalanceFlag.FORCED_REBALANCE
         result.exclusion_reasons.append(
             f"EMERGENCY: {protocol_health.details}"
         )
@@ -114,7 +113,7 @@ async def check_protocol_health(
 
     # ── FORCED_REBALANCE if paused/frozen with active position ────────
     if not result.is_deposit_safe and current_position > 0:
-        if result.flag != RebalanceFlag.EMERGENCY_EXIT:
+        if result.flag != RebalanceFlag.FORCED_REBALANCE:
             result.flag = RebalanceFlag.FORCED_REBALANCE
 
     # ── Circuit breaker (step 13 — all protocols) ────────────────────
@@ -157,7 +156,7 @@ async def check_protocol_health(
         ):
             result.is_healthy = False
             result.is_deposit_safe = False
-            result.flag = RebalanceFlag.EMERGENCY_EXIT
+            result.flag = RebalanceFlag.FORCED_REBALANCE
             result.exclusion_reasons.append(
                 f"EXPLOIT SUSPECTED: APY {float(apy_multiplier):.1f}× yesterday + "
                 f"utilization {float(protocol_health.utilization * 100):.1f}%"
@@ -165,7 +164,7 @@ async def check_protocol_health(
             if current_position > 0:
                 logger.critical(
                     "EXPLOIT SUSPECTED on %s — APY %.1fx yesterday avg, "
-                    "utilization %.1f%%. Flagging EMERGENCY_EXIT.",
+                    "utilization %.1f%%. Flagging FORCED_REBALANCE.",
                     protocol_id,
                     float(apy_multiplier),
                     float(protocol_health.utilization * 100),
