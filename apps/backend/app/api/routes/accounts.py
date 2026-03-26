@@ -446,6 +446,10 @@ async def store_account_session_key(
         raise HTTPException(status_code=400, detail=str(exc))
     logger.info("Session key stored via /session-key endpoint for %s (key_id=%s)", address, key_id)
 
+    # Trigger immediate rebalance so idle USDC gets deployed right away
+    # (same as register endpoint). The per-account lock prevents duplicates.
+    asyncio.create_task(_trigger_initial_rebalance(account_id, address))
+
     # Optionally record initial allocation
     if req.initial_allocation:
         for protocol_id, amount_str in req.initial_allocation.items():

@@ -743,7 +743,15 @@ export async function grantAndSerializeSessionKey(
   // DEADLOCK (AA23 in regular mode + duplicate permissionHash in enable mode).
   // 10 AVAX supports ~250-1000 operations — enough for months of rebalancing.
   // The rate limit policy (maxOpsPerDay) independently caps daily operations.
-  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) })
+  //
+  // UNIQUE NONCE: Kernel v3.1 computes permissionHash = hash(policies). If a
+  // user re-grants with identical policies, the hash collides with the existing
+  // on-chain permission → enable mode fails ("duplicate permissionHash") and
+  // regular mode fails (new permissionId never installed). Adding a small
+  // unique nonce (~1-2 microAVAX) to the gas limit produces a distinct hash
+  // each grant while keeping the effective cap at ~10 AVAX.
+  const gasNonce = BigInt(Date.now() % 1_000_000_000)
+  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) + gasNonce })
 
   // Rate limit: max rebalances per day
   const rateLimitPolicy = toRateLimitPolicy({

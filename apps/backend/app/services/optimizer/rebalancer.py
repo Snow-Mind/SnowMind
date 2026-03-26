@@ -950,7 +950,7 @@ class Rebalancer:
                 if account_id:
                     db = get_supabase()
                     old_keys = get_deactivated_session_key_records(
-                        db, UUID(account_id), limit=5
+                        db, UUID(account_id), limit=50
                     )
                     for old_key in old_keys:
                         try:
