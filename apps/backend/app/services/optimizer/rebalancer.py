@@ -938,6 +938,23 @@ class Rebalancer:
                 )
                 raise
 
+            # EnableNotApproved from the ACTIVE key means the enable signature
+            # is fundamentally invalid. Skip recovery loop — old keys will also
+            # fail. Deactivate immediately so we stop retrying.
+            if "EnableNotApproved" in err_msg:
+                logger.warning(
+                    "EnableNotApproved for %s — enable signature invalid. "
+                    "Deactivating session key. User must re-grant.",
+                    smart_account_address,
+                )
+                if account_id:
+                    db = get_supabase()
+                    revoke_session_key(db, UUID(account_id))
+                raise ValueError(
+                    f"Session key invalid for {smart_account_address} — "
+                    f"EnableNotApproved, revoked"
+                ) from exc
+
             # PERMISSION_RECOVERY_NEEDED: The current session key can't install
             # its permission (duplicate hash from a previous grant) and can't
             # use regular mode (different permissionId). Try deactivated keys
@@ -1028,19 +1045,25 @@ class Rebalancer:
 
             # Only revoke on errors that definitively mean the session key
             # itself is corrupt, expired, or for the wrong account.
-            # NOTE: "EnableNotApproved" is NOT a definitive session key error —
-            # it can be caused by paymaster gas estimation triggering validateUserOp
-            # with dummy signatures (transient config issue). Revoking on this
-            # destroys the user's valid session key permanently.
+            #
+            # EnableNotApproved: The Kernel contract's _checkApproval rejects
+            # the enable signature — ecrecover(typedDataHash, enableSig) does
+            # NOT match the on-chain ECDSA validator owner. This is a definitive
+            # session key error: the blob's enable signature is invalid and no
+            # amount of retrying will fix it. Old keys will also fail because
+            # they use different enable signatures that are equally invalid.
+            # Deactivate and require re-grant.
             is_definite_session_key_error = (
-                "serializedSessionKey" in err_msg
+                "EnableNotApproved" in err_msg
+                or "serializedSessionKey" in err_msg
                 or "No signer" in err_msg
                 or "Session key/account mismatch" in err_msg
             )
             if is_definite_session_key_error:
                 logger.warning(
-                    "Invalid session key for %s — revoking",
+                    "Definitive session key error for %s — revoking. Error: %s",
                     smart_account_address,
+                    err_msg[:300],
                 )
                 if account_id:
                     db = get_supabase()
