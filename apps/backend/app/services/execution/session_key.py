@@ -289,9 +289,15 @@ def store_session_key(
     # Multiple active keys cause race conditions when concurrent rebalance
     # attempts pick up different keys with different permissionHashes.
     try:
-        db.table("session_keys").update(
+        deactivate_result = db.table("session_keys").update(
             {"is_active": False}
         ).eq("account_id", str(account_id)).eq("is_active", True).execute()
+        deactivated_count = len(deactivate_result.data) if deactivate_result.data else 0
+        if deactivated_count > 0:
+            logger.info(
+                "Deactivated %d old session key(s) for account %s before storing new key",
+                deactivated_count, account_id,
+            )
     except Exception as exc:
         logger.warning("Failed to deactivate old session keys for %s: %s", account_id, exc)
 

@@ -636,13 +636,56 @@ export async function executeRebalance({
     }))
   }
 
-  // ── Smart mode selection ──
-  // If the blob contains an enableSignature, try enable mode FIRST.
-  // This handles the common case where the session key has never been
-  // enabled on-chain (first rebalance after granting).
-  // If the blob does NOT have an enableSignature (or isPreInstalled=true),
-  // the permission was already enabled → use regular mode.
-  const useEnableModeFirst = blobHasEnableSig
+  // ── Smart mode selection with on-chain pre-check ──
+  // Check on-chain nonce to detect if the permission was already enabled.
+  // If nonce > 0 AND enableSignature is present, the permission was likely
+  // already registered in a prior UserOp → skip enable mode (prevents
+  // "duplicate permissionHash" errors) and go directly to regular mode.
+  let useEnableModeFirst = blobHasEnableSig
+  let onchainNonceForModeSelection = 0
+  try {
+    const tempPublicClient = createPublicClient({
+      chain: CHAIN,
+      transport: http(process.env.AVALANCHE_RPC_URL),
+    })
+    const nonce = await tempPublicClient.readContract({
+      address: smartAccountAddress,
+      abi: [{
+        name: "currentNonce",
+        type: "function",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ type: "uint32" }],
+      }],
+      functionName: "currentNonce",
+    })
+    onchainNonceForModeSelection = Number(nonce)
+    if (onchainNonceForModeSelection > 0 && blobHasEnableSig) {
+      // Account has already processed at least one UserOp.
+      // The permission was likely enabled in a prior tx.
+      // Skip enable mode to avoid "duplicate permissionHash" errors.
+      useEnableModeFirst = false
+      console.log(JSON.stringify({
+        level: "info",
+        action: "mode_selection_nonce_override",
+        smartAccountAddress,
+        onchainNonce: onchainNonceForModeSelection,
+        detail: "On-chain nonce > 0: permission likely already enabled. Forcing regular mode to avoid duplicate permissionHash.",
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  } catch (nonceErr) {
+    // If nonce query fails (e.g. account not deployed), fall through to
+    // the enable mode path which handles deployment + enable in one UserOp.
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "mode_selection_nonce_query_failed",
+      smartAccountAddress,
+      error: nonceErr?.message?.slice(0, 200),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
   const initialForceRegular = !useEnableModeFirst
 
   console.log(JSON.stringify({
@@ -651,9 +694,12 @@ export async function executeRebalance({
     smartAccountAddress,
     useEnableModeFirst,
     initialForceRegular,
+    onchainNonce: onchainNonceForModeSelection,
     reason: useEnableModeFirst
-      ? "Blob contains enableSignature → try enable mode first to register permission on-chain"
-      : "Blob has no enableSignature → permission should already be on-chain, using regular mode",
+      ? "Blob contains enableSignature + nonce=0 → try enable mode first to register permission on-chain"
+      : onchainNonceForModeSelection > 0
+        ? "On-chain nonce > 0 → permission likely already enabled, using regular mode"
+        : "Blob has no enableSignature → permission should already be on-chain, using regular mode",
     timestamp: new Date().toISOString(),
   }))
 
@@ -1408,6 +1454,22 @@ export async function executeRebalance({
         // Extract structured bundler error info for retry error
         const retryBundlerInfo = extractBundlerErrorInfo(retryErr)
 
+        // Walk the retry error chain for full diagnostics
+        const retryErrChain = []
+        let retryErrWalk = retryErr
+        for (let depth = 0; retryErrWalk && depth < 5; depth++) {
+          retryErrChain.push({
+            depth,
+            name: retryErrWalk?.name,
+            shortMessage: retryErrWalk?.shortMessage,
+            message: retryErrWalk?.message?.slice(0, 5000),
+            details: retryErrWalk?.details?.slice(0, 5000),
+            code: retryErrWalk?.code,
+            metaMessages: retryErrWalk?.metaMessages,
+          })
+          retryErrWalk = retryErrWalk?.cause
+        }
+
         console.error(JSON.stringify({
           level: "error", action: "both_modes_failed",
           smartAccountAddress,
@@ -1424,6 +1486,7 @@ export async function executeRebalance({
           retryCauseDetails: retryErr?.cause?.details?.slice(0, 3000),
           retryDeepCause: retryErr?.cause?.cause?.message?.slice(0, 2000),
           retryBundlerInfo,
+          retryErrorChain: retryErrChain,
           hasDuplicateHash,
           hasInvalidNonce,
           hasEnableNotApproved,
@@ -1433,12 +1496,33 @@ export async function executeRebalance({
         }))
 
         // Determine the most useful error message
+        // Check if PRIMARY (enable) failed with duplicate permissionHash
+        const primaryText = [err?.shortMessage, err?.message,
+          err?.details, err?.cause?.message, err?.cause?.details]
+          .filter(Boolean).join(" ").toLowerCase()
+        const primaryHasDuplicateHash = primaryText.includes("duplicate permissionhash")
+
         if (hasEnableNotApproved) {
           throw new Error(
             "EnableNotApproved: The enable signature in the serialized permission blob is " +
             "invalid or was signed by a different key than the on-chain ECDSA validator owner. " +
             "The user must re-grant the session key from the dashboard. " +
             `Enable error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
+          )
+        }
+        // Deadlock: enable failed with "duplicate permissionHash" AND regular also failed.
+        // This means the permission was previously enabled with this permissionId, but
+        // the on-chain validator state is inconsistent (e.g. isInitialized=false).
+        // The user MUST re-grant a new session key (which produces a new signer address
+        // → new permissionId → new permissionHash) to break the deadlock.
+        if (primaryHasDuplicateHash && retryForceRegular) {
+          throw new Error(
+            "DEADLOCK: Permission permissionHash is already on-chain (enable: duplicate permissionHash) " +
+            "but regular mode also failed (AA23: validator state inconsistent). " +
+            "The session key's signer/permissionId may be stale. " +
+            "The user MUST re-grant the session key from the dashboard to generate a new signer " +
+            "and produce a fresh permissionId. " +
+            `Regular error: ${retryErr?.shortMessage || retryErr?.message || "unknown"}`
           )
         }
         if (hasDuplicateHash && !retryForceRegular) {
@@ -1461,18 +1545,21 @@ export async function executeRebalance({
         // ── Retry 2: both modes failed — try WITHOUT paymaster ──────────
         // The paymaster can cause "UserOperation reverted during simulation"
         // if its validatePaymasterUserOp reverts. This masks the real error.
-        // Try enable mode without paymaster to rule out paymaster issues.
+        // Always use regular mode here: if enable mode failed with
+        // "duplicate permissionHash", the permission is already on-chain,
+        // so regular mode is the only viable path.
+        const noPaymasterForceRegular = true
         console.log(JSON.stringify({
           level: "warn", action: "both_modes_failed_trying_no_paymaster",
           smartAccountAddress,
-          mode: useEnableModeFirst ? "enable" : "regular",
+          mode: noPaymasterForceRegular ? "regular" : "enable",
           timestamp: new Date().toISOString(),
         }))
         try {
           const { client: noPaymasterClient } = await getKernelClient(
             serializedPermission,
             sessionPrivateKey || "",
-            { withPaymaster: false, forceRegularMode: !useEnableModeFirst },
+            { withPaymaster: false, forceRegularMode: noPaymasterForceRegular },
           )
           const noPaymasterTxHash = await noPaymasterClient.sendTransaction({ calls })
           console.log(JSON.stringify({
