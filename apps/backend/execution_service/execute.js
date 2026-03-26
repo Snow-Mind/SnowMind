@@ -463,19 +463,17 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     bundlerTransport: http(BUNDLER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
   }
 
-  // Permission accounts use the { getPaymasterData } wrapper pattern.
-  // This matches the official ZeroDev transaction-automation example.
-  // The wrapper ensures the SDK calls getPaymasterData at the right phase.
+  // Pass the ZeroDev paymaster client directly — NOT wrapped in { getPaymasterData }.
+  // The wrapper pattern was missing getPaymasterStubData, which meant gas estimation
+  // for enable-mode UserOps (with ~20KB enableData) ran WITHOUT paymaster context,
+  // producing wrong gas estimates that the paymaster rejected (AA00).
+  // Passing the client directly matches the frontend (deployInitialViaPermissionAccount)
+  // which successfully installed permissions via enable mode.
   if (options.withPaymaster) {
-    const paymasterClient = createZeroDevPaymasterClient({
+    clientConfig.paymaster = createZeroDevPaymasterClient({
       chain: CHAIN,
       transport: http(PAYMASTER_URL, { fetchOptions: ZERODEV_FETCH_OPTIONS }),
     })
-    clientConfig.paymaster = {
-      getPaymasterData(userOperation) {
-        return paymasterClient.sponsorUserOperation({ userOperation })
-      },
-    }
   }
 
   const client = createKernelAccountClient(clientConfig)
@@ -1582,8 +1580,10 @@ export async function executeRebalance({
         //   Scenario B (regular-first / nonce pre-check): primary=AA23, retry=duplicate permissionHash
         // In both cases the permission is on-chain but the validator can't validate it.
         // The user MUST re-grant a new session key (new signer → new permissionId → new permissionHash).
+        // NOTE: must check for specific "duplicate permissionhash" text, NOT just retryForceRegular,
+        // because retryForceRegular is always true when primary is enable mode (too broad).
         const isDeadlock =
-          (primaryHasDuplicateHash && (retryHasAA23 || retryForceRegular)) ||
+          (primaryHasDuplicateHash && retryHasAA23) ||
           (hasDuplicateHash && primaryHasAA23)
         if (isDeadlock) {
           const regularErr = retryForceRegular
@@ -1619,10 +1619,10 @@ export async function executeRebalance({
         // ── Retry 2: both modes failed — try WITHOUT paymaster ──────────
         // The paymaster can cause "UserOperation reverted during simulation"
         // if its validatePaymasterUserOp reverts. This masks the real error.
-        // Always use regular mode here: if enable mode failed with
-        // "duplicate permissionHash", the permission is already on-chain,
-        // so regular mode is the only viable path.
-        const noPaymasterForceRegular = true
+        // If the primary was enable mode and failed (no duplicate hash), try
+        // enable mode again without paymaster to get the raw contract revert.
+        // If primary had duplicate hash → permission is on-chain → use regular.
+        const noPaymasterForceRegular = primaryHasDuplicateHash || !useEnableModeFirst
         console.log(JSON.stringify({
           level: "warn", action: "both_modes_failed_trying_no_paymaster",
           smartAccountAddress,
