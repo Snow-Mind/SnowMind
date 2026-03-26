@@ -398,6 +398,7 @@ export async function grantAndSerializeSessionKey(
   sessionPrivateKey:    string   // Hex private key — store encrypted alongside approval
   sessionKeyAddress:    string
   expiresAt:            number   // Unix timestamp
+  permissionAccount:    KernelAccountLike  // Use to deploy via session key (no wallet popup)
 }> {
   const publicClient = getPublicClient()
   const maxAmount    = parseUnits(config.maxAmountUSDC.toString(), 6)
@@ -869,10 +870,132 @@ export async function grantAndSerializeSessionKey(
     sessionPrivateKey,
     sessionKeyAddress: sessionKeyAccount.address,
     expiresAt,
+    permissionAccount,
   }
 }
 
-// ── 4. Immediate initial deployment (sudo path) ─────────────────────────────
+// ── 4a. Deploy initial funds via permission account (session key signs — NO wallet popup) ──
+// The session key signs the UserOp locally using its ephemeral private key.
+// The enable signature (signed by the user in grantAndSerializeSessionKey) is
+// piggybacked on the first UserOp automatically by the SDK.
+// This eliminates one wallet popup compared to using the sudo kernel client.
+
+export async function deployInitialViaPermissionAccount(
+  permissionAccount: KernelAccountLike,
+  smartAccountAddress: `0x${string}`,
+  contracts: {
+    AAVE_POOL: `0x${string}`
+    BENQI_POOL: `0x${string}`
+    SPARK_VAULT: `0x${string}`
+    EULER_VAULT: `0x${string}`
+    SILO_SAVUSD_VAULT: `0x${string}`
+    SILO_SUSDP_VAULT: `0x${string}`
+    USDC: `0x${string}`
+  },
+  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc",
+  amountUsdc: string,
+): Promise<{ txHash: string; explorerUrl: string }> {
+  const amount = parseUnits(amountUsdc, 6)
+
+  // Create kernel client from permission account — session key signs all UserOps
+  const permissionClient = createKernelAccountClient({
+    account: permissionAccount,
+    chain: CHAIN,
+    bundlerTransport: http(BUNDLER_URL),
+    paymaster: createZeroDevPaymasterClient({
+      chain: CHAIN,
+      transport: http(PAYMASTER_URL),
+    }),
+  })
+
+  const calls = [] as Array<{ to: `0x${string}`; value: bigint; data: `0x${string}` }>
+
+  // Approve protocol spender before deposit
+  const spender =
+    protocolId === "aave_v3" ? contracts.AAVE_POOL
+      : protocolId === "benqi" ? contracts.BENQI_POOL
+      : protocolId === "spark" ? contracts.SPARK_VAULT
+      : protocolId === "silo_savusd_usdc" ? contracts.SILO_SAVUSD_VAULT
+      : protocolId === "silo_susdp_usdc" ? contracts.SILO_SUSDP_VAULT
+      : contracts.EULER_VAULT
+
+  calls.push({
+    to: contracts.USDC,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [spender, amount],
+    }),
+  })
+
+  if (protocolId === "aave_v3") {
+    calls.push({
+      to: contracts.AAVE_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: AAVE_POOL_ABI,
+        functionName: "supply",
+        args: [contracts.USDC, amount, smartAccountAddress, 0],
+      }),
+    })
+  } else if (protocolId === "benqi") {
+    calls.push({
+      to: contracts.BENQI_POOL,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: BENQI_ABI,
+        functionName: "mint",
+        args: [amount],
+      }),
+    })
+  } else if (protocolId === "spark") {
+    calls.push({
+      to: contracts.SPARK_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else if (protocolId === "silo_savusd_usdc") {
+    calls.push({
+      to: contracts.SILO_SAVUSD_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else if (protocolId === "silo_susdp_usdc") {
+    calls.push({
+      to: contracts.SILO_SUSDP_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else {
+    calls.push({
+      to: contracts.EULER_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  }
+
+  const txHash = await permissionClient.sendTransaction({ calls })
+  return { txHash, explorerUrl: EXPLORER.tx(txHash) }
+}
+
+// ── 4b. Immediate initial deployment (sudo path — legacy, requires wallet popup) ──
 
 export async function deployInitialToProtocol(
   kernelClient: KernelClientLike,

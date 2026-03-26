@@ -36,7 +36,7 @@ import Image from "next/image";
 import {
   createSmartAccount,
   grantAndSerializeSessionKey,
-  deployInitialToProtocol,
+  deployInitialViaPermissionAccount,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
@@ -460,11 +460,10 @@ export default function OnboardingPage() {
         },
       );
 
-      // Phase 3: Deploy funds to top protocol immediately via sudo kernel client.
-      // This bypasses the session-key enable flow entirely for the initial allocation,
-      // avoiding the "duplicate permissionHash" / EnableNotApproved bundler errors.
-      // IMPORTANT: Only deploy to a protocol the user selected — otherwise the
-      // session key won't cover it and the agent can't manage the position.
+      // Phase 3: Deploy funds to top protocol via permission account (session key signs).
+      // The session key signs the UserOp locally — NO additional wallet popup.
+      // The enable signature from Phase 2 is piggybacked on this first UserOp.
+      // This reduces total wallet popups from 3 to 2 (USDC transfer + enable sign).
       setActivationPhase("deploying-initial-funds");
       const selectedRates = activeRateRows.filter(
         (r) => effectiveSelectedProtocols.has(r.normalizedProtocolId),
@@ -480,8 +479,8 @@ export default function OnboardingPage() {
           .sort((a, b) => b.currentApy - a.currentApy)[0]
           ?.normalizedProtocolId ?? "aave_v3";
       try {
-        const deployResult = await deployInitialToProtocol(
-          kernelClient,
+        const deployResult = await deployInitialViaPermissionAccount(
+          sessionKeyResult.permissionAccount,
           derivedAddr as `0x${string}`,
           {
             AAVE_POOL: CONTRACTS.AAVE_POOL as `0x${string}`,

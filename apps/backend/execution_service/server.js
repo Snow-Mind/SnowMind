@@ -150,6 +150,7 @@ function safeLogBody(body) {
 function validateRebalanceBody(body) {
   const errors = []
   if (!body.serializedPermission) errors.push("serializedPermission is required")
+  if (!body.sessionPrivateKey) errors.push("sessionPrivateKey is required")
   if (!body.smartAccountAddress) errors.push("smartAccountAddress is required")
   if (!body.contracts?.USDC) errors.push("contracts.USDC is required")
   if (!body.withdrawals && !body.deposits) errors.push("withdrawals or deposits required")

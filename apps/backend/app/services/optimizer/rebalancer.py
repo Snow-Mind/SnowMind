@@ -323,14 +323,6 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
-        # Skip dust accounts — no meaningful yield to optimize
-        min_balance = Decimal(str(self.settings.MIN_BALANCE_USD))
-        if total_usd < min_balance:
-            return await self._log(
-                db, account_id, "skipped",
-                reason=f"Balance ${float(total_usd):.2f} below minimum ${float(min_balance):.2f}",
-            )
-
         # ── 4c. Portfolio value circuit breaker ──────────────────────
         # Compare current on-chain value to last recorded value.
         # If portfolio dropped >10% between scheduler ticks, halt and alert.

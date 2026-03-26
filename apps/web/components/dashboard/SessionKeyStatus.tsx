@@ -89,6 +89,7 @@ export default function SessionKeyStatus() {
             USDC: CONTRACTS.USDC,
             TREASURY: CONTRACTS.TREASURY,
             PERMIT2: CONTRACTS.PERMIT2,
+            REGISTRY: CONTRACTS.REGISTRY,
           },
           {
             maxAmountUSDC: 10000,
