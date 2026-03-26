@@ -530,19 +530,40 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
       }))
 
       if (!signerMatchesOwner && recoveredSigner) {
+        const errDetail = "The enable signature recovered a different address than the " +
+          "on-chain ECDSA validator owner. This UserOp WILL fail with " +
+          "EnableNotApproved on-chain. The session key must be re-granted."
         console.error(JSON.stringify({
           level: "error",
           action: "enable_sig_will_fail",
           smartAccount: permissionAccount.address,
-          detail: "The enable signature recovered a different address than the " +
-            "on-chain ECDSA validator owner. This UserOp WILL fail with " +
-            "EnableNotApproved on-chain. The session key must be re-granted.",
+          detail: errDetail,
           recoveredSigner,
           timestamp: new Date().toISOString(),
         }))
+        // Abort early — do not submit UserOp that is guaranteed to fail.
+        // The caller (rebalancer) treats EnableNotApproved as a definitive
+        // session key error and deactivates the key.
+        throw new Error(
+          `EnableNotApproved (pre-check): enable signature signer ${recoveredSigner} ` +
+          `does not match on-chain ECDSA owner. Session key must be re-granted.`
+        )
       }
+    } else {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "enable_data_diagnostic_skipped",
+        hasKpm: !!kpm,
+        hasGetPluginsEnableTypedData: typeof kpm?.getPluginsEnableTypedData,
+        hasGetPluginEnableSignature: typeof kpm?.getPluginEnableSignature,
+        timestamp: new Date().toISOString(),
+      }))
     }
   } catch (enableDiagErr) {
+    // Re-throw if this is our own pre-check abort (EnableNotApproved)
+    if (enableDiagErr?.message?.includes("EnableNotApproved (pre-check)")) {
+      throw enableDiagErr
+    }
     console.log(JSON.stringify({
       level: "warn",
       action: "enable_data_diagnostic_failed",
