@@ -737,9 +737,13 @@ export async function grantAndSerializeSessionKey(
     permissions,
   })
 
-  // Gas policy: total gas cap prevents runaway spending
-  // Kernel doc: "Prevents a runaway agent from burning unlimited gas"
-  const gasPolicy = toGasPolicy({ allowed: parseUnits("0.5", 18) })
+  // Gas policy: lifetime gas cap prevents runaway spending.
+  // Each UserOp on Avalanche can consume ~0.01-0.04 AVAX in gas (gasUsed × gasPrice).
+  // At 0.5 AVAX, the cap is exhausted after ~12-50 operations, causing permanent
+  // DEADLOCK (AA23 in regular mode + duplicate permissionHash in enable mode).
+  // 10 AVAX supports ~250-1000 operations — enough for months of rebalancing.
+  // The rate limit policy (maxOpsPerDay) independently caps daily operations.
+  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) })
 
   // Rate limit: max rebalances per day
   const rateLimitPolicy = toRateLimitPolicy({

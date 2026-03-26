@@ -113,6 +113,7 @@ export default function SessionKeyStatus() {
         expiresAt,
         allowedProtocols: protocols,
         force: true,
+        ownerAddress: wallet.address,
       });
 
       toast.success("Session key granted — agent activated");

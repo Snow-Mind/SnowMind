@@ -177,6 +177,7 @@ export const api = {
       allowedProtocols?: string[];
       initialAllocation?: Record<string, string>;
       force?: boolean;
+      ownerAddress?: string;
     },
   ) =>
     request<{ success: boolean; keyId: string }>(

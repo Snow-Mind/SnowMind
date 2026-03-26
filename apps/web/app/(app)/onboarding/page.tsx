@@ -36,7 +36,6 @@ import Image from "next/image";
 import {
   createSmartAccount,
   grantAndSerializeSessionKey,
-  deployInitialViaPermissionAccount,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
@@ -76,7 +75,6 @@ type ActivationPhase =
   | "idle"
   | "transferring-usdc"
   | "granting-session-key"
-  | "deploying-initial-funds"
   | "registering-backend"
   | "done"
   | "error";
@@ -85,8 +83,7 @@ const PHASE_LABELS: Record<ActivationPhase, string> = {
   idle: "",
   "transferring-usdc": "Transferring USDC to smart account…",
   "granting-session-key": "Granting agent permissions…",
-  "deploying-initial-funds": "Deploying account & funds to top protocol…",
-  "registering-backend": "Registering with optimizer…",
+  "registering-backend": "Registering & deploying funds…",
   done: "Agent activated — your funds are earning yield!",
   error: "Activation failed",
 };
@@ -460,47 +457,14 @@ export default function OnboardingPage() {
         },
       );
 
-      // Phase 3: Deploy funds to top protocol via permission account (session key signs).
-      // The session key signs the UserOp locally — NO additional wallet popup.
-      // The enable signature from Phase 2 is piggybacked on this first UserOp.
-      // This reduces total wallet popups from 3 to 2 (USDC transfer + enable sign).
-      setActivationPhase("deploying-initial-funds");
-      const selectedRates = activeRateRows.filter(
-        (r) => effectiveSelectedProtocols.has(r.normalizedProtocolId),
-      );
-      // Filter out protocols with utilization > 90% — deploying into a near-full
-      // lending pool carries withdrawal risk (liquidity crunch).
-      const safeRates = selectedRates.filter(
-        (r) => r.utilizationRate == null || r.utilizationRate < 0.90,
-      );
-      const deployProtocol =
-        (safeRates.length > 0 ? safeRates : selectedRates)
-          .slice()
-          .sort((a, b) => b.currentApy - a.currentApy)[0]
-          ?.normalizedProtocolId ?? "aave_v3";
-      try {
-        const deployResult = await deployInitialViaPermissionAccount(
-          sessionKeyResult.permissionAccount,
-          derivedAddr as `0x${string}`,
-          {
-            AAVE_POOL: CONTRACTS.AAVE_POOL as `0x${string}`,
-            BENQI_POOL: CONTRACTS.BENQI_POOL as `0x${string}`,
-            SPARK_VAULT: CONTRACTS.SPARK_VAULT as `0x${string}`,
-            EULER_VAULT: CONTRACTS.EULER_VAULT as `0x${string}`,
-            SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT as `0x${string}`,
-            SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT as `0x${string}`,
-            USDC: CONTRACTS.USDC as `0x${string}`,
-          },
-          deployProtocol as "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc",
-          depositAmount,
-        );
-        console.log("[Onboarding] Initial deployment tx:", deployResult.txHash);
-        toast.success(`Funds deployed to ${deployProtocol}!`);
-      } catch (deployErr) {
-        // Non-fatal: log the error but continue — backend will retry via session key
-        console.warn("[Onboarding] Initial deployment failed (non-fatal):", deployErr);
-        toast.warning("Couldn't deploy funds now — agent will deploy after registration.");
-      }
+      // Phase 3: Skip frontend deployment — backend handles it reliably.
+      // Previously deployInitialViaPermissionAccount() sent a UserOp here,
+      // but the ZeroDev bundler rejects re-onboarding enable-mode UserOps
+      // with "duplicate permissionHash" (bundler mempool deduplication).
+      // The enable signature from Phase 2 is preserved in the serialized
+      // permission blob; the execution service piggybacks it on the first
+      // rebalance UserOp via _trigger_initial_rebalance.
+      console.log("[Onboarding] Skipping frontend deploy — backend handles deployment via session key.");
 
       // Phase 4: Register account with backend — optimizer handles future rebalances
       setActivationPhase("registering-backend");
@@ -1049,8 +1013,8 @@ export default function OnboardingPage() {
                   </div>
 
                   <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                    {(["transferring-usdc", "granting-session-key", "deploying-initial-funds", "registering-backend"] as const).map((phase) => {
-                      const allPhases = ["transferring-usdc", "granting-session-key", "deploying-initial-funds", "registering-backend"] as const;
+                    {(["transferring-usdc", "granting-session-key", "registering-backend"] as const).map((phase) => {
+                      const allPhases = ["transferring-usdc", "granting-session-key", "registering-backend"] as const;
                       const phaseIndex = allPhases.indexOf(phase);
                       const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                       const isDone = currentIndex > phaseIndex || activationPhase === "done";
@@ -1059,8 +1023,7 @@ export default function OnboardingPage() {
                       const icons: Record<string, typeof Shield> = {
                         "transferring-usdc": Wallet,
                         "granting-session-key": Shield,
-                        "deploying-initial-funds": Zap,
-                        "registering-backend": ArrowRight,
+                        "registering-backend": Zap,
                       };
                       const Icon = icons[phase];
 

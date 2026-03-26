@@ -360,6 +360,11 @@ class StoreSessionKeyRequest(BaseModel):
     expires_at: int | str = Field(..., alias="expiresAt")
     allowed_protocols: list[str] | None = Field(None, alias="allowedProtocols")
     force: bool = Field(False, description="Bypass renewal guard and always store the new session key")
+    owner_address: str | None = Field(
+        None,
+        alias="ownerAddress",
+        description="EOA owner address — required to auto-register missing accounts",
+    )
     initial_allocation: dict | None = Field(
         None,
         alias="initialAllocation",
@@ -385,15 +390,43 @@ async def store_account_session_key(
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, is_active")
         .eq("address", address)
         .limit(1)
         .execute()
     )
-    if not acct.data:
-        raise HTTPException(status_code=404, detail="Account not found")
 
-    account_id = acct.data[0]["id"]
+    if acct.data:
+        account_id = acct.data[0]["id"]
+        # Auto-reactivate if deactivated (e.g. after emergency withdrawal)
+        if not acct.data[0].get("is_active", True):
+            db.table("accounts").update({
+                "is_active": True,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", account_id).execute()
+            logger.info("Account %s reactivated via session-key store", address)
+    elif req.owner_address:
+        # Account doesn't exist — auto-register if owner_address is provided.
+        # This handles the case where a full withdrawal deleted the row
+        # and the user re-grants from the dashboard.
+        owner_addr = validate_eth_address(req.owner_address)
+        result = (
+            db.table("accounts")
+            .upsert(
+                {
+                    "address": address,
+                    "owner_address": owner_addr,
+                    "is_active": True,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="address",
+            )
+            .execute()
+        )
+        account_id = result.data[0]["id"]
+        logger.info("Account %s auto-registered via session-key store (owner=%s)", address, owner_addr)
+    else:
+        raise HTTPException(status_code=404, detail="Account not found")
 
     # Store session key
     session_key_data = {

@@ -679,14 +679,17 @@ export async function executeRebalance({
 
       if (blobPermissionIdForMode) {
         // Construct the REGULAR mode nonce key for this permissionId.
-        // Format (uint192): bytes[0-1]=0x0000, byte[2]=0x02 (PERMISSION type),
-        // bytes[3-6]=permissionId, bytes[7-23]=0x00
-        // This matches the nonce key used in UserOps with this permissionId.
+        // Kernel v3.1 nonce layout (uint256 → upper 192 bits = key):
+        //   byte 0 = mode (0x00=default/regular, 0x01=enable)
+        //   byte 1 = validationType (0x02=PERMISSION)
+        //   bytes 2-5 = permissionId (4 bytes)
+        //   bytes 6-23 = zeros
+        // For regular mode queries, byte 0 = 0x00 (default).
         const permIdBigInt = BigInt(blobPermissionIdForMode)
-        const regularNonceKey = (2n << 168n) | (permIdBigInt << 136n)
+        const regularNonceKey = (2n << 176n) | (permIdBigInt << 144n)
 
         const ENTRYPOINT_ADDR = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
-        entryPointNonceForMode = await tempPublicClient.readContract({
+        const fullNonce = await tempPublicClient.readContract({
           address: ENTRYPOINT_ADDR,
           abi: [{
             name: "getNonce",
@@ -699,7 +702,13 @@ export async function executeRebalance({
           args: [smartAccountAddress, regularNonceKey],
         })
 
-        if (entryPointNonceForMode > 0n) {
+        // EntryPoint.getNonce returns (key << 64 | sequenceNumber).
+        // Extract only the sequence number (lower 64 bits) to check
+        // actual usage, because any non-zero key makes the full value > 0.
+        const sequenceNumber = fullNonce & ((1n << 64n) - 1n)
+        entryPointNonceForMode = sequenceNumber
+
+        if (sequenceNumber > 0n) {
           // This permissionId has completed at least one regular-mode UserOp.
           // The permission IS enabled on-chain → skip enable mode.
           useEnableModeFirst = false
@@ -708,9 +717,9 @@ export async function executeRebalance({
             action: "mode_selection_entrypoint_nonce_override",
             smartAccountAddress,
             permissionId: blobPermissionIdForMode,
-            entryPointNonce: entryPointNonceForMode.toString(),
+            entryPointNonce: sequenceNumber.toString(),
             regularNonceKey: "0x" + regularNonceKey.toString(16).padStart(48, "0"),
-            detail: "EntryPoint nonce > 0 for this permissionId's regular-mode key. " +
+            detail: "EntryPoint sequence > 0 for this permissionId's regular-mode key. " +
               "Permission already enabled. Using regular mode.",
             timestamp: new Date().toISOString(),
           }))
@@ -750,11 +759,11 @@ export async function executeRebalance({
     useEnableModeFirst,
     initialForceRegular,
     permissionId: blobPermissionIdForMode,
-    entryPointNonce: entryPointNonceForMode.toString(),
+    entryPointSequence: entryPointNonceForMode.toString(),
     reason: useEnableModeFirst
-      ? "Blob contains enableSignature + EntryPoint nonce=0 → enable mode to register permission on-chain"
+      ? "Blob contains enableSignature + EntryPoint sequence=0 → enable mode to register permission on-chain"
       : entryPointNonceForMode > 0n
-        ? "EntryPoint nonce > 0 for this permissionId → permission already enabled, using regular mode"
+        ? "EntryPoint sequence > 0 for this permissionId → permission already enabled, using regular mode"
         : "Blob has no enableSignature → permission should already be on-chain, using regular mode",
     timestamp: new Date().toISOString(),
   }))

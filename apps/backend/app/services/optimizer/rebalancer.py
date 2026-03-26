@@ -936,14 +936,25 @@ class Rebalancer:
                 )
                 raise
 
-            # DEADLOCK = permission installed on-chain but signer mismatches.
-            # User must re-grant session key from dashboard.
+            # DEADLOCK = gas policy exhausted on-chain → regular mode AA23,
+            # and permission is already installed → enable mode "duplicate permissionHash".
+            # The stored session key can never work again with this permissionId.
+            # Deactivate it so the scheduler stops retrying every cycle.
+            # The user must re-grant from the dashboard (new signer → new permissionId
+            # → fresh gas policy counter).
             if "DEADLOCK" in err_msg:
                 logger.warning(
-                    "DEADLOCK detected for %s — session key signer is stale. "
-                    "User must re-grant session key from dashboard.",
+                    "DEADLOCK detected for %s — gas policy likely exhausted. "
+                    "Deactivating session key. User must re-grant from dashboard.",
                     smart_account_address,
                 )
+                if account_id:
+                    db = get_supabase()
+                    revoke_session_key(db, UUID(account_id))
+                    logger.info(
+                        "Session key deactivated for %s due to DEADLOCK",
+                        smart_account_address,
+                    )
                 raise ValueError(
                     f"DEADLOCK for {smart_account_address} — session key stale, user must re-grant"
                 ) from exc
