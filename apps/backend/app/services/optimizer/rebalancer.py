@@ -323,6 +323,14 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
+        # Skip dust accounts — no meaningful yield to optimize
+        min_balance = Decimal(str(self.settings.MIN_BALANCE_USD))
+        if total_usd < min_balance:
+            return await self._log(
+                db, account_id, "skipped",
+                reason=f"Balance ${float(total_usd):.2f} below minimum ${float(min_balance):.2f}",
+            )
+
         # ── 4c. Portfolio value circuit breaker ──────────────────────
         # Compare current on-chain value to last recorded value.
         # If portfolio dropped >10% between scheduler ticks, halt and alert.
@@ -927,6 +935,26 @@ class Rebalancer:
                     err_msg = exc.response.json().get("error", "")
                 except Exception:
                     err_msg = exc.response.text
+
+            # 429 = execution service concurrency limit — transient, do NOT revoke
+            if exc.response is not None and exc.response.status_code == 429:
+                logger.warning(
+                    "Execution service at capacity (429) for %s — will retry next cycle",
+                    smart_account_address,
+                )
+                raise
+
+            # DEADLOCK = permission installed on-chain but signer mismatches.
+            # User must re-grant session key from dashboard.
+            if "DEADLOCK" in err_msg:
+                logger.warning(
+                    "DEADLOCK detected for %s — session key signer is stale. "
+                    "User must re-grant session key from dashboard.",
+                    smart_account_address,
+                )
+                raise ValueError(
+                    f"DEADLOCK for {smart_account_address} — session key stale, user must re-grant"
+                ) from exc
 
             # Only revoke on errors that definitively mean the session key
             # itself is corrupt, expired, or for the wrong account.

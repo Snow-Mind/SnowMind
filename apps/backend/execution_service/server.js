@@ -4,10 +4,16 @@ import {
 } from "./auth.js"
 import { executeRebalance, executeWithdrawal } from "./execute.js"
 
-const VERSION = "1.5.0"
+const VERSION = "1.5.1"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
 const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 60000)
+const MAX_CONCURRENT_OPS = Number(process.env.MAX_CONCURRENT_OPS || 2)
 const recentNonces = new Map()
+// Global concurrency limiter: each rebalance creates multiple ZeroDev SDK
+// client instances (primary + retry modes, each with HTTP transports and
+// RPC-heavy diagnostics).  Running 3+ concurrently exhausts Node.js heap
+// and causes Railway to kill the process → 503 for all in-flight requests.
+let activeOps = 0
 // Per-sender concurrency lock: prevents two concurrent UserOps for the same
 // smart account from being submitted to the bundler simultaneously.
 // This avoids "duplicate permissionHash" and nonce collision errors.
@@ -97,6 +103,9 @@ app.get("/health", (_req, res) =>
   res.json({
     status: "ok",
     version: VERSION,
+    activeOps,
+    maxConcurrentOps: MAX_CONCURRENT_OPS,
+    activeSenders: activeSenders.size,
     timestamp: new Date().toISOString(),
   }),
 )
@@ -181,6 +190,19 @@ app.post("/execute-rebalance", async (req, res) => {
     return res.status(400).json({ error: "Validation failed", details: validationErrors })
   }
 
+  // Global concurrency guard: reject early if too many ops in-flight
+  if (activeOps >= MAX_CONCURRENT_OPS) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "rebalance_global_concurrency_rejected",
+      smartAccountAddress: req.body.smartAccountAddress,
+      activeOps,
+      maxConcurrentOps: MAX_CONCURRENT_OPS,
+      timestamp: new Date().toISOString(),
+    }))
+    return res.status(429).json({ error: "Too many concurrent operations, retry later" })
+  }
+
   // Per-sender concurrency guard: reject if another UserOp is in-flight
   const sender = req.body.smartAccountAddress?.toLowerCase()
   if (isSenderActive(sender)) {
@@ -194,6 +216,7 @@ app.post("/execute-rebalance", async (req, res) => {
     return res.status(409).json({ error: "Rebalance already in-flight for this account" })
   }
   markSenderActive(sender)
+  activeOps++
 
   try {
     const result = await withTimeout(executeRebalance(req.body), EXECUTION_TIMEOUT_MS)
@@ -224,6 +247,7 @@ app.post("/execute-rebalance", async (req, res) => {
     const status = err.message?.includes("timed out") ? 504 : 500
     res.status(status).json({ error: err.message, code: err.code || "UNKNOWN" })
   } finally {
+    activeOps--
     clearSender(sender)
   }
 })
@@ -233,6 +257,19 @@ app.post("/execute/withdrawal", async (req, res) => {
   const validationErrors = validateWithdrawalBody(req.body)
   if (validationErrors.length > 0) {
     return res.status(400).json({ error: "Validation failed", details: validationErrors })
+  }
+
+  // Global concurrency guard
+  if (activeOps >= MAX_CONCURRENT_OPS) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "withdrawal_global_concurrency_rejected",
+      smartAccountAddress: req.body.smartAccountAddress,
+      activeOps,
+      maxConcurrentOps: MAX_CONCURRENT_OPS,
+      timestamp: new Date().toISOString(),
+    }))
+    return res.status(429).json({ error: "Too many concurrent operations, retry later" })
   }
 
   // Per-sender concurrency guard: same lock as rebalance to prevent
@@ -249,6 +286,7 @@ app.post("/execute/withdrawal", async (req, res) => {
     return res.status(409).json({ error: "Operation already in-flight for this account" })
   }
   markSenderActive(sender)
+  activeOps++
 
   try {
     const result = await withTimeout(executeWithdrawal(req.body), EXECUTION_TIMEOUT_MS)
@@ -274,6 +312,7 @@ app.post("/execute/withdrawal", async (req, res) => {
     const status = err.message?.includes("timed out") ? 504 : 500
     res.status(status).json({ error: err.message, code: err.code || "UNKNOWN" })
   } finally {
+    activeOps--
     clearSender(sender)
   }
 })
