@@ -282,9 +282,10 @@ function extractBundlerErrorInfo(err) {
   const aaMatch = joined.match(/AA(\d{2})/i)
   const aaCode = aaMatch ? `AA${aaMatch[1]}` : null
 
-  // Extract hex revert data (0x followed by hex)
-  const revertMatch = joined.match(/0x[0-9a-fA-F]{8,}/)
-  const revertData = revertMatch ? revertMatch[0].slice(0, 200) : null
+  // Extract hex revert data (only after "reverted" keyword to avoid matching
+  // the sender address or other hex values from the request body)
+  const revertMatch = joined.match(/reverted\s+(0x[0-9a-fA-F]{8,})/)
+  const revertData = revertMatch ? revertMatch[1].slice(0, 200) : null
 
   // Try to decode common Kernel error selectors from revert data
   let decodedKernelError = null
@@ -636,52 +637,106 @@ export async function executeRebalance({
     }))
   }
 
-  // ── Smart mode selection with on-chain pre-check ──
-  // Check on-chain nonce to detect if the permission was already enabled.
-  // If nonce > 0 AND enableSignature is present, the permission was likely
-  // already registered in a prior UserOp → skip enable mode (prevents
-  // "duplicate permissionHash" errors) and go directly to regular mode.
+  // ── Smart mode selection via EntryPoint nonce for this permissionId ──
+  // Previous v1.4.0-1.4.1 used Kernel's currentNonce() which is the internal
+  // CONFIG nonce (incremented by setRootValidator etc.), NOT the EntryPoint
+  // nonce for a specific permissionId. That always returned >0 for deployed
+  // accounts → forced regular mode → broke new/re-granted session keys.
+  //
+  // Correct approach: query EntryPoint.getNonce(account, nonceKey) where the
+  // nonceKey encodes the permissionId. If nonce > 0 for the REGULAR mode key,
+  // this permissionId has already been used successfully → skip enable mode.
+  // If nonce == 0, the permissionId has never been used → try enable mode.
   let useEnableModeFirst = blobHasEnableSig
-  let onchainNonceForModeSelection = 0
+  let entryPointNonceForMode = 0n
+  let blobPermissionIdForMode = null
   try {
-    const tempPublicClient = createPublicClient({
-      chain: CHAIN,
-      transport: http(process.env.AVALANCHE_RPC_URL),
-    })
-    const nonce = await tempPublicClient.readContract({
-      address: smartAccountAddress,
-      abi: [{
-        name: "currentNonce",
-        type: "function",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [{ type: "uint32" }],
-      }],
-      functionName: "currentNonce",
-    })
-    onchainNonceForModeSelection = Number(nonce)
-    if (onchainNonceForModeSelection > 0 && blobHasEnableSig) {
-      // Account has already processed at least one UserOp.
-      // The permission was likely enabled in a prior tx.
-      // Skip enable mode to avoid "duplicate permissionHash" errors.
-      useEnableModeFirst = false
-      console.log(JSON.stringify({
-        level: "info",
-        action: "mode_selection_nonce_override",
-        smartAccountAddress,
-        onchainNonce: onchainNonceForModeSelection,
-        detail: "On-chain nonce > 0: permission likely already enabled. Forcing regular mode to avoid duplicate permissionHash.",
-        timestamp: new Date().toISOString(),
-      }))
+    // Extract permissionId from the blob JSON to construct the nonce key.
+    // The permissionId is not stored directly — we parse it after a quick
+    // deserialization. To avoid a full second deserialization later, we
+    // only do this check if the blob has an enableSig (mode decision matters).
+    if (blobHasEnableSig) {
+      const tempPublicClient = createPublicClient({
+        chain: CHAIN,
+        transport: http(process.env.AVALANCHE_RPC_URL),
+      })
+      // Quick deserialization to extract the permissionId from the validator
+      const tempSigner = await toECDSASigner({
+        signer: privateKeyToAccount(sessionPrivateKey || ""),
+      })
+      const tempAccount = await deserializePermissionAccount(
+        tempPublicClient,
+        ENTRYPOINT,
+        KERNEL_V3_1,
+        serializedPermission,
+        tempSigner,
+      )
+      const tempValidator = tempAccount.kernelPluginManager?.regular
+        || tempAccount.kernelPluginManager?.regularValidator
+      if (tempValidator && typeof tempValidator.getIdentifier === "function") {
+        blobPermissionIdForMode = tempValidator.getIdentifier()
+      }
+
+      if (blobPermissionIdForMode) {
+        // Construct the REGULAR mode nonce key for this permissionId.
+        // Format (uint192): bytes[0-1]=0x0000, byte[2]=0x02 (PERMISSION type),
+        // bytes[3-6]=permissionId, bytes[7-23]=0x00
+        // This matches the nonce key used in UserOps with this permissionId.
+        const permIdBigInt = BigInt(blobPermissionIdForMode)
+        const regularNonceKey = (2n << 168n) | (permIdBigInt << 136n)
+
+        const ENTRYPOINT_ADDR = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+        entryPointNonceForMode = await tempPublicClient.readContract({
+          address: ENTRYPOINT_ADDR,
+          abi: [{
+            name: "getNonce",
+            type: "function",
+            stateMutability: "view",
+            inputs: [{ name: "sender", type: "address" }, { name: "key", type: "uint192" }],
+            outputs: [{ type: "uint256" }],
+          }],
+          functionName: "getNonce",
+          args: [smartAccountAddress, regularNonceKey],
+        })
+
+        if (entryPointNonceForMode > 0n) {
+          // This permissionId has completed at least one regular-mode UserOp.
+          // The permission IS enabled on-chain → skip enable mode.
+          useEnableModeFirst = false
+          console.log(JSON.stringify({
+            level: "info",
+            action: "mode_selection_entrypoint_nonce_override",
+            smartAccountAddress,
+            permissionId: blobPermissionIdForMode,
+            entryPointNonce: entryPointNonceForMode.toString(),
+            regularNonceKey: "0x" + regularNonceKey.toString(16).padStart(48, "0"),
+            detail: "EntryPoint nonce > 0 for this permissionId's regular-mode key. " +
+              "Permission already enabled. Using regular mode.",
+            timestamp: new Date().toISOString(),
+          }))
+        } else {
+          console.log(JSON.stringify({
+            level: "info",
+            action: "mode_selection_entrypoint_nonce_zero",
+            smartAccountAddress,
+            permissionId: blobPermissionIdForMode,
+            entryPointNonce: "0",
+            detail: "EntryPoint nonce = 0 for this permissionId. " +
+              "Permission has NOT been used in regular mode. Using enable mode.",
+            timestamp: new Date().toISOString(),
+          }))
+        }
+      }
     }
   } catch (nonceErr) {
-    // If nonce query fails (e.g. account not deployed), fall through to
-    // the enable mode path which handles deployment + enable in one UserOp.
+    // If nonce query fails (e.g. account not deployed, RPC error),
+    // fall through to enable mode which handles deployment + enable.
     console.log(JSON.stringify({
       level: "warn",
-      action: "mode_selection_nonce_query_failed",
+      action: "mode_selection_entrypoint_nonce_failed",
       smartAccountAddress,
-      error: nonceErr?.message?.slice(0, 200),
+      permissionId: blobPermissionIdForMode,
+      error: nonceErr?.message?.slice(0, 300),
       timestamp: new Date().toISOString(),
     }))
   }
@@ -694,11 +749,12 @@ export async function executeRebalance({
     smartAccountAddress,
     useEnableModeFirst,
     initialForceRegular,
-    onchainNonce: onchainNonceForModeSelection,
+    permissionId: blobPermissionIdForMode,
+    entryPointNonce: entryPointNonceForMode.toString(),
     reason: useEnableModeFirst
-      ? "Blob contains enableSignature + nonce=0 → try enable mode first to register permission on-chain"
-      : onchainNonceForModeSelection > 0
-        ? "On-chain nonce > 0 → permission likely already enabled, using regular mode"
+      ? "Blob contains enableSignature + EntryPoint nonce=0 → enable mode to register permission on-chain"
+      : entryPointNonceForMode > 0n
+        ? "EntryPoint nonce > 0 for this permissionId → permission already enabled, using regular mode"
         : "Blob has no enableSignature → permission should already be on-chain, using regular mode",
     timestamp: new Date().toISOString(),
   }))

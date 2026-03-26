@@ -66,7 +66,7 @@ function TopBar({
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[#E8E2DA] bg-[#FAFAF8]/90 px-6 backdrop-blur-xl">
       {/* Left: Logo */}
-      <Link href="/" className="flex items-center gap-2">
+      <Link href="/dashboard" className="flex items-center gap-2">
         <NeuralSnowflakeLogo className="h-5 w-5" />
         <span className="font-display text-sm font-semibold text-[#E84142]">
           SnowMind
