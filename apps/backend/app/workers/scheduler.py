@@ -175,7 +175,9 @@ class SnowMindScheduler:
 
         logger.info("Processing %d accounts", len(accounts.data))
 
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(1)  # Serialize execution service calls — each
+        # rebalance creates multiple ZeroDev SDK clients (primary + retry modes),
+        # and running 3+ concurrently exhausts Node.js memory → 503.
         results: list[str] = []
 
         async def process(account: dict) -> str:

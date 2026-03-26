@@ -35,7 +35,6 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
 import {
   createSmartAccount,
-  approveAllProtocols,
   grantAndSerializeSessionKey,
   deployInitialToProtocol,
 } from "@/lib/zerodev";
@@ -76,7 +75,6 @@ const ERC20_ABI = [
 type ActivationPhase =
   | "idle"
   | "transferring-usdc"
-  | "deploying-account"
   | "granting-session-key"
   | "deploying-initial-funds"
   | "registering-backend"
@@ -86,9 +84,8 @@ type ActivationPhase =
 const PHASE_LABELS: Record<ActivationPhase, string> = {
   idle: "",
   "transferring-usdc": "Transferring USDC to smart account…",
-  "deploying-account": "Deploying smart account on-chain…",
   "granting-session-key": "Granting agent permissions…",
-  "deploying-initial-funds": "Deploying funds to top protocol…",
+  "deploying-initial-funds": "Deploying account & funds to top protocol…",
   "registering-backend": "Registering with optimizer…",
   done: "Agent activated — your funds are earning yield!",
   error: "Activation failed",
@@ -298,113 +295,47 @@ export default function OnboardingPage() {
       deployGuardRef.current = true;
       setFormStep("strategy");
     } else {
-      // Derive address first (no MetaMask signature), then check backend
-      checkBackendBeforeDeploy();
+      // Derive address locally (no MetaMask signature), then check backend
+      deriveAccountAddress();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientReady, wallet, deployPhase, formStep]);
 
-  // Check if this wallet already has a registered smart account on the backend.
-  // If yes, restore the address and skip the deploy step entirely (no MetaMask popup).
-  // If no, proceed with full handleAccountDeploy for genuinely new users.
-  const checkBackendBeforeDeploy = async () => {
+  // Derive the smart account address locally (no wallet popup).
+  // Check backend to see if this is a returning user.
+  // Account deployment is deferred to the single activation UserOp.
+  const deriveAccountAddress = async () => {
     if (!wallet) return;
     try {
       const { kernelAccount, kernelClient, smartAccountAddress: derivedAddr } = await createSmartAccount(wallet);
-      // Query backend for this derived address
-      try {
-        const accountDetail = await api.getAccountDetail(derivedAddr);
-        if (accountDetail && accountDetail.address && accountDetail.address !== "") {
-          // Backend knows this account — returning user, no need to re-deploy
-          kernelAccountRef.current = kernelAccount;
-          kernelClientRef.current = kernelClient;
-          derivedAddressRef.current = derivedAddr;
-          setSmartAccountAddress(derivedAddr);
-          setDeployPhase("deployed");
-          deployGuardRef.current = true;
-          // If agent is active (has session key + funds), redirect will happen
-          // from layout. If not, let them re-activate from strategy step.
-          if (accountDetail.sessionKey?.isActive) {
-            setAgentActivated(true);
-          }
-          setFormStep("strategy");
-          return;
-        }
-      } catch {
-        // Backend doesn't know this account (404 or error) — new user
-      }
-      // New user — proceed with full deploy
-      handleAccountDeploy();
-    } catch {
-      // createSmartAccount failed — fall back to full deploy
-      handleAccountDeploy();
-    }
-  };
-
-  // Deploy smart account on-chain & approve all protocols (Signature 1)
-  const handleAccountDeploy = async () => {
-    if (!wallet) return;
-    if (deployGuardRef.current) return;
-    deployGuardRef.current = true;
-    setDeployPhase("deploying");
-    setDeployError(null);
-    setOnboardingInProgress(true);
-
-    try {
-      const {
-        kernelAccount,
-        kernelClient,
-        smartAccountAddress: derivedAddr,
-      } = await createSmartAccount(wallet);
-
-      // Store for use in activate step
       kernelAccountRef.current = kernelAccount;
       kernelClientRef.current = kernelClient;
       derivedAddressRef.current = derivedAddr;
+      setSmartAccountAddress(derivedAddr);
 
-      // Always set the derived address in store (covers new users + address drift)
-      if (!smartAccountAddress || derivedAddr.toLowerCase() !== smartAccountAddress.toLowerCase()) {
-        setSmartAccountAddress(derivedAddr);
+      // Query backend for returning user
+      try {
+        const accountDetail = await api.getAccountDetail(derivedAddr);
+        if (accountDetail?.address && accountDetail.sessionKey?.isActive) {
+          setAgentActivated(true);
+        }
+      } catch {
+        // Backend doesn't know this account — new user, that's fine
       }
-
-      // Deploy account on-chain + approve USDC for all protocols.
-      // Use platform beta cap ($50K) to match the session key call policy limit.
-      await approveAllProtocols(kernelClient, {
-        USDC: CONTRACTS.USDC,
-        AAVE_POOL: CONTRACTS.AAVE_POOL,
-        BENQI_POOL: CONTRACTS.BENQI_POOL,
-        SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-        EULER_VAULT: CONTRACTS.EULER_VAULT,
-        SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-        SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-        PERMIT2: CONTRACTS.PERMIT2,
-      }, 50_000);
 
       setDeployPhase("deployed");
-      setOnboardingInProgress(false);
-      toast.success("Smart account deployed & protocols approved!");
+      deployGuardRef.current = true;
+      setFormStep("strategy");
     } catch (err) {
-      deployGuardRef.current = false;
-      setOnboardingInProgress(false);
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("User denied") || msg.includes("User rejected")) {
-        setDeployPhase("idle");
-        toast.error("Deployment cancelled — you can retry.");
-      } else if (msg.includes("codepoint") || msg.includes("UNEXPECTED_CONTINUE")) {
-        setDeployPhase("error");
-        setDeployError(
-          "Your wallet cannot process the signing request. " +
-          "This is a known issue with some wallets (e.g. Core wallet). " +
-          "Please try connecting with MetaMask or another EVM wallet."
-        );
-        toast.error("Wallet compatibility issue — try MetaMask instead.");
-      } else {
-        setDeployPhase("error");
-        setDeployError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
-        toast.error("Deployment failed — you can retry.");
-      }
+      setDeployPhase("error");
+      setDeployError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  // handleAccountDeploy removed — deployment is now part of the single
+  // activation UserOp (deployInitialToProtocol). This eliminates one
+  // wallet popup and reduces activation to: USDC transfer + session key
+  // sign + ONE UserOp (deploy + approve + deposit).
 
   // Giza-style activation: ERC-20 transfer + session key + register (Signature 2)
   const handleActivate = async () => {
@@ -499,27 +430,10 @@ export default function OnboardingPage() {
         toast.success("Smart account already funded — skipping transfer.");
       }
 
-      // Phase 1b: Ensure smart account is deployed on-chain
-      // If handleAccountDeploy was skipped (returning user) or failed silently,
-      // the account might not be deployed. Session key UserOps require the
-      // account to exist on-chain for reliable validateUserOp.
-      const accountCode = await publicClient.getBytecode({
-        address: derivedAddr as `0x${string}`,
-      });
-      if (!accountCode || accountCode === "0x" || accountCode.length <= 2) {
-        setActivationPhase("deploying-account");
-        console.log("[Onboarding] Smart account not deployed — deploying via approveAllProtocols");
-        await approveAllProtocols(kernelClient, {
-          USDC: CONTRACTS.USDC,
-          AAVE_POOL: CONTRACTS.AAVE_POOL,
-          BENQI_POOL: CONTRACTS.BENQI_POOL,
-          SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-          EULER_VAULT: CONTRACTS.EULER_VAULT,
-          SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-          SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-        }, Math.max(parsedAmount * 2, 50_000));
-        toast.success("Smart account deployed!");
-      }
+      // Phase 1b: account deployment is handled automatically by the first
+      // UserOp below (deployInitialToProtocol). ERC-4337 counterfactual
+      // deployment means the bundler deploys the account as part of the
+      // first UserOp — no separate step needed.
 
       // Phase 2: Grant session key
       setActivationPhase("granting-session-key");
@@ -810,25 +724,12 @@ export default function OnboardingPage() {
                     )}
                   </div>
 
-                  {/* Deployment progress */}
-                  {deployPhase === "deploying" && (
-                    <div className="flex items-center gap-3 rounded-lg bg-[#F5F0EB] p-4">
-                      <Loader2 className="h-5 w-5 animate-spin text-[#E84142]" />
-                      <div>
-                        <p className="text-sm font-medium text-[#1A1715]">
-                          Deploying account on-chain…
-                        </p>
-                        <p className="text-xs text-[#8A837C]">
-                          Approve the transaction in your wallet to deploy your smart account and approve protocol access.
-                        </p>
-                      </div>
-                    </div>
-                  )}
+                  {/* Deployment progress removed — deployment now happens in single activation UserOp */}
 
                   {deployPhase === "error" && (
                     <div className="space-y-3">
                       <div className="rounded-lg bg-[#DC2626]/5 border border-[#DC2626]/20 p-4">
-                        <p className="text-sm font-medium text-[#DC2626]">Deployment failed</p>
+                        <p className="text-sm font-medium text-[#DC2626]">Setup failed</p>
                         {deployError && (
                           <p className="mt-1 text-xs text-[#5C5550]">{deployError}</p>
                         )}
@@ -838,11 +739,11 @@ export default function OnboardingPage() {
                           deployGuardRef.current = false;
                           setDeployPhase("idle");
                           setDeployError(null);
-                          handleAccountDeploy();
+                          deriveAccountAddress();
                         }}
                         className="flex items-center gap-2 rounded-lg border border-[#E84142]/30 px-4 py-2 text-sm font-medium text-[#E84142] hover:bg-[#E84142]/5"
                       >
-                        Retry Deployment
+                        Try Again
                       </button>
                     </div>
                   )}
@@ -852,10 +753,10 @@ export default function OnboardingPage() {
                       <CheckCircle2 className="h-5 w-5 text-[#059669]" />
                       <div>
                         <p className="text-sm font-medium text-[#059669]">
-                          Account deployed & protocols approved
+                          Account ready
                         </p>
                         <p className="text-xs text-[#8A837C]">
-                          Your smart account is live on Avalanche with all protocol approvals set.
+                          Your smart account address is derived. It will be deployed on-chain during activation.
                         </p>
                       </div>
                     </div>
@@ -1149,8 +1050,8 @@ export default function OnboardingPage() {
                   </div>
 
                   <div className="space-y-2.5 rounded-lg bg-[#F5F0EB] p-4">
-                    {(["transferring-usdc", "deploying-account", "granting-session-key", "deploying-initial-funds", "registering-backend"] as const).map((phase) => {
-                      const allPhases = ["transferring-usdc", "deploying-account", "granting-session-key", "deploying-initial-funds", "registering-backend"] as const;
+                    {(["transferring-usdc", "granting-session-key", "deploying-initial-funds", "registering-backend"] as const).map((phase) => {
+                      const allPhases = ["transferring-usdc", "granting-session-key", "deploying-initial-funds", "registering-backend"] as const;
                       const phaseIndex = allPhases.indexOf(phase);
                       const currentIndex = allPhases.indexOf(activationPhase as typeof allPhases[number]);
                       const isDone = currentIndex > phaseIndex || activationPhase === "done";
@@ -1158,7 +1059,6 @@ export default function OnboardingPage() {
 
                       const icons: Record<string, typeof Shield> = {
                         "transferring-usdc": Wallet,
-                        "deploying-account": Shield,
                         "granting-session-key": Shield,
                         "deploying-initial-funds": Zap,
                         "registering-backend": ArrowRight,
