@@ -36,6 +36,7 @@ import Image from "next/image";
 import {
   createSmartAccount,
   grantAndSerializeSessionKey,
+  withRetry,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
 import type { DiversificationPreference } from "@snowmind/shared-types";
@@ -371,12 +372,15 @@ export default function OnboardingPage() {
         transport: http(AVALANCHE_RPC_URL),
       });
 
-      const existingBalance = await publicClient.readContract({
-        address: CONTRACTS.USDC as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: "balanceOf",
-        args: [derivedAddr as `0x${string}`],
-      }) as bigint;
+      const existingBalance = await withRetry(
+        () => publicClient.readContract({
+          address: CONTRACTS.USDC as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [derivedAddr as `0x${string}`],
+        }) as Promise<bigint>,
+        { label: "USDC balanceOf" },
+      );
 
       const shortfall = amountWei > existingBalance ? amountWei - existingBalance : 0n;
 
@@ -434,27 +438,30 @@ export default function OnboardingPage() {
 
       // Phase 2: Grant session key
       setActivationPhase("granting-session-key");
-      const sessionKeyResult = await grantAndSerializeSessionKey(
-        kernelAccount,
-        kernelClient,
-        {
-          AAVE_POOL: CONTRACTS.AAVE_POOL,
-          BENQI_POOL: CONTRACTS.BENQI_POOL,
-          SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-          EULER_VAULT: CONTRACTS.EULER_VAULT,
-          SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-          SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-          USDC: CONTRACTS.USDC,
-          TREASURY: CONTRACTS.TREASURY,
-          PERMIT2: CONTRACTS.PERMIT2,
-          REGISTRY: CONTRACTS.REGISTRY,
-        },
-        {
-          maxAmountUSDC: Math.max(parsedAmount * 2, 50_000),
-          durationDays: 30,
-          maxOpsPerDay: 20,
-          userEOA: wallet.address as `0x${string}`,
-        },
+      const sessionKeyResult = await withRetry(
+        () => grantAndSerializeSessionKey(
+          kernelAccount,
+          kernelClient,
+          {
+            AAVE_POOL: CONTRACTS.AAVE_POOL,
+            BENQI_POOL: CONTRACTS.BENQI_POOL,
+            SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+            EULER_VAULT: CONTRACTS.EULER_VAULT,
+            SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+            SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+            USDC: CONTRACTS.USDC,
+            TREASURY: CONTRACTS.TREASURY,
+            PERMIT2: CONTRACTS.PERMIT2,
+            REGISTRY: CONTRACTS.REGISTRY,
+          },
+          {
+            maxAmountUSDC: Math.max(parsedAmount * 2, 50_000),
+            durationDays: 30,
+            maxOpsPerDay: 20,
+            userEOA: wallet.address as `0x${string}`,
+          },
+        ),
+        { maxRetries: 2, label: "grantAndSerializeSessionKey" },
       );
 
       // Phase 3: Skip frontend deployment — backend handles it reliably.

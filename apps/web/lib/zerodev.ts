@@ -165,6 +165,49 @@ type KernelAccountLike = Awaited<ReturnType<typeof createKernelAccount>>
 type KernelClientLike = ReturnType<typeof createKernelAccountClient>
 type PermissionPluginLike = Awaited<ReturnType<typeof toPermissionValidator>>
 
+// ── Retry utility for transient RPC failures ──────────────────────────────────
+// Retries on network errors, 429 rate limits, and 5xx server errors.
+// User-rejection errors are NOT retried.
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  {
+    maxRetries = 3,
+    baseDelayMs = 1000,
+    label = "RPC call",
+  }: { maxRetries?: number; baseDelayMs?: number; label?: string } = {},
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+
+      // Never retry user rejections or wallet compatibility errors
+      if (
+        msg.includes("User denied") ||
+        msg.includes("User rejected") ||
+        msg.includes("codepoint") ||
+        msg.includes("UNEXPECTED_CONTINUE")
+      ) {
+        throw err
+      }
+
+      if (attempt === maxRetries) {
+        console.error(`[ZeroDev] ${label} failed after ${maxRetries + 1} attempts:`, msg)
+        throw err
+      }
+
+      const delay = baseDelayMs * Math.pow(2, attempt)
+      console.warn(
+        `[ZeroDev] ${label} attempt ${attempt + 1}/${maxRetries + 1} failed: ${msg.slice(0, 120)}. Retrying in ${delay}ms…`
+      )
+      await new Promise((r) => setTimeout(r, delay))
+    }
+  }
+  // TypeScript: unreachable, but satisfies return type
+  throw new Error(`${label} failed`)
+}
+
 // ── getPublicClient ───────────────────────────────────────────────────────────
 
 function getPublicClient(): PublicClient {
@@ -281,11 +324,15 @@ export async function createSmartAccount(walletClient: WalletClientLike | PrivyW
   }
 
   // Sudo validator: user's wallet is the owner (full control)
-  const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
-    signer,
-    entryPoint: ENTRYPOINT,
-    kernelVersion: KERNEL_V3_1,           // ← constant, NOT string "0.3.1"
-  })
+  // signerToEcdsaValidator makes an RPC call — retry on transient failures.
+  const ecdsaValidator = await withRetry(
+    () => signerToEcdsaValidator(publicClient, {
+      signer,
+      entryPoint: ENTRYPOINT,
+      kernelVersion: KERNEL_V3_1,           // ← constant, NOT string "0.3.1"
+    }),
+    { label: "signerToEcdsaValidator" },
+  )
 
   // index: 0n is REQUIRED for deterministic address
   // Kernel doc: "same owner + same index = same address, always"
@@ -303,15 +350,18 @@ export async function createSmartAccount(walletClient: WalletClientLike | PrivyW
   try {
     // Sudo accounts use the paymaster client directly — the SDK extracts both
     // getPaymasterStubData and getPaymasterData internally.
-    kernelClient = createKernelAccountClient({
-      account: kernelAccount,
-      chain: CHAIN,
-      bundlerTransport: http(BUNDLER_URL),
-      paymaster: createZeroDevPaymasterClient({
+    kernelClient = await withRetry(
+      () => Promise.resolve(createKernelAccountClient({
+        account: kernelAccount,
         chain: CHAIN,
-        transport: http(PAYMASTER_URL),
-      }),
-    })
+        bundlerTransport: http(BUNDLER_URL),
+        paymaster: createZeroDevPaymasterClient({
+          chain: CHAIN,
+          transport: http(PAYMASTER_URL),
+        }),
+      })),
+      { label: "createKernelAccountClient" },
+    )
   } catch (err) {
     console.error("[ZeroDev] Failed to create bundler/paymaster client:", err)
     throw new Error(
