@@ -183,18 +183,22 @@ class Rebalancer:
         allowed_protocols = set(session_key_record["allowed_protocols"])
 
         # ── Permit2 compatibility check ──
-        # Old session keys (approval_length < 28000) were granted before Permit2
-        # was added to the call policy. Euler V2 (EVK) requires Permit2 for
-        # deposits, so exclude it for old session keys to avoid guaranteed
-        # revert. The user must re-grant their session key to get Permit2 perms.
-        _approval_length = len(session_key_record.get("serialized_permission", ""))
-        if _approval_length > 0 and _approval_length < 28000 and "euler_v2" in allowed_protocols:
+        # Old session keys (granted before Permit2 was added to the call policy)
+        # do NOT contain an approve rule for the Permit2 contract. Euler V2 (EVK)
+        # requires Permit2 for deposits, so exclude it for old session keys to
+        # avoid guaranteed revert. Detect by checking for the Permit2 address
+        # (0x000000000022D473030F116dDEE9F6B43aC78BA3) in the serialized
+        # permission blob — content-based check avoids false positives from
+        # length changes due to ONE_OF rule consolidation.
+        _perm_blob = session_key_record.get("serialized_permission", "")
+        _has_permit2 = "000000000022d473030f116ddee9f6b43ac78ba3" in _perm_blob.lower()
+        if _perm_blob and not _has_permit2 and "euler_v2" in allowed_protocols:
             allowed_protocols.discard("euler_v2")
             logger.warning(
-                "Session key for %s is pre-Permit2 (approval_length=%d < 28000). "
+                "Session key for %s is pre-Permit2 (Permit2 address not found in permission blob, len=%d). "
                 "Excluding euler_v2 from allowed protocols. User should re-grant session key.",
                 smart_account_address,
-                _approval_length,
+                len(_perm_blob),
             )
 
         # 1. Fetch live spot rates
