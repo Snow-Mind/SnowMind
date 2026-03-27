@@ -732,6 +732,28 @@ export async function grantAndSerializeSessionKey(
     })
   }
 
+  // UNIQUE NONCE (shared by call policy AND gas policy):
+  // The ZeroDev bundler maintains a mempool-level deduplication cache keyed by
+  // {sender, policyDataHash}. If a user re-grants with identical call-policy
+  // rules, the bundler rejects with "duplicate permissionHash" even though
+  // the on-chain state is clean. The gasNonce alone is insufficient because it
+  // only changes the GasPolicy hash — the CallPolicy hash stays the same.
+  //
+  // Fix: add a dummy call-policy rule targeting a unique "nonce address"
+  // derived from Date.now(). This address has no code and will never be called;
+  // it merely changes the call-policy data hash so each grant is unique.
+  // The gasNonce also changes the gas-policy hash for belt-and-suspenders.
+  const grantNonce = BigInt(Date.now())
+  const nonceAddress = `0x${grantNonce.toString(16).padStart(40, '0')}` as `0x${string}`
+  permissions.push({
+    target: nonceAddress,
+    valueLimit: 0n,
+    abi: ERC20_ABI,
+    functionName: "approve",
+    args: [null, null],
+  })
+  console.log(`[ZeroDev] Grant nonce: ${grantNonce} → nonce address: ${nonceAddress}`)
+
   const callPolicy = toCallPolicy({
     policyVersion: CallPolicyVersion.V0_0_5,
     permissions,
@@ -743,19 +765,10 @@ export async function grantAndSerializeSessionKey(
   // DEADLOCK (AA23 in regular mode + duplicate permissionHash in enable mode).
   // 10 AVAX supports ~250-1000 operations — enough for months of rebalancing.
   // The rate limit policy (maxOpsPerDay) independently caps daily operations.
-  //
-  // UNIQUE NONCE: Kernel v3.1 computes permissionHash = hash(policies). If a
-  // user re-grants with identical policies, the hash collides with the existing
-  // on-chain permission → enable mode fails ("duplicate permissionHash") and
-  // regular mode fails (new permissionId never installed). Adding a small
-  // unique nonce to the gas limit produces a distinct hash each grant while
+  // The grantNonce in the gas limit produces a distinct hash each grant while
   // keeping the effective cap at ~10 AVAX.
-  // Use full Date.now() (millisecond timestamp, ~1.7×10^12) instead of modulo
-  // to guarantee uniqueness across all grants. The effective gas cap becomes
-  // 10.000001774... AVAX — negligible difference.
-  const gasNonce = BigInt(Date.now())
-  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) + gasNonce })
-  console.log(`[ZeroDev] Gas policy nonce: ${gasNonce} → effective cap: ${(parseUnits("10", 18) + gasNonce).toString()} wei`)
+  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) + grantNonce })
+  console.log(`[ZeroDev] Gas policy effective cap: ${(parseUnits("10", 18) + grantNonce).toString()} wei`)
 
   // Rate limit: max rebalances per day
   const rateLimitPolicy = toRateLimitPolicy({
