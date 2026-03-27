@@ -85,11 +85,6 @@ export default function ProtocolAssessmentPage() {
         Exploit history considers all versions. If v1 was exploited but v2 is a full rewrite,
         the point is still lost — the team&apos;s track record matters.
       </p>
-      <p>
-        Governance structure (DAO multisig vs EOA) is not scored separately but should be
-        noted when explaining a protocol&apos;s risk profile.
-      </p>
-
       <h3>2. Liquidity (max 3 points)</h3>
       <p>How much capital is in the protocol and how reliable is access to it? Checked every 24 hours.</p>
       <div className="overflow-x-auto">

@@ -86,51 +86,6 @@ Any fail → Reject UserOp`}</code></pre>
         supply/withdraw operations on whitelisted protocols. They cannot transfer your funds
         to an arbitrary address — this is enforced at the EVM level by the smart account.
       </Callout>
-
-      <h2>Defense in Depth</h2>
-      <pre className="bg-snow-surface border border-snow-border text-sm"><code>{`Layer 1: Session Key Scoping (on-chain, EVM-enforced)
-         → Only approved contracts + functions
-         → Rate limits, time bounds, gas caps
-
-Layer 2: TWAP + Cross-Validation (off-chain)
-         → 15-min smoothed rates, DefiLlama cross-check
-         → 25% APY sanity cap
-
-Layer 3: Allocator Constraints (off-chain)
-         → 7.5% TVL cap per protocol
-         → Profitability gate (daily gain > gas)
-
-Layer 4: Application Security (off-chain)
-         → AES-256-GCM session key encryption at rest
-         → Authenticated API access
-         → Rate limiting
-
-Layer 5: Emergency (user-controlled)
-         → Withdraw full balance at any time
-         → Direct smart account access via master key
-         → Works even if SnowMind backend is down`}</code></pre>
-
-      <h2>Key Infrastructure</h2>
-      <div className="overflow-x-auto">
-        <table>
-          <thead>
-            <tr>
-              <th>Service</th>
-              <th>Purpose</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Pimlico</td>
-              <td>ERC-4337 bundler + paymaster (gas sponsoring)</td>
-            </tr>
-            <tr>
-              <td>ZeroDev</td>
-              <td>Smart account SDK + deployment</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
     </article>
   );
 }

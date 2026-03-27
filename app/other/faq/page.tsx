@@ -12,11 +12,11 @@ const faqs = [
   },
   {
     q: "What happens if SnowMind goes down?",
-    a: "Your funds continue earning yield in whichever protocol they're currently deposited in. You retain full ownership and can withdraw directly through the protocol interfaces or by using your smart account's master key.",
+    a: "Your funds continue earning yield in whichever protocol they're currently deposited in. You retain full ownership.",
   },
   {
     q: "How does the optimizer decide where to put my funds?",
-    a: "SnowMind's optimizer ranks protocols by TWAP-smoothed APY and allocates capital starting from the highest-yielding protocol. Each protocol is capped at 7.5% of its TVL to prevent market impact. You can set your own allocation limits per protocol, and your diversification preference (Max Yield, Balanced, or Diversified) controls how funds are spread.",
+    a: "SnowMind runs health and safety checks on each integrated protocol, then allocates your USDC among the ones that pass — weighing TWAP-smoothed APY against risk and operational limits. Each protocol is capped at 7.5% of its TVL to limit market impact, and you can set your own per-protocol allocation limits.",
   },
   {
     q: "What are session keys?",
@@ -29,14 +29,6 @@ const faqs = [
   {
     q: "How often does SnowMind rebalance?",
     a: "The optimizer runs every 30 minutes but only rebalances when it's profitable to do so. A rebalance must clear multiple safety gates: APY improvement above 0.1%, movement above $1, gas cost justified by yield gain, and at least 6 hours since the last rebalance.",
-  },
-  {
-    q: "What is the deposit limit?",
-    a: "During beta, there is a $50,000 deposit cap per account. This limit will be raised as the system matures and undergoes formal audits.",
-  },
-  {
-    q: "Can SnowMind steal my funds?",
-    a: "No. The session key's permissions are enforced on-chain by the smart account's Permission Validator. Even a fully compromised backend can only execute supply/withdraw operations on whitelisted protocols. It cannot transfer funds to an arbitrary address.",
   },
   {
     q: "How are protocol risk scores calculated?",

@@ -69,8 +69,8 @@ export default function DocsHome() {
       <div className="mt-12 rounded-xl border border-amber-200 bg-amber-50 p-5">
         <p className="font-semibold text-amber-800">Beta Notice</p>
         <p className="mt-1 text-sm text-amber-700">
-          SnowMind is currently in beta on Avalanche mainnet with a $50K deposit
-          cap. Start with small amounts. All deposits earn real yield.
+          SnowMind is currently in beta on Avalanche mainnet. Start with amounts
+          you&apos;re comfortable with. All deposits earn real yield.
         </p>
       </div>
     </div>

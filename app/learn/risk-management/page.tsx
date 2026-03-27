@@ -1,6 +1,4 @@
 import type { Metadata } from "next";
-import { Callout } from "@/components/callout";
-
 export const metadata: Metadata = {
   title: "Risk Management",
   description: "How SnowMind manages risk through allocation caps, rate validation, circuit breakers, and safety gates.",
@@ -33,12 +31,6 @@ export default function RiskManagementPage() {
       </p>
       <pre className="bg-snow-surface border border-snow-border text-sm"><code>{`twap_rate = Σ(rate_i × Δt_i) / Σ(Δt_i)   over 15-minute window`}</code></pre>
 
-      <h3>Cross-Validation</h3>
-      <p>
-        Every TWAP rate is compared against DefiLlama&apos;s yield API. If the on-chain rate diverges
-        by more than the configured threshold, SnowMind logs a warning for monitoring and operator review.
-      </p>
-
       <h3>Sanity Bounds</h3>
       <p>
         Any protocol reporting a TWAP APY greater than <strong>25%</strong> is excluded from deposits
@@ -53,7 +45,7 @@ export default function RiskManagementPage() {
         <li><strong>Protocol status checks:</strong> emergency state, deposits paused, withdrawals paused</li>
         <li><strong>Utilization guard:</strong> utilization above 90% excludes new deposits</li>
         <li><strong>Velocity check:</strong> APY change above 25% in 30 minutes excludes new deposits</li>
-        <li><strong>Exploit detection:</strong> TWAP APY above 2× yesterday&apos;s average plus utilization above 90% flags emergency exit behavior</li>
+        <li><strong>Exploit detection:</strong> TWAP APY above 2× yesterday&apos;s average plus utilization above 90% triggers an immediate withdrawal from that protocol</li>
         <li><strong>7-day stability check:</strong> relative APY swing above 50% excludes new deposits</li>
         <li><strong>Circuit breaker:</strong> 3+ consecutive RPC failures exclude the protocol until recovery</li>
         <li><strong>Existing position cap check:</strong> if a live position exceeds the TVL cap share, SnowMind forces a rebalance out of the excess</li>
@@ -71,12 +63,6 @@ export default function RiskManagementPage() {
         <li><strong>Idempotency guard:</strong> identical target allocations executed recently are skipped</li>
         <li><strong>Portfolio circuit breaker:</strong> if portfolio value drops more than 10% between runs, rebalancing is halted and alerts fire</li>
       </ol>
-
-      <Callout variant="info" title="Defense in Depth">
-        These off-chain safeguards complement the on-chain session key permissions. Even if
-        every off-chain safety check were bypassed, the session key&apos;s on-chain call policy
-        still prevents unauthorized fund transfers.
-      </Callout>
 
     </article>
   );

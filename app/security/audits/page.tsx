@@ -41,15 +41,36 @@ export default function AuditsPage() {
       </p>
 
       <h3>Audit Reports (ZeroDev)</h3>
-      <p>
-        <a
-          href="https://github.com/zerodevapp/kernel/tree/dev/audits"
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          Kernel&apos;s Audits Repo
-        </a>
-      </p>
+      <p>Relevant audits:</p>
+      <ul>
+        <li>
+          <a
+            href="https://github.com/zerodevapp/kernel/blob/dev/audits/chainlight_v3_0.pdf"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            chainlight_v3_0.pdf
+          </a>
+        </li>
+        <li>
+          <a
+            href="https://github.com/zerodevapp/kernel/blob/dev/audits/v_3_1_incremental_audit.pdf"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            v_3_1_incremental_audit.pdf
+          </a>
+        </li>
+        <li>
+          <a
+            href="https://github.com/zerodevapp/kernel/blob/dev/audits/kalos_v3_plugins.pdf"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            kalos_v3_plugins.pdf
+          </a>
+        </li>
+      </ul>
     </article>
   );
 }

@@ -51,8 +51,7 @@ export default function HowItWorksPage() {
       <ol>
         <li><strong>Rate Fetcher:</strong> Reads on-chain APY from each protocol every 30 minutes</li>
         <li><strong>TWAP Smoothing:</strong> Applies 15-minute time-weighted averaging to prevent spot-rate manipulation</li>
-        <li><strong>Cross-Validation:</strong> Compares on-chain rates against DefiLlama&apos;s yield API</li>
-        <li><strong>Optimizer:</strong> Ranks protocols by APY and allocates capital optimally</li>
+        <li><strong>Optimizer:</strong> Runs safety checks and allocates capital to the best-qualified protocols</li>
         <li><strong>Rebalancer:</strong> Builds ERC-4337 UserOperations for withdrawals and deposits</li>
         <li><strong>Executor:</strong> Signs UserOps with the session key and submits via Pimlico bundler</li>
       </ol>
@@ -73,7 +72,7 @@ export default function HowItWorksPage() {
       </p>
       <ol>
         <li>Fetch current APY from all active protocols</li>
-        <li>Smooth rates with TWAP and cross-validate against DefiLlama</li>
+        <li>Smooth rates with TWAP</li>
         <li>Run the optimizer to compute the optimal allocation</li>
         <li>Check if the rebalance meets all safety gates (see below)</li>
         <li>If approved, build and execute a batch UserOperation</li>

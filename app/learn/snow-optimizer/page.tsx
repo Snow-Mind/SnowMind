@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Callout } from "@/components/callout";
 
 export const metadata: Metadata = {
   title: "Snow Optimizer",
@@ -11,73 +10,24 @@ export default function SnowOptimizerPage() {
     <article className="prose max-w-none">
       <h1>Snow Optimizer</h1>
       <p className="lead">
-        The Snow Optimizer continuously evaluates yield across all supported protocols and
-        allocates your USDC to maximize your blended APY within safe boundaries.
+        The Snow Optimizer continuously runs safety checks across all supported protocols,
+        then routes your USDC to the best-qualified destination — not just the highest number.
       </p>
 
-      <h2>How the Algorithm Works</h2>
+      <h2>How It Works</h2>
       <p>
-        The optimizer ranks all healthy protocols by their effective TWAP APY and allocates
-        capital starting from the highest-yielding protocol down:
+        Every cycle, the optimizer screens all integrated protocols through a series of health
+        and safety checks before making any allocation decision:
       </p>
-      <pre className="bg-snow-surface border border-snow-border text-sm"><code>{`1. Rank all healthy protocols by effective TWAP APY (highest first)
-2. For each protocol in ranked order:
-     - Check if it beats the base layer by the required margin
-     - Allocate capital up to the protocol's TVL cap (7.5% of its TVL)
-     - Respect any user-specified allocation limits
-3. Park any remainder in the base allocation layer
-4. If remaining > 0 after all protocols: hold idle in smart account`}</code></pre>
-
-      <h2>Worked Example</h2>
-      <p>With a $10,000 deposit and the following current rates:</p>
-      <div className="overflow-x-auto">
-        <table>
-          <thead>
-            <tr>
-              <th>Protocol</th>
-              <th>APY</th>
-              <th>vs Baseline</th>
-              <th>Decision</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Protocol A</td>
-              <td>4.2%</td>
-              <td>+1.2%</td>
-              <td>Accept (above 0.1% margin)</td>
-            </tr>
-            <tr>
-              <td>Base Layer</td>
-              <td>3.8%</td>
-              <td>base layer</td>
-              <td>Accept (base layer)</td>
-            </tr>
-            <tr>
-              <td>Protocol B</td>
-              <td>3.3%</td>
-              <td>-0.5%</td>
-              <td>Skip (below margin)</td>
-            </tr>
-            <tr>
-              <td>Protocol C</td>
-              <td>3.0%</td>
-              <td>-0.8%</td>
-              <td>Skip (below margin)</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p>Result:</p>
-      <ul>
-        <li><strong>Protocol A:</strong> $5,000</li>
-        <li><strong>Base Layer:</strong> $5,000 (base layer receives the remainder)</li>
-      </ul>
-
-      <Callout variant="info" title="Why the 0.1% margin?">
-        Moving money costs gas. If a protocol is only 0.05% better, the gas and additional
-        risk exposure is not worth it. The margin prevents unnecessary rebalancing.
-      </Callout>
+      <pre className="bg-snow-surface border border-snow-border text-sm"><code>{`1. Run safety checks on every protocol (rates, TVL, anomalies)
+2. Discard any protocol that fails a check
+3. Among protocols that pass, identify the best yield opportunity
+4. Allocate capital — respecting TVL caps and user limits
+5. Park any remainder in the base allocation layer`}</code></pre>
+      <p>
+        Learn about specific health checks at:{" "}
+        <a href="/learn/risk-management">Risk Management</a>
+      </p>
 
       <h2>Allocation Limits</h2>
       <ul>
@@ -116,17 +66,8 @@ export default function SnowOptimizerPage() {
         </table>
       </div>
       <p>
-        All rates are TWAP-smoothed over a 15-minute window and cross-validated against
-        DefiLlama&apos;s yield API before being used in allocation decisions.
+        All rates are TWAP-smoothed over a 15-minute window before being used in allocation decisions.
       </p>
-
-      <h2>Diversification Preferences</h2>
-      <p>Users can choose a diversification preference that affects how the optimizer distributes funds:</p>
-      <ul>
-        <li><strong>Max Yield:</strong> Concentrate in the highest-yielding protocols</li>
-        <li><strong>Balanced:</strong> Moderate spread across qualifying protocols</li>
-        <li><strong>Diversified:</strong> Maximize the number of protocols used, reducing single-protocol exposure</li>
-      </ul>
 
     </article>
   );

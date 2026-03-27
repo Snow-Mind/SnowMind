@@ -16,30 +16,25 @@ export default function FoundationPage() {
 
       <h2>Why SnowMind?</h2>
       <p>
-        Earning the best yield on Avalanche requires constant manual work. Lending rates shift
-        across protocols as supply and demand fluctuate, and no one has the time to monitor
+        Earning the best stablecoin yield on Avalanche requires constant attention. Lending rates
+        shift across protocols as supply and demand fluctuate, and no one has the time to monitor
         every protocol, compare rates, assess risks, and move capital at the right moment.
-      </p>
-      <p>
-        For larger deposits, it gets harder. Depositing a large amount into a single protocol
-        pushes the rate down because you increase supply and reduce utilization. The advertised
-        APY is not the APY you actually receive.
       </p>
       <p>
         SnowMind eliminates this burden. You deposit USDC and SnowMind handles everything:
       </p>
       <ul>
         <li>
-          <strong>Yield curve modeling:</strong> The agent models yield curves across every supported
-          lending protocol, calculating exactly how your deposit size affects each protocol&apos;s rate.
+          <strong>Rate monitoring:</strong> The agent reads live on-chain APYs from every supported
+          protocol on a regular cycle.
         </li>
         <li>
-          <strong>Optimal allocation:</strong> It finds the optimal allocation across protocols to
-          maximize your blended yield, keeping capital in each protocol&apos;s higher-yield range.
+          <strong>Optimal allocation:</strong> It ranks protocols by risk-adjusted APY and
+          allocates your capital to maximise your blended yield within safe limits.
         </li>
         <li>
           <strong>Safe rebalancing:</strong> When market conditions change, SnowMind rebalances —
-          but only when the yield improvement exceeds all transaction costs.
+          but only when the yield improvement clears all safety gates.
         </li>
         <li>
           <strong>Non-custodial:</strong> Each user gets their own smart account. SnowMind operates
