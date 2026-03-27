@@ -236,7 +236,7 @@ export default function AppLayout({
   useEffect(() => {
     if (!clientReady) return;
     const storedAddr = usePortfolioStore.getState().smartAccountAddress;
-    if (!storedAddr && pathname !== "/onboarding") {
+    if (!storedAddr && pathname !== "/onboarding" && pathname !== "/settings") {
       router.replace("/onboarding");
     }
   }, [clientReady, pathname, router]);

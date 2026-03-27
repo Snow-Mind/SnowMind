@@ -70,10 +70,21 @@ export default function SessionKeyStatus() {
   const isExpiringSoon = hoursLeft <= 48;
 
   async function handleGrantSessionKey() {
-    if (!wallet || !smartAccountAddress) return;
+    if (!wallet) {
+      toast.error("No wallet connected. Please connect your wallet first.");
+      return;
+    }
     setGranting(true);
     try {
-      const { kernelAccount, kernelClient } = await createSmartAccount(wallet);
+      const { kernelAccount, kernelClient, smartAccountAddress: derivedAddress } = await createSmartAccount(wallet);
+
+      // Use derived address — works even if store is cleared
+      const saAddress = smartAccountAddress ?? derivedAddress;
+
+      // Persist the smart account address if it was missing from store
+      if (!smartAccountAddress && derivedAddress) {
+        usePortfolioStore.getState().setSmartAccountAddress(derivedAddress);
+      }
 
       const { serializedPermission, sessionPrivateKey, sessionKeyAddress, expiresAt } =
         await grantAndSerializeSessionKey(
@@ -106,7 +117,7 @@ export default function SessionKeyStatus() {
         ? existingProtocols
         : ACTIVE_PROTOCOLS as unknown as string[];
 
-      await api.storeSessionKey(smartAccountAddress, {
+      await api.storeSessionKey(saAddress, {
         serializedPermission,
         sessionPrivateKey,
         sessionKeyAddress,
@@ -115,6 +126,9 @@ export default function SessionKeyStatus() {
         force: true,
         ownerAddress: wallet.address,
       });
+
+      // Mark agent as active in the store so layout redirects work
+      usePortfolioStore.getState().setAgentActivated(true);
 
       toast.success("Session key granted — agent activated");
       refetch();

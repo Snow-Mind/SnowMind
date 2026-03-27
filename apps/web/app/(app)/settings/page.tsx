@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Bell, Wallet, ExternalLink, RefreshCw, BarChart3 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -39,6 +40,7 @@ const fadeUp = {
 };
 
 export default function SettingsPage() {
+  const router = useRouter();
   const { eoaAddress, activeWallet } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
@@ -288,9 +290,11 @@ export default function SettingsPage() {
 
         <button
           className="glacier-btn mt-4 flex items-center gap-2 px-4 py-2 text-[13px]"
-          disabled={smartAccount.isLoading}
+          disabled={smartAccount.setupStep === "creating"}
           onClick={() => {
             smartAccount.resetAccount();
+            toast.info("Redirecting to re-setup your account…");
+            router.push("/onboarding");
           }}
         >
           <RefreshCw className="h-3.5 w-3.5" />

@@ -145,6 +145,41 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No active session key")
 
+        # 0b. Cooldown after PERMISSION_RECOVERY_NEEDED — stop hammering the
+        # ZeroDev bundler every 6 minutes with the same broken session key.
+        # The bundler has mempool deduplication: it tracks submitted
+        # permissionHashes and rejects duplicates. Retrying with the same
+        # session key every tick makes the problem worse. Wait 30 minutes
+        # for the bundler's mempool to expire, then retry.
+        try:
+            latest_log = (
+                db.table("rebalance_logs")
+                .select("skip_reason, created_at")
+                .eq("account_id", account_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if latest_log.data:
+                last = latest_log.data[0]
+                skip_reason = last.get("skip_reason") or ""
+                if "PERMISSION_RECOVERY_NEEDED" in skip_reason:
+                    last_time = datetime.fromisoformat(last["created_at"].replace("Z", "+00:00"))
+                    cooldown_until = last_time + timedelta(minutes=30)
+                    if datetime.now(timezone.utc) < cooldown_until:
+                        mins_left = int((cooldown_until - datetime.now(timezone.utc)).total_seconds() / 60)
+                        logger.debug(
+                            "PERMISSION_RECOVERY cooldown for %s — %d min left. "
+                            "User must re-grant session key from dashboard.",
+                            smart_account_address, mins_left,
+                        )
+                        return await self._log(
+                            db, account_id, "skipped",
+                            reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
+                        )
+        except Exception:
+            pass  # Don't block rebalance if cooldown check fails
+
         allowed_protocols = set(session_key_record["allowed_protocols"])
 
         # ── Permit2 compatibility check ──
