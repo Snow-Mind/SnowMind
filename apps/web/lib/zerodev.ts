@@ -420,95 +420,45 @@ export async function grantAndSerializeSessionKey(
 
   // Guard: TREASURY must be a valid 42-char hex address (not empty string '')
   const hasTreasury = contracts.TREASURY && contracts.TREASURY.length >= 42 && contracts.TREASURY !== ZERO_ADDR
-  const treasuryTransferPermissions: CallPolicyPermission[] =
-    hasTreasury
-      ? [
-          {
-            target: contracts.USDC,
-            valueLimit: 0n,
-            abi: ERC20_TRANSFER_ABI,
-            functionName: "transfer",
-            args: [
-              { condition: ParamCondition.EQUAL, value: contracts.TREASURY },
-              { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
-            ],
-          },
-        ]
-      : []
-
   const hasUserEOA = config.userEOA && config.userEOA.length >= 42 && config.userEOA !== ZERO_ADDR
-  const userTransferPermissions: CallPolicyPermission[] =
-    hasUserEOA
-      ? [
-          {
-            target: contracts.USDC,
-            valueLimit: 0n,
-            abi: ERC20_TRANSFER_ABI,
-            functionName: "transfer",
-            args: [
-              { condition: ParamCondition.EQUAL, value: config.userEOA },
-              null,
-            ],
-          },
-        ]
-      : []
+
+  // ── CRITICAL: CallPolicy V0.0.5 hashes each permission as keccak256(callType, target, selector).
+  // Only ONE permission per (target, selector) is allowed per install — duplicates cause
+  // "duplicate permissionHash" revert in the CallPolicy.onInstall() function.
+  // Therefore we MUST consolidate multiple spender/recipient constraints into a single
+  // permission using ParamCondition.ONE_OF instead of separate EQUAL rules. ──
+
+  // Build USDC transfer recipients list (treasury + user EOA) for a single ONE_OF rule
+  const transferRecipients: `0x${string}`[] = [
+    ...(hasTreasury ? [contracts.TREASURY] : []),
+    ...(hasUserEOA ? [config.userEOA] : []),
+  ]
 
   const permissions: CallPolicyPermission[] = [
 
-      // USDC approve — allow session key to set approvals for protocol contracts
+      // USDC approve — session key can set approvals for ALL protocol contracts.
+      // CallPolicy V0.0.5 allows only ONE rule per (target, selector), so we use
+      // ONE_OF to list all valid spenders in a single permission entry.
       {
         target: contracts.USDC,
         valueLimit: 0n,
         abi: ERC20_ABI,
         functionName: "approve",
         args: [
-          { condition: ParamCondition.EQUAL, value: contracts.AAVE_POOL },
+          { condition: ParamCondition.ONE_OF, value: [
+            contracts.AAVE_POOL,
+            contracts.BENQI_POOL,
+            contracts.SPARK_VAULT,
+            contracts.EULER_VAULT,
+            ...(contracts.PERMIT2 ? [contracts.PERMIT2] : []),
+            contracts.SILO_SAVUSD_VAULT,
+            contracts.SILO_SUSDP_VAULT,
+          ].filter(addr => addr !== ZERO_ADDR) },
           null,   // amount — any (maxUint256 for efficiency)
         ],
       },
-      {
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.BENQI_POOL },
-          null,
-        ],
-      },
-      {
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.SPARK_VAULT },
-          null,
-        ],
-      },
-      // Euler USDC approve
-      {
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.EULER_VAULT },
-          null,
-        ],
-      },
-      // Permit2 USDC approve — Euler V2 (EVK) pulls tokens via Permit2
-      ...(contracts.PERMIT2 ? ([{
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve" as const,
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.PERMIT2 },
-          null,
-        ],
-      }] as CallPolicyPermission[]) : []),
       // Permit2.approve(USDC, euler_vault, amount, deadline) — set Permit2 allowance
+      // This has a DIFFERENT target (PERMIT2, not USDC) so it has a unique permissionHash
       ...(contracts.PERMIT2 ? ([{
         target: contracts.PERMIT2,
         valueLimit: 0n,
@@ -521,28 +471,6 @@ export async function grantAndSerializeSessionKey(
           null,
         ],
       }] as CallPolicyPermission[]) : []),
-      // Silo savUSD/USDC USDC approve
-      {
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.SILO_SAVUSD_VAULT },
-          null,
-        ],
-      },
-      // Silo sUSDp/USDC USDC approve
-      {
-        target: contracts.USDC,
-        valueLimit: 0n,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [
-          { condition: ParamCondition.EQUAL, value: contracts.SILO_SUSDP_VAULT },
-          null,
-        ],
-      },
 
       // AAVE V3 — supply (USDC only, amount capped)
       {
@@ -710,13 +638,22 @@ export async function grantAndSerializeSessionKey(
         functionName: "withdraw",
         args: [null, null, null],
       },
-    // USDC.transfer — fee collection to SnowMind treasury ONLY
-    // On-chain enforced: recipient MUST be treasury, amount capped at maxAmount
-    ...treasuryTransferPermissions,
-
-    // USDC.transfer — withdrawal to user's own EOA (uncapped, it's their money)
-    // Two separate entries because ZeroDev doesn't support OR-conditions on args
-    ...userTransferPermissions,
+    // USDC.transfer — fee collection to treasury AND user withdrawal to EOA.
+    // Consolidated into single rule with ONE_OF (CallPolicy requires unique target+selector).
+    // NOTE: When both treasury and user EOA exist, amount is uncapped for both.
+    // User withdrawal is uncapped (it's their money). Treasury fees are protocol-controlled.
+    ...(transferRecipients.length > 0 ? [{
+      target: contracts.USDC,
+      valueLimit: 0n,
+      abi: ERC20_TRANSFER_ABI,
+      functionName: "transfer" as const,
+      args: [
+        transferRecipients.length === 1
+          ? { condition: ParamCondition.EQUAL, value: transferRecipients[0] }
+          : { condition: ParamCondition.ONE_OF, value: transferRecipients },
+        null,   // amount — uncapped (user's money + protocol-controlled fees)
+      ],
+    }] as CallPolicyPermission[] : []),
   ]
 
   // ── Registry logRebalance permission (optional — only when REGISTRY is deployed) ──
@@ -732,28 +669,6 @@ export async function grantAndSerializeSessionKey(
     })
   }
 
-  // UNIQUE NONCE (shared by call policy AND gas policy):
-  // The ZeroDev bundler maintains a mempool-level deduplication cache keyed by
-  // {sender, policyDataHash}. If a user re-grants with identical call-policy
-  // rules, the bundler rejects with "duplicate permissionHash" even though
-  // the on-chain state is clean. The gasNonce alone is insufficient because it
-  // only changes the GasPolicy hash — the CallPolicy hash stays the same.
-  //
-  // Fix: add a dummy call-policy rule targeting a unique "nonce address"
-  // derived from Date.now(). This address has no code and will never be called;
-  // it merely changes the call-policy data hash so each grant is unique.
-  // The gasNonce also changes the gas-policy hash for belt-and-suspenders.
-  const grantNonce = BigInt(Date.now())
-  const nonceAddress = `0x${grantNonce.toString(16).padStart(40, '0')}` as `0x${string}`
-  permissions.push({
-    target: nonceAddress,
-    valueLimit: 0n,
-    abi: ERC20_ABI,
-    functionName: "approve",
-    args: [null, null],
-  })
-  console.log(`[ZeroDev] Grant nonce: ${grantNonce} → nonce address: ${nonceAddress}`)
-
   const callPolicy = toCallPolicy({
     policyVersion: CallPolicyVersion.V0_0_5,
     permissions,
@@ -761,14 +676,9 @@ export async function grantAndSerializeSessionKey(
 
   // Gas policy: lifetime gas cap prevents runaway spending.
   // Each UserOp on Avalanche can consume ~0.01-0.04 AVAX in gas (gasUsed × gasPrice).
-  // At 0.5 AVAX, the cap is exhausted after ~12-50 operations, causing permanent
-  // DEADLOCK (AA23 in regular mode + duplicate permissionHash in enable mode).
   // 10 AVAX supports ~250-1000 operations — enough for months of rebalancing.
   // The rate limit policy (maxOpsPerDay) independently caps daily operations.
-  // The grantNonce in the gas limit produces a distinct hash each grant while
-  // keeping the effective cap at ~10 AVAX.
-  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) + grantNonce })
-  console.log(`[ZeroDev] Gas policy effective cap: ${(parseUnits("10", 18) + grantNonce).toString()} wei`)
+  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) })
 
   // Rate limit: max rebalances per day
   const rateLimitPolicy = toRateLimitPolicy({
