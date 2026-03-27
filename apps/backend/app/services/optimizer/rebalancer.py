@@ -77,19 +77,45 @@ class Rebalancer:
             self._protocol_addresses["silo_susdp_usdc"] = self.settings.SILO_SUSDP_VAULT
 
     async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
-        """Read the on-chain USDC balance sitting idle in the smart account."""
-        try:
-            usdc_contract = self.w3.eth.contract(
-                address=self.w3.to_checksum_address(self.settings.USDC_ADDRESS),
-                abi=ERC20_BALANCE_ABI,
-            )
-            balance_wei = await usdc_contract.functions.balanceOf(
-                self.w3.to_checksum_address(smart_account_address)
-            ).call()
-            return Decimal(str(balance_wei)) / Decimal("1000000")
-        except Exception as exc:
-            logger.warning("Failed to read idle USDC for %s: %s", smart_account_address, exc)
-            return Decimal("0")
+        """Read the on-chain USDC balance sitting idle in the smart account.
+
+        Retries up to 3 times with exponential backoff to handle transient
+        RPC errors (e.g. -32603 Internal error from Avalanche public nodes).
+        """
+        import asyncio
+
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                usdc_contract = self.w3.eth.contract(
+                    address=self.w3.to_checksum_address(self.settings.USDC_ADDRESS),
+                    abi=ERC20_BALANCE_ABI,
+                )
+                balance_wei = await usdc_contract.functions.balanceOf(
+                    self.w3.to_checksum_address(smart_account_address)
+                ).call()
+                balance = Decimal(str(balance_wei)) / Decimal("1000000")
+                if attempt > 0:
+                    logger.info(
+                        "Idle USDC read succeeded on attempt %d for %s: $%.2f",
+                        attempt + 1, smart_account_address, float(balance),
+                    )
+                return balance
+            except Exception as exc:
+                if attempt < max_attempts - 1:
+                    delay = 0.5 * (2 ** attempt)  # 0.5s, 1s
+                    logger.warning(
+                        "Idle USDC read attempt %d/%d failed for %s: %s — retrying in %.1fs",
+                        attempt + 1, max_attempts, smart_account_address, exc, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        "Failed to read idle USDC for %s after %d attempts: %s",
+                        smart_account_address, max_attempts, exc,
+                    )
+                    return Decimal("0")
+        return Decimal("0")  # unreachable but makes type-checker happy
 
     async def _discover_onchain_balances(
         self,
@@ -181,6 +207,10 @@ class Rebalancer:
             pass  # Don't block rebalance if cooldown check fails
 
         allowed_protocols = set(session_key_record["allowed_protocols"])
+        logger.debug(
+            "Session key allowed_protocols for %s: %s",
+            smart_account_address, sorted(allowed_protocols),
+        )
 
         # ── Permit2 compatibility check ──
         # Old session keys (granted before Permit2 was added to the call policy)
@@ -233,6 +263,12 @@ class Rebalancer:
         if not twap_rates:
             return await self._log(db, account_id, "skipped",
                                    reason="No validated TWAP rates available")
+
+        logger.debug(
+            "TWAP rates for %s: %s",
+            smart_account_address,
+            {p: f"{float(r.apy * 100):.2f}%%" for p, r in twap_rates.items()},
+        )
 
         # 3. Filter protocols by active session-key scope
         allowed_rates = {
@@ -663,6 +699,24 @@ class Rebalancer:
         is_initial_deployment = not has_existing_protocol_positions and idle_usdc > Decimal("0.01")
 
         if global_flag == RebalanceFlag.NONE and not is_initial_deployment and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
+            # Detailed diagnostics for beat-margin skip — the most common
+            # skip reason; helps operators understand why rebalance didn't fire.
+            logger.info(
+                "BEAT-MARGIN SKIP for %s: current_wAPY=%.4f%%, proposed_wAPY=%.4f%%, "
+                "improvement=%.4f%%, margin=%.4f%%, is_initial=%s, idle=$%.2f, "
+                "current_allocs=%s, proposed=%s, allowed=%s, all_twap_rates=%s",
+                smart_account_address,
+                float(current_weighted_apy * 100),
+                float(new_weighted_apy * 100),
+                float(apy_improvement * 100),
+                float(Decimal(str(self.settings.BEAT_MARGIN)) * 100),
+                is_initial_deployment,
+                float(idle_usdc),
+                {p: f"${float(v):.2f}" for p, v in current.items()},
+                {p: f"${float(v):.2f}" for p, v in result_allocations.items()},
+                sorted(allowed_rates.keys()),
+                {p: f"{float(r.apy * 100):.2f}%" for p, r in allowed_rates.items()},
+            )
             return await self._log(
                 db, account_id, "skipped",
                 reason="APY improvement below beat margin",
@@ -770,6 +824,17 @@ class Rebalancer:
             logger.warning("Idempotency guard check failed: %s — proceeding", exc)
 
         # 9. Execute
+        logger.info(
+            "EXECUTING rebalance for %s: current=%s, target=%s, "
+            "idle=$%.2f, total=$%.2f, movement=$%.2f, apy_gain=%.4f%%, "
+            "flag=%s, is_initial=%s",
+            smart_account_address,
+            {p: f"${float(v):.2f}" for p, v in current.items()},
+            {p: f"${float(v):.2f}" for p, v in result_allocations.items()},
+            float(idle_usdc), float(total_usd), float(total_movement),
+            float(apy_improvement * 100),
+            global_flag.name, is_initial_deployment,
+        )
         try:
             tx_hash = await self.execute_rebalance(
                 account_id=account_id,

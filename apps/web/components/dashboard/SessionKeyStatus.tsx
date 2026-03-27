@@ -110,8 +110,9 @@ export default function SessionKeyStatus() {
           },
         );
 
-      // Preserve the user's original protocol selections from their existing
-      // session key. Only fall back to ACTIVE_PROTOCOLS for brand-new grants.
+      // Preserve the user's originally-selected protocols on re-grant.
+      // Users choose protocols during onboarding for a reason — re-grant
+      // must NOT silently add new protocols they never opted into.
       const existingProtocols = sk?.allowedProtocols;
       const protocols = existingProtocols && existingProtocols.length > 0
         ? existingProtocols

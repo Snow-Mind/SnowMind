@@ -323,7 +323,7 @@ export default function PortfolioPage() {
               Live APY Comparison
             </h2>
           </div>
-          <div className="mt-4 h-52 min-h-52">
+          <div className="mt-4 h-52 min-h-52 w-full min-w-[280px]">
             <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={208}>
               <BarChart
                 data={apyComparison}

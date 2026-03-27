@@ -175,20 +175,19 @@ class SnowMindScheduler:
 
         logger.info("Processing %d accounts", len(accounts.data))
 
-        sem = asyncio.Semaphore(1)  # Serialize execution service calls — each
-        # rebalance creates multiple ZeroDev SDK clients (primary + retry modes),
-        # and running 3+ concurrently exhausts Node.js memory → 503.
         results: list[str] = []
 
-        async def process(account: dict) -> str:
-            async with sem:
-                return await self._rebalance_with_retry(
-                    account["id"], account["address"],
-                )
-
-        results = await asyncio.gather(
-            *[process(a) for a in accounts.data]
-        )
+        # Process accounts sequentially with a stagger delay between them
+        # to reduce sustained RPC / execution-service load on Railway.
+        STAGGER_DELAY_SECONDS = 2
+        for i, account in enumerate(accounts.data):
+            result = await self._rebalance_with_retry(
+                account["id"], account["address"],
+            )
+            results.append(result)
+            # Stagger: small delay between accounts (skip after last)
+            if i < len(accounts.data) - 1:
+                await asyncio.sleep(STAGGER_DELAY_SECONDS)
 
         stats = {
             "checked": len(results),

@@ -163,6 +163,68 @@ async def require_privy_auth(
     )
 
 
+# ── Account ownership verification ──────────────────────────
+
+
+def verify_account_ownership(
+    auth_claims: dict,
+    account: dict,
+    *,
+    db=None,
+) -> None:
+    """Verify the authenticated user owns the requested account.
+
+    Compares the Privy DID (``auth_claims["sub"]``) against the account's
+    stored ``privy_did``. If unknown (legacy account), backfills it on
+    first authenticated access.
+
+    Service-to-service calls (``sub == "service"``) bypass the check.
+
+    Raises ``HTTPException(403)`` on mismatch.
+    """
+    caller_did = auth_claims.get("sub", "")
+    if not caller_did:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication identity",
+        )
+
+    # Service-to-service (API key) calls are trusted
+    if caller_did == "service":
+        return
+
+    stored_did = account.get("privy_did")
+
+    if stored_did:
+        # DID stored — strict match required
+        if stored_did != caller_did:
+            logger.warning(
+                "Authorization denied: caller DID %s != account DID %s for account %s",
+                caller_did, stored_did, account.get("address", "?"),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not own this account",
+            )
+    else:
+        # Legacy account: no DID stored yet — backfill on first access.
+        # This is safe because (a) only the wallet owner can sign the
+        # Privy challenge to obtain a JWT, and (b) we trust the first
+        # authenticated request after migration.
+        if db is not None:
+            account_id = account.get("id", "")
+            try:
+                db.table("accounts").update(
+                    {"privy_did": caller_did}
+                ).eq("id", str(account_id)).execute()
+                logger.info(
+                    "Backfilled privy_did=%s for account %s",
+                    caller_did, account.get("address", "?"),
+                )
+            except Exception as exc:
+                logger.warning("Failed to backfill privy_did: %s", exc)
+
+
 # ── In-memory sliding-window rate limiter ────────────────────
 
 

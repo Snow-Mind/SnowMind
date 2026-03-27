@@ -37,8 +37,13 @@ _ERC20_ABI = [
 
 
 async def _get_idle_usdc(address: str) -> Decimal:
-    """Read the on-chain USDC balance sitting idle in the smart account."""
-    for attempt in range(2):
+    """Read the on-chain USDC balance sitting idle in the smart account.
+
+    Retries on both 429 (rate-limit) and -32603 (RPC internal error).
+    """
+    import asyncio
+
+    for attempt in range(3):
         try:
             settings = get_settings()
             w3 = get_shared_async_web3()
@@ -52,11 +57,17 @@ async def _get_idle_usdc(address: str) -> Decimal:
             return Decimal(str(balance_wei)) / Decimal("1000000")
         except Exception as exc:
             err_str = str(exc)
-            if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
-                from app.core.rpc import get_rpc_manager
-                get_rpc_manager().report_rate_limit()
-                continue  # retry with rotated provider
-            logger.warning("Failed to read idle USDC for %s: %s", address, exc)
+            if attempt < 2:
+                if "429" in err_str or "Too Many Requests" in err_str:
+                    from app.core.rpc import get_rpc_manager
+                    get_rpc_manager().report_rate_limit()
+                elif "-32603" in err_str or "Internal error" in err_str:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+                else:
+                    logger.warning("Failed to read idle USDC for %s: %s", address, exc)
+                    return Decimal("0")
+                continue
+            logger.warning("Failed to read idle USDC for %s after %d attempts: %s", address, attempt + 1, exc)
             return Decimal("0")
     return Decimal("0")
 

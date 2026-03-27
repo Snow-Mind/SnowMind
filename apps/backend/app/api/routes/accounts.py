@@ -10,7 +10,7 @@ from supabase import Client
 
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth
+from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.account import (
     AccountDetailResponse,
@@ -65,6 +65,7 @@ class RegisterAccountRequest(BaseModel):
 async def _do_register(
     req: RegisterAccountRequest,
     db: Client,
+    auth_claims: dict | None = None,
 ) -> AccountResponse:
     """Shared implementation for both registration endpoints."""
     address = validate_eth_address(req.resolved_address())
@@ -86,18 +87,22 @@ async def _do_register(
                 detail="Account already registered with a different owner",
             )
 
+    # Store Privy DID for future authorization checks
+    privy_did = auth_claims.get("sub") if auth_claims else None
+
     # Upsert: if account already exists, just return it
+    upsert_data = {
+        "address": address,
+        "owner_address": owner_address,
+        "is_active": True,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if privy_did and privy_did != "service":
+        upsert_data["privy_did"] = privy_did
+
     result = (
         db.table("accounts")
-        .upsert(
-            {
-                "address": address,
-                "owner_address": owner_address,
-                "is_active": True,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="address",
-        )
+        .upsert(upsert_data, on_conflict="address")
         .execute()
     )
     account = result.data[0]
@@ -224,7 +229,7 @@ async def register_account(
     _auth: dict = Depends(require_privy_auth),
 ):
     """Register a new smart account (and optionally store its session key)."""
-    return await _do_register(req, db)
+    return await _do_register(req, db, _auth)
 
 
 @router.post("/register", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
@@ -236,7 +241,7 @@ async def register_account_alias(
     _auth: dict = Depends(require_privy_auth),
 ):
     """Alias of POST /accounts for frontend compatibility."""
-    return await _do_register(req, db)
+    return await _do_register(req, db, _auth)
 
 
 # ── GET /accounts/{address} ───────────────────────────────
@@ -310,17 +315,18 @@ async def get_account(
 
 # ── DELETE / POST /accounts/{address}/session-key ────────
 
-async def _do_revoke(address: str, db: Client) -> dict:
+async def _do_revoke(address: str, db: Client, auth_claims: dict) -> dict:
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
     )
     if not acct.data:
         raise HTTPException(status_code=404, detail="Account not found")
+    verify_account_ownership(auth_claims, acct.data[0], db=db)
     count = revoke_session_key(db, acct.data[0]["id"])
     return {"revoked": count, "success": True}
 
@@ -334,7 +340,7 @@ async def revoke_account_session_key(
     _auth: dict = Depends(require_privy_auth),
 ):
     """Revoke (deactivate) the active session key for an account."""
-    return await _do_revoke(address, db)
+    return await _do_revoke(address, db, _auth)
 
 
 @router.post("/{address}/session-key/revoke")
@@ -346,7 +352,7 @@ async def revoke_account_session_key_post(
     _auth: dict = Depends(require_privy_auth),
 ):
     """POST alias for session-key revocation (frontend compat)."""
-    return await _do_revoke(address, db)
+    return await _do_revoke(address, db, _auth)
 
 
 # ── POST /accounts/{address}/session-key ── store/renew ──
@@ -398,6 +404,10 @@ async def store_account_session_key(
 
     if acct.data:
         account_id = acct.data[0]["id"]
+        # Verify ownership before storing a session key
+        full_acct = db.table("accounts").select("id, owner_address, privy_did").eq("id", account_id).limit(1).execute()
+        if full_acct.data:
+            verify_account_ownership(_auth, full_acct.data[0], db=db)
         # Auto-reactivate if deactivated (e.g. after emergency withdrawal)
         if not acct.data[0].get("is_active", True):
             db.table("accounts").update({

@@ -16,7 +16,7 @@ from supabase import Client
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.security import require_privy_auth
+from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.services.fee_calculator import (
     FeeCalculation,
@@ -194,6 +194,7 @@ async def preview_withdrawal(
     """
     address = validate_eth_address(req.smart_account_address)
     account = await _get_account(db, address)
+    verify_account_ownership(_auth, account, db=db)
 
     # Read on-chain balance
     current_balance = await _get_on_chain_balance(address)
@@ -251,6 +252,7 @@ async def execute_withdrawal(
     settings = get_settings()
     address = validate_eth_address(req.smart_account_address)
     account = await _get_account(db, address)
+    verify_account_ownership(_auth, account, db=db)
 
     # ── Treasury address guard ──────────────────────────────────────────
     if not settings.TREASURY_ADDRESS or settings.TREASURY_ADDRESS == "0x" + "0" * 40:
