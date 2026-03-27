@@ -119,11 +119,11 @@ const FAQ = [
   },
   {
     q: "What are session keys?",
-    a: "Session keys are temporary, scoped permissions that allow our backend to execute specific operations on your behalf. They're encrypted (AES-256-GCM) at rest, limited to approved contracts/functions, and auto-expire after 7 days.",
+    a: "Session keys are scoped permissions that allow our backend to execute specific operations on your behalf. They're encrypted (AES-256-GCM) at rest, limited to approved contracts/functions, rate-limited on-chain, and revocable at any time.",
   },
   {
     q: "Which protocols does SnowMind support?",
-    a: "Currently: Aave V3, Benqi, and Spark on Avalanche mainnet. We carefully vet each protocol for security, TVL, and audit history before integration.",
+    a: "Currently: Aave V3, Benqi, Spark, Euler V2 (9Summits), and Silo on Avalanche mainnet. All protocols are default-enabled during onboarding. We carefully vet each protocol for security, TVL, and audit history before integration.",
   },
   {
     q: "What are the fees?",

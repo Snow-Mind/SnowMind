@@ -1,7 +1,8 @@
 # SnowMind — Autonomous Yield Optimizer on Avalanche
 
-> Deposit USDC. Our AI agent allocates across Aave V3, Benqi, and Spark
-> on Avalanche mainnet — optimizing yield 24/7. Non-custodial. Gas-free.
+> Deposit USDC. Our AI agent allocates across Aave V3, Benqi, Spark,
+> Euler V2 (9Summits), and Silo on Avalanche mainnet — optimizing yield 24/7.
+> Non-custodial. Gas-free.
 
 ---
 
@@ -18,6 +19,10 @@
 | Aave V3 Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
 | Benqi qiUSDCn | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` |
 | Spark spUSDC | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` |
+| Euler V2 (9Summits) | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` |
+| Silo savUSD/USDC | `0x606fe9a70338e798a292CA22C1F28C829F24048E` |
+| Silo sUSDp/USDC | `0x8ad697a333569ca6f04c8c063e9807747ef169c1` |
+| Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
 | EntryPoint v0.7 | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 
 ## Architecture
@@ -39,7 +44,7 @@
 ┌──────────────────▼─────────────────────────────────────────┐
 │  AVALANCHE C-CHAIN (43114)                                 │
 │  Kernel v3.1 Smart Accounts + Session Keys                 │
-│  Aave V3 · Benqi · Spark                                    │
+│  Aave V3 · Benqi · Spark · Euler V2 · Silo                │
 │  ZeroDev Paymaster (gas sponsoring)                        │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -48,11 +53,11 @@
 
 SnowMind uses a **Waterfall Allocator** with Spark as the base layer:
 
-1. Fetch live APYs from all protocols (on-chain reads, TWAP-smoothed)
-2. Cross-validate against DefiLlama oracle (>2% divergence → halt)
-3. Sort protocols by APY descending; fill each if it beats Spark by ≥0.5%
-4. Cap exposure: 40% max per protocol, 15% of protocol TVL
-5. Park remainder in Spark (the safe default)
+1. Fetch live APYs from all healthy protocols (on-chain reads, TWAP-smoothed)
+2. Cross-validate against DefiLlama as a soft signal (logged, not a hard gate)
+3. Rank protocols by effective TWAP APY descending; allocate top-down
+4. Cap exposure: 7.5% of protocol TVL for lending pools (Aave, Benqi); no TVL cap for ERC-4626 vaults (Spark, Euler, Silo)
+5. Skip rebalance if APY improvement < 0.01% (beat margin)
 6. Execute rebalance atomically via ERC-4337 batched UserOperations
 
 **Safety features:**
@@ -80,7 +85,7 @@ SnowMind uses a **Waterfall Allocator** with Spark as the base layer:
 | Execution | Node.js sidecar (ZeroDev SDK, session key signing) |
 | Database | Supabase (PostgreSQL + Row Level Security) |
 | Optimizer | Waterfall Allocator (Spark base layer) |
-| Protocols | Aave V3, Benqi, Spark (Avalanche mainnet) |
+| Protocols | Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo (Avalanche mainnet) |
 | Encryption | AES-256-GCM (session keys at rest) |
 | Oracle | DefiLlama Yields API (rate cross-validation) |
 
@@ -101,7 +106,7 @@ snowmind/
 │       │   ├── core/       # Config, security, database, logging
 │       │   ├── models/     # Pydantic models
 │       │   ├── services/   # Optimizer, protocols, execution, fees
-│       │   └── workers/    # Scheduler (30-min rebalance cycles)
+│       │   └── workers/    # Scheduler (configurable rebalance cycles)
 │       ├── execution_service/  # Node.js sidecar for UserOp signing
 │       └── tests/          # pytest unit + integration tests
 ├── contracts/              # Solidity + Foundry (SnowMindRegistry)
@@ -154,10 +159,10 @@ node execute.js
 - **Non-custodial**: SnowMind never holds your master keys. Funds stay in your smart account.
 - **Scoped session keys**: Can ONLY call supply/withdraw on whitelisted protocol contracts + USDC transfer to treasury.
 - **On-chain enforcement**: Session key call policies enforced by the Kernel smart account — even a stolen key can't exceed permissions.
-- **7-day expiry**: Session keys auto-expire. Max 20 ops/day.
+- **Infinite on-chain lifetime**: Session keys do not expire on-chain. Users can revoke at any time. Max 20 ops/day.
 - **AES-256-GCM encryption**: Session keys encrypted at rest in Supabase.
 - **TWAP rates**: 15-minute time-weighted average prevents flash manipulation.
-- **DefiLlama cross-validation**: On-chain rates checked against independent oracle.
+- **DefiLlama soft cross-validation**: On-chain rates compared to independent oracle (logged as signal, not a hard gate).
 - **Emergency withdrawal**: Works even if SnowMind backend is down — your wallet can always interact with your smart account directly on Snowtrace.
 
 ## Documentation

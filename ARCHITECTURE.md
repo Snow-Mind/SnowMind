@@ -13,12 +13,12 @@ Think of it as a yield routing layer with your risk rules, not ours. Every user 
 **Key facts:**
 - Chain: Avalanche C-Chain (mainnet, chain ID 43114)
 - Supported protocols: Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo (savUSD/USDC, sUSDp/USDC)
-- Default-enabled: Aave V3, Benqi, Spark — Euler and Silo are opt-in (user must explicitly enable)
+- Default-enabled: All protocols (Aave V3, Benqi, Spark, Euler V2, Silo savUSD/USDC, Silo sUSDp/USDC)
 - Asset: Native USDC only (`0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E`)
 - Non-custodial: User's EOA owns the smart account. SnowMind has scoped permissions only.
 - Agent fee: 10% of profit, charged proportionally on every withdrawal
 - Beta users: Agent fee waived (flag set per account in database)
-- Rebalance frequency: Every 30 minutes, subject to all pre-checks
+- Rebalance frequency: Configurable (default 30 minutes in production), subject to all pre-checks
 
 ---
 
@@ -81,7 +81,7 @@ Think of it as a yield routing layer with your risk rules, not ours. Every user 
                        │  EntryPoint v0.7       │
                        └────────────────────────┘
 
-Euler and Silo vaults are opt-in: fully active in the optimizer but not enabled by default in the onboarding UI.
+Euler and Silo vaults are fully supported: active in the optimizer and default-enabled in the onboarding UI.
 ```
 
 ---
@@ -189,9 +189,9 @@ Every user selects which markets (protocols) the agent is allowed to use and cho
 | Aave V3 | Yes | 10/10 |
 | Benqi | Yes | 10/10 |
 | Spark | Yes | 9/10 |
-| Euler V2 (9Summits) | No (opt-in) | 6/10 |
-| Silo savUSD/USDC | No (opt-in) | 8/10 |
-| Silo sUSDp/USDC | No (opt-in) | 8/10 |
+| Euler V2 (9Summits) | Yes | 6/10 |
+| Silo savUSD/USDC | Yes | 8/10 |
+| Silo sUSDp/USDC | Yes | 8/10 |
 
 **Diversification Preferences:**
 | Preference | Behavior |
@@ -221,7 +221,7 @@ The in-page Market Assistant provides contextual suggestions based on the chosen
 Every step runs in order. A SKIP at any step means this account is not rebalanced this cycle. A FORCED_REBALANCE or EMERGENCY_EXIT flag bypasses steps 3, 16, and 18.
 
 ```
-SCHEDULER FIRES (every 30 minutes)
+SCHEDULER FIRES (configurable interval, default 30 min in production)
 
 1. ACQUIRE DISTRIBUTED LOCK
    SELECT scheduler_lock FOR UPDATE SKIP LOCKED
@@ -345,7 +345,7 @@ SCHEDULER FIRES (every 30 minutes)
 16. BEAT MARGIN CHECK
     new_weighted_apy = Σ(new_alloc[p] / total_bal × twap_apy[p]) for each protocol
     current_weighted_apy = Σ(current_alloc[p] / total_bal × twap_apy[p])
-    If new_weighted_apy - current_weighted_apy < 0.001 (0.1%): SKIP
+    If new_weighted_apy - current_weighted_apy < 0.0001 (0.01%): SKIP
     Exception: FORCED_REBALANCE and EMERGENCY_EXIT bypass this
 
 17. DELTA CHECK
@@ -382,7 +382,7 @@ User visits snowmind.xyz. Privy handles authentication — MetaMask, social logi
 ZeroDev deploys a Kernel v3.1 ERC-4337 smart account on Avalanche. The user's EOA becomes the permanent owner. Same owner always gets the same smart account address (deterministic CREATE2 deployment).
 
 ### Step 3: Choose Strategy
-User selects which markets (protocols) the optimizer is allowed to use by toggling each one on/off. Default-enabled: Aave V3, Benqi, Spark. Opt-in: Euler V2 (9Summits), Silo savUSD/USDC, Silo sUSDp/USDC.
+User selects which markets (protocols) the optimizer is allowed to use by toggling each one on/off. All protocols are default-enabled: Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo savUSD/USDC, Silo sUSDp/USDC.
 
 User also picks a diversification preference:
 - **Max Yield**: 100% in the single best protocol

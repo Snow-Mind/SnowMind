@@ -1,0 +1,677 @@
+
+================================================================================
+SNOW MIND — TECHNICAL SPECIFICATION
+Autonomous Yield Optimizer on Avalanche
+================================================================================
+Version: 1.0
+Date: March 2, 2026
+Audience: CTO / Engineering Lead (Suyash)
+Scope: Hackathon MVP (6 weeks) + Post-MVP Roadmap
+================================================================================
+
+
+TABLE OF CONTENTS
+-----------------
+1. Project Overview & Vision
+2. Architecture Overview
+3. Smart Account Architecture (ZeroDev Kernel)
+4. MILP Yield Optimizer Design
+5. Protocol Integrations
+6. Security Model & Session Keys
+7. Kite AI / x402 Data Service Integration
+8. Frontend / UX Flow (Brief)
+9. Competitive Intelligence (From Giza Reverse-Engineering)
+10. MVP Scope & Milestones (6 Weeks)
+11. Post-MVP Roadmap
+12. Open Questions & Decisions Needed
+
+
+================================================================================
+1. PROJECT OVERVIEW & VISION
+================================================================================
+
+Snow Mind is an autonomous yield optimization agent built on Avalanche. Users
+deposit assets into a smart account, and an off-chain optimization engine
+continuously reallocates capital across whitelisted lending/yield protocols to
+maximize risk-adjusted returns — without the user needing to manually manage
+positions.
+
+Core thesis: Most "AI yield agents" in DeFi use traditional mathematical
+optimization (MILP solvers, mean-variance optimization, Monte Carlo simulations)
+for their core allocation logic — not LLMs. We follow the same proven approach
+for the optimizer, while using the Kite AI ecosystem and x402 protocol for
+auxiliary data services (sentiment, risk signals, market intelligence).
+
+Target chain: Avalanche C-Chain (primary), with architecture designed for
+future multi-chain expansion.
+
+Target user: DeFi-native users with $5K-$500K in stablecoins or blue-chip
+assets who want passive yield optimization without active management.
+
+
+================================================================================
+2. ARCHITECTURE OVERVIEW
+================================================================================
+
+The system has four major components:
+
+┌─────────────────────────────────────────────────────────────┐
+│                        USER                                  │
+│                   (Web Frontend)                             │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              SMART ACCOUNT LAYER                             │
+│         (ZeroDev Kernel v0.3.3 — ERC-4337)                  │
+│                                                              │
+│  • User's on-chain smart wallet                              │
+│  • Session keys for scoped agent permissions                 │
+│  • All funds stay in user's account (non-custodial)          │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ Session key authorized txns
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              OFF-CHAIN OPTIMIZER                              │
+│         (Backend Server — MILP Solver)                       │
+│                                                              │
+│  • Fetches yield rates from integrated protocols             │
+│  • Runs MILP optimization for optimal allocation             │
+│  • Generates rebalance transactions                          │
+│  • Signs with session key and submits via bundler             │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              PROTOCOL LAYER                                   │
+│   (Benqi, Aave v3, Euler v2, Fluid — on Avalanche)          │
+│                                                              │
+│  • Lending/supply positions                                  │
+│  • Yield accrual                                             │
+│  • Liquidation parameters                                    │
+└─────────────────────────────────────────────────────────────┘
+
+Data flow:
+1. User creates a ZeroDev smart account via our frontend
+2. User deposits assets (USDC, USDT, AVAX, etc.) into their smart account
+3. User grants a session key to the Snow Mind optimizer backend
+4. Optimizer periodically fetches current yield rates across all protocols
+5. MILP solver computes optimal allocation given constraints
+6. Optimizer generates + signs rebalance txns using the session key
+7. Transactions are submitted via an ERC-4337 bundler
+8. User can revoke session key or withdraw at any time
+
+
+================================================================================
+3. SMART ACCOUNT ARCHITECTURE (ZERDEV KERNEL)
+================================================================================
+
+Why ZeroDev Kernel:
+- Open source smart account framework (ERC-4337 compatible)
+- Used by Giza (confirmed via reverse engineering) and Glider (a16z-backed)
+- Modular plugin/validator system for adding custom logic
+- Session key support built-in via SessionKeyValidator
+- Battle-tested: Kernel v0.3.3 is the version Giza deploys on-chain
+
+Key Components:
+
+3.1 KERNEL SMART ACCOUNT
+- Each user gets a Kernel smart account deployed on Avalanche
+- This is NOT a multisig — it's a single-owner smart account with programmable
+  validation logic
+- The user's EOA (MetaMask, etc.) is the root owner/signer
+- Smart account holds all user funds (fully non-custodial)
+
+Implementation:
+- Use @zerodev/sdk to deploy Kernel accounts
+- Kernel v0.3.3 contracts (verify Avalanche deployment — if not deployed,
+  we deploy ourselves or use latest available version)
+- Entry point: standard ERC-4337 EntryPoint contract on Avalanche
+
+3.2 SESSION KEY VALIDATOR
+- The session key is the core mechanism that lets our optimizer execute
+  transactions on behalf of the user WITHOUT holding their private key
+- Session keys are scoped — they can only call specific contracts, specific
+  functions, with specific parameter constraints
+
+Session Key Configuration for Snow Mind:
+  {
+    // Allowed target contracts (whitelist only)
+    allowedContracts: [
+      BENQI_LENDING_POOL,
+      AAVE_V3_POOL,
+      EULER_V2_VAULT,
+      FLUID_VAULT
+    ],
+
+    // Allowed functions
+    allowedFunctions: [
+      "supply(address,uint256,address,uint16)",
+      "withdraw(address,uint256,address)",
+      "deposit(uint256,address)",
+      "redeem(uint256,address,address)"
+    ],
+
+    // Constraints
+    maxTransactionValue: USER_DEFINED_CAP,
+    expirationTimestamp: NOW + 30_DAYS,  // renewable
+    rateLimit: MAX_N_TRANSACTIONS_PER_DAY
+  }
+
+Critical security properties:
+- Session key CANNOT transfer funds to arbitrary addresses
+- Session key CANNOT call unapproved contracts
+- Session key has an expiration — user must re-authorize periodically
+- User can revoke the session key at any time via their root key
+
+3.3 ERC-4337 BUNDLER
+- We need a bundler service to submit UserOperations to the EntryPoint
+- Options: Pimlico, Stackup, Alchemy, or self-hosted (Infinitism reference)
+- For MVP: use Pimlico or Stackup's hosted bundler on Avalanche
+- The bundler pays gas (we can sponsor via a Paymaster, or user pre-funds gas)
+
+Decision needed: Do we want to sponsor gas for users via a Paymaster contract,
+or require users to hold AVAX for gas? (Recommendation: sponsor gas for MVP
+to reduce friction — cost is minimal for hackathon scale)
+
+3.4 ACCOUNT DEPLOYMENT FLOW
+1. User connects wallet (EOA) on frontend
+2. Frontend calls ZeroDev SDK to compute counterfactual smart account address
+3. Smart account is deployed on first transaction (lazy deployment)
+4. User signs a session key authorization (EIP-712 typed signature)
+5. Session key is stored by our backend (encrypted)
+6. Optimizer is now authorized to act within session key scope
+
+
+================================================================================
+4. MILP YIELD OPTIMIZER DESIGN
+================================================================================
+
+Why MILP (Mixed-Integer Linear Programming):
+- This is what the top projects actually use (Giza uses MILP, confirmed
+  from their architecture). Almanak uses Monte Carlo. Theoriq uses
+  mean-variance. None of them use LLMs for core allocation.
+- MILP is deterministic, auditable, and fast for portfolio allocation problems
+- Can express complex constraints (min/max per protocol, risk limits, etc.)
+- Well-supported by open-source solvers
+
+4.1 THE OPTIMIZATION PROBLEM
+
+Objective function: Maximize risk-adjusted yield across N protocols
+
+  maximize: Σ(allocation_i × yield_i) - λ × risk_penalty
+
+Subject to constraints:
+  - Σ(allocation_i) = total_portfolio_value          (fully allocated)
+  - allocation_i >= 0                                 (no negative positions)
+  - allocation_i <= max_allocation_per_protocol       (diversification cap)
+  - allocation_i <= protocol_i_tvl × max_share        (don't exceed X% of protocol TVL)
+  - risk_score_i <= max_acceptable_risk               (risk threshold)
+
+Variables:
+  - allocation_i: amount deposited in protocol i (continuous variable)
+  - yield_i: current APY/APR of protocol i (input parameter, fetched on-chain)
+  - risk_score_i: protocol risk rating (input parameter, from risk model)
+  - λ (lambda): risk aversion parameter (user-configurable or default)
+
+4.2 INPUT DATA PIPELINE
+
+For each integrated protocol, fetch:
+  - Current supply APY (on-chain query or subgraph)
+  - Total TVL / utilization rate
+  - Available liquidity for deposits
+  - Any reward token APY (AVAX rewards, protocol tokens, etc.)
+
+Data sources:
+  - Direct smart contract reads (preferred — most accurate, real-time)
+  - Subgraphs (The Graph) for historical data
+  - DefiLlama API for cross-protocol comparison / sanity checks
+  - (Post-MVP) Kite AI data services via x402 for sentiment/risk signals
+
+Refresh frequency:
+  - MVP: Every 30 minutes (cron job)
+  - Post-MVP: Event-driven (monitor for significant rate changes)
+
+4.3 RISK MODEL (SIMPLIFIED FOR MVP)
+
+For MVP, use a simple weighted risk score per protocol:
+
+  risk_score = w1 × smart_contract_risk
+             + w2 × liquidity_risk
+             + w3 × concentration_risk
+
+Where:
+  - smart_contract_risk: static rating (1-10) based on audit status, age,
+    TVL history. Manually assigned for each protocol initially.
+  - liquidity_risk: dynamic — based on current utilization rate and
+    available liquidity. Higher utilization = higher risk.
+  - concentration_risk: dynamic — if Snow Mind users collectively represent
+    >X% of a pool, increase risk score.
+
+Post-MVP: Replace static ratings with dynamic scoring from on-chain
+analytics, integrate insurance protocol data, add volatility metrics.
+
+4.4 SOLVER IMPLEMENTATION
+
+Recommended solver: Google OR-Tools (open source) or PuLP (Python)
+- Both support MILP natively
+- OR-Tools is faster for larger problem instances
+- PuLP is simpler to set up and sufficient for MVP (4 protocols)
+
+Backend stack recommendation:
+- Python backend (FastAPI or Flask)
+- PuLP or OR-Tools for MILP solving
+- Web3.py for on-chain data fetching
+- APScheduler or Celery for periodic optimization runs
+
+Solve time: With 4 protocols and simple constraints, solve time will be
+<1 second. This is trivial.
+
+4.5 REBALANCE LOGIC
+
+The optimizer doesn't rebalance on every run. It follows a threshold model:
+
+  IF (proposed_allocation - current_allocation) > rebalance_threshold:
+      generate_rebalance_transactions()
+
+Rebalance threshold: configurable, default 5% of portfolio per protocol.
+This prevents excessive gas costs from micro-adjustments.
+
+Transaction generation:
+1. Calculate delta between current and proposed allocation per protocol
+2. Generate withdraw transactions for protocols being reduced
+3. Generate supply transactions for protocols being increased
+4. Order: withdrawals first, then deposits (ensure funds are available)
+5. Bundle into a batch UserOperation via the smart account
+6. Sign with session key
+7. Submit via bundler
+
+Gas optimization: Kernel smart accounts support batch execution — multiple
+calls in a single UserOperation. This saves gas vs. individual transactions.
+
+
+================================================================================
+5. PROTOCOL INTEGRATIONS
+================================================================================
+
+MVP integrations (Avalanche C-Chain):
+
+5.1 BENQI (benqi.fi)
+- Type: Lending/borrowing (Compound fork)
+- Contracts: qiTokens (supply token model)
+- Key functions:
+    mint(uint256 amount) — supply assets, receive qiTokens
+    redeem(uint256 qiTokenAmount) — withdraw assets
+    redeemUnderlying(uint256 underlyingAmount) — withdraw exact amount
+- APY source: On-chain via exchangeRateStored() + supply rate per block
+- Reward tokens: QI token rewards (check if still active)
+- Supported assets: USDC, USDT, AVAX, BTC.b, WETH
+- Risk rating: Medium-low (established, audited, high TVL on Avalanche)
+- Notes: Benqi is the dominant lending protocol on Avalanche — this is our
+  primary integration and should be rock-solid
+
+5.2 AAVE V3 (aave.com)
+- Type: Lending/borrowing
+- Contracts: Aave V3 Pool contract on Avalanche
+- Key functions:
+    supply(address asset, uint256 amount, address onBehalfOf, uint16 refCode)
+    withdraw(address asset, uint256 amount, address to)
+- APY source: Pool.getReserveData() returns currentLiquidityRate
+- Reward tokens: Check Avalanche incentives controller
+- Supported assets: USDC, USDT, DAI, AVAX, WETH, BTC.b
+- Risk rating: Low (battle-tested across multiple chains, top-tier audits)
+- Notes: Aave V3 has efficiency mode (eMode) — could be leveraged later
+  for correlated asset optimization
+
+5.3 EULER V2 (euler.finance)
+- Type: Modular lending (vault-based architecture)
+- Contracts: ERC-4626 vault interface
+- Key functions:
+    deposit(uint256 assets, address receiver) — deposit into vault
+    redeem(uint256 shares, address receiver, address owner) — withdraw
+    withdraw(uint256 assets, address receiver, address owner) — withdraw exact
+- APY source: Vault-specific, query via totalAssets()/totalSupply() changes
+- Risk rating: Medium (v2 is newer, modular design adds complexity)
+- Notes: Euler v2 is vault-based (ERC-4626), which is a cleaner interface
+  than Compound-fork models. Verify Avalanche deployment status.
+
+  ** IMPORTANT: Confirm Euler v2 is live on Avalanche before committing
+  engineering time. If not deployed, deprioritize for MVP. **
+
+5.4 FLUID (fluid.instadapp.io)
+- Type: Unified lending/borrowing with smart collateral
+- Contracts: Fluid lending vaults
+- Key functions: Varies by vault type — investigate specific ABI
+- APY source: Vault-specific rate queries
+- Risk rating: Medium (newer protocol, backed by Instadapp team)
+- Notes: Fluid is interesting for post-MVP because of "smart debt" and
+  "smart collateral" features. For MVP, only use simple supply positions.
+
+  ** IMPORTANT: Same as Euler — verify Avalanche deployment. If only on
+  mainnet Ethereum, deprioritize. **
+
+5.5 INTEGRATION PRIORITY ORDER (MVP)
+1. Benqi — MUST HAVE (primary Avalanche lending protocol)
+2. Aave V3 — MUST HAVE (proven, high TVL on Avalanche)
+3. Euler v2 — NICE TO HAVE (if deployed on Avalanche)
+4. Fluid — NICE TO HAVE (if deployed on Avalanche)
+
+Minimum viable product requires Benqi + Aave V3. Two protocols is enough
+to demonstrate autonomous rebalancing.
+
+5.6 APPROVAL FLOW
+Before the optimizer can supply to any protocol, the smart account must
+approve token spending. This happens once per token per protocol:
+
+  smart_account.execute(
+    token.approve(PROTOCOL_ADDRESS, MAX_UINT256)
+  )
+
+This approval transaction uses the session key and should be done during
+initial setup or first rebalance.
+
+
+================================================================================
+6. SECURITY MODEL & SESSION KEYS
+================================================================================
+
+Security is THE critical concern for an autonomous agent that controls
+user funds. Our architecture must ensure:
+
+6.1 NON-CUSTODIAL GUARANTEE
+- User funds NEVER leave their smart account
+- Our backend NEVER has access to the user's root private key
+- Our backend only holds a scoped session key
+- The session key cannot move funds to any address outside the whitelisted
+  protocol contracts
+
+6.2 SESSION KEY SCOPING (DEFENSE IN DEPTH)
+
+Layer 1 — Contract whitelist:
+  Session key can ONLY interact with approved protocol contracts
+  (Benqi, Aave, Euler, Fluid lending pools)
+
+Layer 2 — Function whitelist:
+  Session key can ONLY call supply/withdraw functions
+  Cannot call borrow, liquidate, transfer, or any other function
+
+Layer 3 — Parameter constraints:
+  Maximum transaction value per call
+  Maximum number of transactions per time period
+  Cannot supply to addresses not in the approved asset list
+
+Layer 4 — Temporal constraints:
+  Session key expires after a set period (e.g., 30 days)
+  Must be re-authorized by user
+
+Layer 5 — User override:
+  User can revoke session key at ANY time from the frontend
+  Revocation is immediate (on-chain state change)
+  User can always directly interact with their smart account using root key
+
+6.3 BACKEND KEY MANAGEMENT
+- Session key private key stored encrypted at rest (AES-256)
+- Decrypt only in memory at time of transaction signing
+- Backend server should run in a secure environment
+- For MVP: encrypted env variables are acceptable
+- Post-MVP: consider TEE (Trusted Execution Environment) like Almanak uses,
+  or AWS KMS / HashiCorp Vault
+
+6.4 RISK SCENARIO ANALYSIS
+
+Scenario: Our backend server is compromised
+  Impact: Attacker gains session key
+  Mitigation: Session key can ONLY supply/withdraw to whitelisted protocols.
+  Attacker cannot steal funds (no transfer permission). Worst case: attacker
+  makes suboptimal allocations. User can revoke and withdraw immediately.
+
+Scenario: A whitelisted protocol is exploited
+  Impact: Funds in that protocol are at risk (same as any DeFi user)
+  Mitigation: Diversification cap (max X% per protocol) limits exposure.
+  Post-MVP: automated emergency withdrawal on exploit detection.
+
+Scenario: Smart contract bug in Kernel
+  Impact: Potentially severe
+  Mitigation: ZeroDev Kernel is audited and battle-tested. We use a known
+  stable version (v0.3.3). We do not write custom validator plugins for MVP.
+
+6.5 EMERGENCY PROCEDURES
+- Frontend should have a "PANIC BUTTON" that:
+  1. Revokes all session keys
+  2. Withdraws all positions to the smart account
+  3. User can then transfer to their EOA
+- This should work even if our backend is completely down
+
+
+================================================================================
+7. KITE AI / x402 DATA SERVICE INTEGRATION
+================================================================================
+
+This is our Avalanche ecosystem differentiation. Kite AI is Avalanche's
+AI infrastructure layer, and x402 is the HTTP-native payment protocol for
+agent-to-agent transactions.
+
+7.1 MVP SCOPE (LIGHT INTEGRATION)
+For the hackathon, the Kite AI integration is a value-add, not the core
+product. The core product is the MILP optimizer + ZeroDev smart accounts.
+
+MVP Kite integration:
+- Register Snow Mind as an agent on Kite's agent registry
+- Demonstrate consuming at least one data service via x402
+  (e.g., risk scoring, sentiment analysis, or yield prediction)
+- Use the data as an input signal to the risk model (Section 4.3)
+
+7.2 x402 PAYMENT FLOW
+x402 is a protocol where AI agents pay for API calls via HTTP headers:
+
+  1. Agent makes HTTP request to a data provider
+  2. Provider responds with 402 Payment Required + payment details
+  3. Agent creates a crypto payment (small amount, USDC on Avalanche)
+  4. Agent re-sends request with payment proof in headers
+  5. Provider validates payment and returns data
+
+For Snow Mind: Our optimizer backend acts as the paying agent. When it
+needs supplementary data (risk score, market sentiment), it calls a
+Kite-registered data provider and pays via x402.
+
+This demonstrates the "agent economy" thesis — our optimizer agent is
+an autonomous economic actor that consumes and pays for services.
+
+7.3 POST-MVP VISION
+- Snow Mind itself becomes a data provider: sell anonymized, aggregated
+  yield strategy signals to other agents via x402
+- Consume multiple specialized data services for richer risk modeling
+- Full participation in Kite's agent-to-agent marketplace
+
+
+================================================================================
+8. FRONTEND / UX FLOW (BRIEF)
+================================================================================
+
+MVP frontend is simple. It's a dashboard, not a complex application.
+
+Screens:
+1. Connect Wallet → Deploy/Access Smart Account
+2. Deposit → Select asset, amount, deposit into smart account
+3. Dashboard → Current allocation, total yield earned, APY, history
+4. Settings → Risk tolerance slider, max per-protocol %, session key status
+5. Withdraw → Pull funds back to EOA
+6. Emergency → Revoke session key, emergency withdraw all
+
+Tech stack suggestion: Next.js + wagmi + viem + ZeroDev SDK
+Hosting: Vercel (free tier is fine for MVP)
+
+The frontend is NOT the hard part. Keep it minimal and functional.
+
+
+================================================================================
+9. COMPETITIVE INTELLIGENCE (FROM GIZA REVERSE-ENGINEERING)
+================================================================================
+
+This section documents what we learned from analyzing competitors. Use this
+to inform architectural decisions and avoid reinventing the wheel.
+
+9.1 GIZA
+- Smart accounts: ZeroDev Kernel v0.3.3 (confirmed on-chain)
+- Optimization: MILP solver (not LLMs — despite marketing)
+- Data: Yield curve modeling, on-chain rate fetching
+- Session keys: Standard ZeroDev session key validator
+- Takeaway: WE ARE USING THE SAME CORE ARCHITECTURE. This validates our
+  approach. Our differentiator is Avalanche-native + Kite AI integration.
+
+9.2 ALMANAK ($14.25M TVL)
+- Smart accounts: Gnosis Safe + Zodiac module system
+- Optimization: Monte Carlo simulations + Python strategy scripts
+- Security: TEE (Trusted Execution Environments) for strategy execution
+- Agent framework: Custom — users write Python strategies
+- Takeaway: More complex architecture than we need. Safe + Zodiac is
+  heavier than ZeroDev Kernel. TEE is interesting for post-MVP.
+
+9.3 GLIDER ($4M raised, a16z CSX)
+- Smart accounts: ZeroDev Kernel (same as us and Giza)
+- Optimization: Solver network model
+- Natural language: Accepts portfolio intents in plain English
+- Takeaway: Closest architectural comp to us. They're on different chains
+  though. Their NLP intent layer is a nice UX feature for post-MVP.
+
+9.4 THEORIQ / ALPHAVAULT ($23M TVL)
+- Optimization: Mean-variance optimization (Markowitz model)
+- Approach: More traditional quant finance
+- Takeaway: Simpler math model than MILP. MILP is more flexible.
+
+9.5 SAIL (on Base)
+- Type: Auto-rotating yield optimizer
+- Approach: Rule-based rotation between highest-yield protocols
+- Takeaway: Simpler than MILP but less sophisticated. Good validation
+  that "auto yield optimizer" is a real product category.
+
+KEY COMPETITIVE INSIGHT: Nobody is doing this well on Avalanche specifically.
+The Avalanche DeFi ecosystem is underserved by autonomous yield tools
+compared to Ethereum mainnet, Base, and Arbitrum. This is our opening.
+
+
+================================================================================
+10. MVP SCOPE & MILESTONES (6 WEEKS)
+================================================================================
+
+WEEK 1-2: Foundation
+  [ ] Deploy ZeroDev Kernel smart account factory on Avalanche testnet
+  [ ] Implement session key creation + authorization flow
+  [ ] Set up Python backend (FastAPI) with basic project structure
+  [ ] Integrate web3.py for Avalanche C-Chain interaction
+  [ ] Research and document exact contract addresses for Benqi + Aave V3
+      on Avalanche (mainnet and testnet / Fuji)
+
+WEEK 2-3: Protocol Integration
+  [ ] Build Benqi adapter: supply, withdraw, fetch APY
+  [ ] Build Aave V3 adapter: supply, withdraw, fetch APY
+  [ ] Unified interface: each protocol adapter implements same interface
+      (supply, withdraw, getAPY, getBalance, getRiskParams)
+  [ ] Test deposits and withdrawals on Fuji testnet
+
+WEEK 3-4: Optimizer
+  [ ] Implement MILP solver using PuLP
+  [ ] Build input data pipeline (fetch rates from both protocols)
+  [ ] Implement rebalance threshold logic
+  [ ] Implement transaction generation (withdrawal + deposit batching)
+  [ ] Session key signing + bundler submission
+  [ ] End-to-end test: optimizer reads rates → solves → executes rebalance
+
+WEEK 4-5: Frontend + Integration
+  [ ] Next.js app with wallet connection (wagmi)
+  [ ] Smart account deployment flow
+  [ ] Session key authorization UI
+  [ ] Deposit / withdraw flows
+  [ ] Dashboard showing current allocation + yield
+  [ ] Emergency revoke button
+
+WEEK 5-6: Polish + Kite Integration
+  [ ] Light Kite AI integration (register agent, consume one data service)
+  [ ] x402 payment flow demonstration
+  [ ] Testing on Fuji testnet (full flow)
+  [ ] Deploy to Avalanche mainnet (if ready) or prepare demo on testnet
+  [ ] Pitch deck refinement, demo video recording
+
+DELIVERABLES AT END OF 6 WEEKS:
+  ✓ Working autonomous yield optimizer on Avalanche (testnet minimum)
+  ✓ Non-custodial smart account with session key security
+  ✓ Automatic rebalancing between Benqi and Aave V3
+  ✓ Basic dashboard frontend
+  ✓ Kite AI / x402 integration demo
+  ✓ Pitch deck + demo for hackathon submission
+
+
+================================================================================
+11. POST-MVP ROADMAP
+================================================================================
+
+Phase 2 (Months 2-3): Expand
+  - Add Euler v2 and Fluid integrations (if on Avalanche)
+  - More sophisticated risk model (dynamic scoring, not static)
+  - Yield farming integration (LP positions, not just lending)
+  - Historical performance tracking and reporting
+  - TEE for backend optimizer (follow Almanak's approach)
+  - Multi-asset support (not just stablecoins)
+
+Phase 3 (Months 4-6): Differentiate
+  - Full Kite AI data marketplace integration
+  - Become a data provider: sell yield signals via x402
+  - Agent-to-agent composability (other agents can use Snow Mind)
+  - Natural language portfolio intents (à la Glider)
+  - Cross-chain expansion (Arbitrum, Base)
+  - Governance token + fee model
+
+Phase 4 (Months 6-12): Scale
+  - Institutional vaults (higher min deposits, custom strategies)
+  - Strategy marketplace (community-built optimization strategies)
+  - Insurance protocol integration (cover smart contract risk)
+  - Mobile app
+  - Full audit of all smart contracts
+
+
+================================================================================
+12. OPEN QUESTIONS & DECISIONS NEEDED
+================================================================================
+
+1. BUNDLER SELECTION: Pimlico vs. Stackup vs. self-hosted?
+   → Recommendation: Pimlico for MVP (good Avalanche support)
+
+2. GAS SPONSORSHIP: Do we pay gas for users via Paymaster?
+   → Recommendation: Yes for MVP (reduces friction, minimal cost)
+
+3. EULER/FLUID AVAILABILITY: Are these deployed on Avalanche?
+   → ACTION: Suyash to verify contract deployments on Avalanche C-Chain
+
+4. TESTNET STRATEGY: Build entirely on Fuji first, or parallel mainnet?
+   → Recommendation: Fuji first, mainnet deploy in week 6
+
+5. KERNEL VERSION: v0.3.3 (Giza's version) vs. latest?
+   → Need to check what ZeroDev versions are deployed on Avalanche
+   → If v0.3.3 isn't deployed, use whatever is available
+
+6. PYTHON VS. NODE BACKEND: Python is better for MILP (PuLP, OR-Tools).
+   Node is better for web3 tooling (viem, ZeroDev SDK is JS-native).
+   → Option A: Python backend with web3.py
+   → Option B: Hybrid — Node.js for web3/session keys, Python microservice
+     for MILP solving
+   → Recommendation: Start with pure Python for simplicity. web3.py is
+     sufficient for our needs.
+
+7. REBALANCE FREQUENCY: How often should the optimizer run?
+   → MVP: Every 30 minutes via cron
+   → Post-MVP: Event-driven (rate change thresholds)
+
+8. MAXIMUM PROTOCOL ALLOCATION: What % cap per protocol?
+   → Suggestion: 60% max per protocol for MVP (with 2 protocols)
+   → User-configurable post-MVP
+
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
+
+Suyash — start with Section 10 (MVP milestones). Week 1-2 tasks are your
+immediate priority. The ZeroDev Kernel deployment on Avalanche is the first
+critical-path item to validate.
+
+Questions? Ping Shunsuke or discuss in our next sync.

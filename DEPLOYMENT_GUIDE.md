@@ -27,7 +27,7 @@ SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and
 
 1. **User connects wallet** → Privy handles authentication (social login or wallet).
 2. **Smart account is created** → ZeroDev deploys an ERC-4337 smart account for the user on Avalanche. The user's EOA (MetaMask/embedded wallet) is the owner.
-3. **User deposits USDC** → Transfers native USDC into their smart account and approves a **session key** (valid 7 days) that allows SnowMind's backend to move funds between whitelisted protocols on their behalf.
+3. **User deposits USDC** → Transfers native USDC into their smart account and approves a **session key** (infinite on-chain lifetime, revocable anytime) that allows SnowMind's backend to move funds between whitelisted protocols on their behalf.
 4. **The Waterfall Allocator runs every 30 minutes** → It checks current APYs, picks the best protocol, and decides if a rebalance is worth the gas cost.
 5. **If a rebalance is needed** → The backend calls the Node.js execution service, which uses the session key to submit a UserOperation (ERC-4337) via ZeroDev's bundler. Funds move from one protocol to another in a single transaction. ZeroDev's paymaster sponsors the gas cost (zero-cost for users).
 6. **User withdraws anytime** → Emergency withdrawal pulls all funds back to the smart account. A 10% fee is charged only on profits (yield earned), not on principal.
@@ -47,13 +47,13 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 
 ### Safety Features
 
-- **Rate validation**: Cross-checks on-chain rates against DefiLlama. If they diverge by >2%, the circuit breaker halts that protocol.
+- **Rate validation**: Cross-checks on-chain rates against DefiLlama as a soft signal. Divergence >2% is logged as a warning.
 - **TWAP smoothing**: Uses 15-minute time-weighted average prices, not instantaneous rates (prevents manipulation).
 - **30-day APY averaging**: Rebalance decisions use 30-day moving averages when available.
 - **Minimum interval**: At least 6 hours between rebalances.
 - **Gas gate**: Rebalance only happens if the expected yield improvement exceeds gas cost.
 - **Platform deposit cap**: $50K total across all users during guarded beta launch.
-- **Session key expiry**: 7-day session keys (renewable), not permanent access.
+- **Session key scope**: Session keys have infinite on-chain lifetime. Users can revoke at any time. Max 20 ops/day.
 
 ### Fee Model
 
@@ -606,7 +606,7 @@ Run through the full flow with a small amount ($10-50 of real USDC):
 
 1. Visit the frontend → connect wallet → create smart account
 2. Deposit a small amount of USDC
-3. Approve session key (7-day duration)
+3. Approve session key (infinite on-chain lifetime, revocable)
 4. Wait for scheduler to run (or trigger manual rebalance via API)
 5. Check dashboard — allocations should appear
 6. Try emergency withdrawal — verify fee breakdown is shown
@@ -717,7 +717,7 @@ Before going live, verify each item:
 - [ ] Rate validator cross-checks pass against DefiLlama
 
 ### Security
-- [ ] Session keys use 7-day duration (not 100 years)
+- [ ] Session keys are scoped correctly (infinite lifetime, revocable, rate-limited)
 - [ ] Platform deposit cap enforced ($50K)
 - [ ] DEPLOYER_PRIVATE_KEY is empty in production
 - [ ] All secrets are unique between environments
@@ -756,7 +756,7 @@ Optional but strongly recommended for production security:
 ### End-to-End Flow
 - [ ] Smart account deploys successfully on mainnet
 - [ ] USDC deposit + approve works
-- [ ] Session key creation works (7-day expiry)
+- [ ] Session key creation works (infinite lifetime, revocable)
 - [ ] Scheduler runs and produces rebalance decisions
 - [ ] Rebalance execution submits UserOp on mainnet
 - [ ] Explorer links point to snowtrace.io

@@ -1,16 +1,16 @@
-# Dependencies
+# ── Dependencies ─────────────────────────────────────────────
 node_modules/
 
-# Environment variables
+# ── Environment variables ────────────────────────────────────
 .env
 .env.*
 !.env.example
-execution_logs.md
-# Next.js
+
+# ── Next.js ──────────────────────────────────────────────────
 .next/
 out/
-
-# Python
+backend_logs.md
+# ── Python ───────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
@@ -19,35 +19,45 @@ venv/
 .venv/
 .pytest_cache/
 
-# Build outputs
+# ── Build outputs ────────────────────────────────────────────
 dist/
 
-# Turbo
+# ── Turbo ────────────────────────────────────────────────────
 .turbo/
 
-# IDE
+# ── IDE ──────────────────────────────────────────────────────
 .vscode/settings.json
 .idea/
-backend_logs.md
-# OS
+
+# ── OS ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-executionservice_logs.md
-# Temp files
-kernel-smart-account-architecture.md
-snow-mind-technical-spec.txt
-snowmind-deep-dive.md
-temp.md
-link.md
-query_contracts.py
+
+# ── Diagnostic / debug scripts (never commit) ───────────────
+_*.py
+_*.mjs
+_*.txt
+check_*.py
+query_*.py
+test_output*
 tmp_*.json
 
-# Copilot customization (local only — not needed in repo)
+# ── Log dumps (never commit) ────────────────────────────────
+*_logs.md
+console_error.md
+
+# ── Temp documentation (local only) ─────────────────────────
+temp.md
+link.md
+snowmind-deep-dive.md
+
+# ── Foundry cache / broadcast ────────────────────────────────
+contracts/cache/
+contracts/broadcast/
+
+# ── Copilot customization (local only) ───────────────────────
 .github/copilot-instructions.md
 .github/prompts/
 
-# Foundry cache/broadcast
-contracts/cache/
-contracts/broadcast/
-backend_logs.md
+# ── Misc ─────────────────────────────────────────────────────
 docs/snowmindenv.txt
