@@ -42,6 +42,7 @@ def mock_settings():
     settings.PORTFOLIO_VALUE_DROP_PCT = 0.10
     settings.PROFITABILITY_BREAKEVEN_DAYS = 7
     settings.REBALANCE_CHECK_INTERVAL = 360
+    settings.PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
     return settings
 
 
@@ -300,6 +301,67 @@ class TestRebalancerPipeline:
 
                 assert within_window, "Should be within 60-min window"
                 assert same_target, "Should detect identical allocation"
+
+    @pytest.mark.asyncio
+    async def test_idempotency_allows_when_current_state_drifted(self, rebalancer):
+        """If current state differs from last executed target, idempotency must not block."""
+
+        target = {"silo_savusd_usdc": Decimal("10.00")}
+        last_proposed = {"silo_savusd_usdc": "10.00"}
+        current = {}  # e.g. funds became idle again after manual movement
+
+        proposed_str = {k: str(v.quantize(Decimal("0.01"))) for k, v in target.items()}
+        last_str = {k: str(Decimal(str(v)).quantize(Decimal("0.01"))) for k, v in last_proposed.items()}
+        current_str = {
+            k: str(v.quantize(Decimal("0.01")))
+            for k, v in current.items()
+            if v > Decimal("0.01")
+        }
+
+        should_skip = proposed_str == last_str and current_str == last_str
+        assert not should_skip, "Idempotency guard must not block when current state drifted"
+
+    @pytest.mark.asyncio
+    async def test_permission_recovery_cooldown_bypassed_after_new_key(self, rebalancer):
+        """A newly stored active key should bypass stale PERMISSION_RECOVERY cooldown."""
+
+        account_id = str(uuid4())
+        address = "0x6d6F6eE22f627f9406E4922970de12f9949be0A6"
+        failure_ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        new_key_ts = datetime.now(timezone.utc).isoformat()
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk:
+
+            db = _make_db_mock()
+            gdb.return_value = db
+            gsk.return_value = {
+                "serialized_permission": "0xdeadbeef",
+                "session_private_key": "0xabc",
+                "allowed_protocols": ["silo_savusd_usdc"],
+            }
+
+            # Last rebalance log says PERMISSION_RECOVERY_NEEDED (within 30 min).
+            # New active key created AFTER that failure should bypass cooldown.
+            db.table("rebalance_logs").execute.return_value = MagicMock(data=[{
+                "skip_reason": "PERMISSION_RECOVERY_NEEDED for account",
+                "created_at": failure_ts,
+            }])
+            db.table("session_keys").execute.return_value = MagicMock(data=[{
+                "id": "new-key-id",
+                "created_at": new_key_ts,
+            }])
+
+            # Force an early deterministic exit after cooldown stage.
+            rebalancer.rate_fetcher.fetch_all_rates = AsyncMock(return_value={})
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=address,
+            )
+
+            assert result["status"] == "skipped"
+            assert "No spot rates available" in (result.get("skip_reason") or "")
 
     @pytest.mark.asyncio
     async def test_initial_deployment_bypasses_min_interval_gate(self, rebalancer):

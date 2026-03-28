@@ -219,7 +219,7 @@ class Rebalancer:
           4. Get current allocations from DB
           5. Run waterfall allocator
           6. Check if rebalance is needed (delta + yield gate)
-          7. Check time since last rebalance (> 6 h)
+          7. Check time since last rebalance (>= scheduler interval)
           8. If all conditions met â†’ execute
           9. Log result regardless
          10. Return log dict
@@ -252,19 +252,51 @@ class Rebalancer:
                 last = latest_log.data[0]
                 skip_reason = last.get("skip_reason") or ""
                 if "PERMISSION_RECOVERY_NEEDED" in skip_reason:
-                    last_time = datetime.fromisoformat(last["created_at"].replace("Z", "+00:00"))
-                    cooldown_until = last_time + timedelta(minutes=30)
-                    if datetime.now(timezone.utc) < cooldown_until:
-                        mins_left = int((cooldown_until - datetime.now(timezone.utc)).total_seconds() / 60)
-                        logger.debug(
-                            "PERMISSION_RECOVERY cooldown for %s — %d min left. "
-                            "User must re-grant session key from dashboard.",
-                            smart_account_address, mins_left,
-                        )
-                        return await self._log(
-                            db, account_id, "skipped",
-                            reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
-                        )
+                    last_time = datetime.fromisoformat(str(last["created_at"]).replace("Z", "+00:00"))
+                    now = datetime.now(timezone.utc)
+
+                    # If the user re-granted a fresh active key after the last
+                    # PERMISSION_RECOVERY failure, do NOT enforce the old cooldown.
+                    latest_active_key = (
+                        db.table("session_keys")
+                        .select("id, created_at")
+                        .eq("account_id", account_id)
+                        .eq("is_active", True)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+
+                    has_newer_active_key = False
+                    if latest_active_key.data:
+                        key_created_raw = latest_active_key.data[0].get("created_at")
+                        if key_created_raw:
+                            key_created_at = datetime.fromisoformat(
+                                str(key_created_raw).replace("Z", "+00:00")
+                            )
+                            has_newer_active_key = key_created_at > last_time
+                            if has_newer_active_key:
+                                logger.info(
+                                    "Bypassing PERMISSION_RECOVERY cooldown for %s — "
+                                    "new active key detected (key_created=%s > failure=%s)",
+                                    smart_account_address,
+                                    key_created_at.isoformat(),
+                                    last_time.isoformat(),
+                                )
+
+                    if not has_newer_active_key:
+                        cooldown_until = last_time + timedelta(minutes=30)
+                        if now < cooldown_until:
+                            mins_left = int((cooldown_until - now).total_seconds() / 60)
+                            logger.debug(
+                                "PERMISSION_RECOVERY cooldown for %s — %d min left. "
+                                "User must re-grant session key from dashboard.",
+                                smart_account_address, mins_left,
+                            )
+                            return await self._log(
+                                db, account_id, "skipped",
+                                reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
+                            )
         except Exception:
             pass  # Don't block rebalance if cooldown check fails
 
@@ -801,7 +833,10 @@ class Rebalancer:
         )
         if last.data and global_flag == RebalanceFlag.NONE and not is_initial_deployment:
             last_ts = datetime.fromisoformat(last.data[0]["created_at"])
-            min_gap = timedelta(hours=self.settings.MIN_REBALANCE_INTERVAL_HOURS)
+            # Keep execution cadence consistent with the scheduler tick.
+            # If checks run every 6 minutes, the minimum execution gap should
+            # also default to 6 minutes unless a forced rebalance is needed.
+            min_gap = timedelta(seconds=max(int(self.settings.REBALANCE_CHECK_INTERVAL), 60))
             if datetime.now(timezone.utc) - last_ts < min_gap:
                 return await self._log(
                     db, account_id, "skipped",
@@ -873,18 +908,34 @@ class Rebalancer:
                 .limit(1)
                 .execute()
             )
-            if recent_logs.data:
+            if not is_initial_deployment and recent_logs.data:
                 last_executed = recent_logs.data[0]
                 last_ts = datetime.fromisoformat(last_executed["created_at"])
                 if datetime.now(timezone.utc) - last_ts < timedelta(minutes=60):
                     last_proposed = last_executed.get("proposed_allocations") or {}
                     proposed_str = {k: str(v.quantize(Decimal("0.01"))) for k, v in result_allocations.items()}
                     last_str = {k: str(Decimal(str(v)).quantize(Decimal("0.01"))) for k, v in last_proposed.items()}
-                    if proposed_str == last_str:
+                    current_str = {
+                        k: str(v.quantize(Decimal("0.01")))
+                        for k, v in current.items()
+                        if v > Decimal("0.01")
+                    }
+
+                    # Skip only when BOTH target and current state are identical.
+                    # If state drifted (e.g. funds became idle again), allow execute.
+                    if proposed_str == last_str and current_str == last_str:
                         return await self._log(
                             db, account_id, "skipped",
                             reason="Idempotency: identical rebalance executed within 60 min",
                             proposed=result_allocations,
+                        )
+                    if proposed_str == last_str and current_str != last_str:
+                        logger.info(
+                            "Idempotency bypass for %s — target matches last executed "
+                            "but current state diverged (current=%s, last=%s)",
+                            smart_account_address,
+                            current_str,
+                            last_str,
                         )
         except Exception as exc:
             logger.warning("Idempotency guard check failed: %s — proceeding", exc)

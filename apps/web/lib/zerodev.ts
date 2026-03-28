@@ -164,6 +164,21 @@ type WalletClientLike = Parameters<typeof signerToEcdsaValidator>[1]["signer"]
 type KernelAccountLike = Awaited<ReturnType<typeof createKernelAccount>>
 type KernelClientLike = ReturnType<typeof createKernelAccountClient>
 type PermissionPluginLike = Awaited<ReturnType<typeof toPermissionValidator>>
+type TypedDataLike = Parameters<typeof hashTypedData>[0]
+
+interface EnableDataReader {
+  getEnableData: (accountAddress: `0x${string}`) => Promise<string>
+}
+
+interface PermissionPluginDiagnostics {
+  getEnableData: (accountAddress: `0x${string}`) => Promise<`0x${string}`>
+  getIdentifier: () => string
+}
+
+interface KernelPluginManagerDiagnostics {
+  getPluginsEnableTypedData: (accountAddress: `0x${string}`) => Promise<TypedDataLike>
+  getPluginEnableSignature: (accountAddress: `0x${string}`) => Promise<`0x${string}`>
+}
 
 // ── Retry utility for transient RPC failures ──────────────────────────────────
 // Retries on network errors, 429 rate limits, and 5xx server errors.
@@ -782,8 +797,9 @@ export async function grantAndSerializeSessionKey(
   // The ECDSA validator's getEnableData() returns the signer's EOA address.
   let sudoSignerAddress = "unknown"
   try {
-    if (typeof (sudoValidator as any).getEnableData === "function") {
-      sudoSignerAddress = await (sudoValidator as any).getEnableData()
+    const enableReader = sudoValidator as unknown as Partial<EnableDataReader>
+    if (typeof enableReader.getEnableData === "function") {
+      sudoSignerAddress = await enableReader.getEnableData(kernelAccount.address)
     }
   } catch { /* ignore */ }
   console.log("[ZeroDev] Enable signature will be signed by:", sudoSignerAddress)
@@ -793,11 +809,16 @@ export async function grantAndSerializeSessionKey(
   // Diagnostic: log enableData hash so we can compare with backend-side hash
   // If these don't match, the deserialized validator produces different data
   try {
-    const frontendEnableData = await (permissionPlugin as any).getEnableData(kernelAccount.address)
-    const frontendPermissionId = (permissionPlugin as any).getIdentifier()
-    console.log("[ZeroDev] Frontend enableData hash:", keccak256(frontendEnableData))
-    console.log("[ZeroDev] Frontend enableData length:", frontendEnableData?.length)
-    console.log("[ZeroDev] Frontend permissionId:", frontendPermissionId)
+    const diagnostics = permissionPlugin as unknown as Partial<PermissionPluginDiagnostics>
+    if (typeof diagnostics.getEnableData === "function" && typeof diagnostics.getIdentifier === "function") {
+      const frontendEnableData = await diagnostics.getEnableData(kernelAccount.address)
+      const frontendPermissionId = diagnostics.getIdentifier()
+      console.log("[ZeroDev] Frontend enableData hash:", keccak256(frontendEnableData))
+      console.log("[ZeroDev] Frontend enableData length:", frontendEnableData?.length)
+      console.log("[ZeroDev] Frontend permissionId:", frontendPermissionId)
+    } else {
+      console.log("[ZeroDev] Permission diagnostics unavailable on current SDK object")
+    }
   } catch (e) {
     console.log("[ZeroDev] Could not log enableData hash:", (e as Error)?.message?.slice(0, 100))
   }
@@ -829,14 +850,28 @@ export async function grantAndSerializeSessionKey(
   // Diagnostic: log typed data hash and enable sig hash for cross-comparison with backend.
   // The SDK's kpm.getPluginsEnableTypedData() uses the EXACT same code path as signing.
   try {
-    const kpm = (permissionAccount as any).kernelPluginManager
-    const typedData = await kpm.getPluginsEnableTypedData(kernelAccount.address)
-    const enableSig = await kpm.getPluginEnableSignature(kernelAccount.address)
+    const pluginManager = (
+      permissionAccount as unknown as { kernelPluginManager?: Partial<KernelPluginManagerDiagnostics> }
+    ).kernelPluginManager
+    if (
+      !pluginManager
+      || typeof pluginManager.getPluginsEnableTypedData !== "function"
+      || typeof pluginManager.getPluginEnableSignature !== "function"
+    ) {
+      throw new Error("kernelPluginManager diagnostics are unavailable")
+    }
+
+    const typedData = await pluginManager.getPluginsEnableTypedData(kernelAccount.address)
+    const enableSig = await pluginManager.getPluginEnableSignature(kernelAccount.address)
     console.log("[ZeroDev] Frontend typedDataHash:", hashTypedData(typedData))
     console.log("[ZeroDev] Frontend enableSigHash:", keccak256(enableSig))
-    console.log("[ZeroDev] Frontend validationId:", typedData.message.validationId)
-    console.log("[ZeroDev] Frontend nonce:", typedData.message.nonce)
-    console.log("[ZeroDev] Frontend selectorDataHash:", keccak256(typedData.message.selectorData))
+    const typedMessage = (typedData as { message?: Record<string, unknown> }).message ?? {}
+    console.log("[ZeroDev] Frontend validationId:", typedMessage.validationId)
+    console.log("[ZeroDev] Frontend nonce:", typedMessage.nonce)
+    const selectorData = typedMessage.selectorData
+    if (typeof selectorData === "string" && selectorData.startsWith("0x")) {
+      console.log("[ZeroDev] Frontend selectorDataHash:", keccak256(selectorData as `0x${string}`))
+    }
     console.log("[ZeroDev] Frontend domain:", JSON.stringify(typedData.domain))
 
     // CRITICAL: Recover the actual signer from the enable signature.

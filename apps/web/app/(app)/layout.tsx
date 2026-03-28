@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
@@ -149,6 +149,21 @@ function TopBar({
   );
 }
 
+function usePortfolioHydrated(): boolean {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const unsubHydrate = usePortfolioStore.persist.onHydrate(() => onStoreChange());
+      const unsubFinish = usePortfolioStore.persist.onFinishHydration(() => onStoreChange());
+      return () => {
+        unsubHydrate();
+        unsubFinish();
+      };
+    },
+    () => usePortfolioStore.persist.hasHydrated(),
+    () => true,
+  );
+}
+
 export default function AppLayout({
   children,
 }: {
@@ -194,11 +209,8 @@ export default function AppLayout({
     (a) => Number(a.amountUsdc) > 0,
   ) ?? false;
   const hasActiveSessionKey = sessionKey?.isActive ?? false;
-  // Client-ready signal: fires after Zustand persist has loaded from localStorage.
-  // useEffect runs after microtasks, so store state is guaranteed to reflect
-  // persisted values by the time clientReady becomes true.
-  const [clientReady, setClientReady] = useState(false);
-  useEffect(() => { setClientReady(true); }, []);
+  // True only after Zustand persist has finished hydrating from localStorage.
+  const clientReady = usePortfolioHydrated();
 
   // Clear stale storeActivated flag ONLY when real data proves no activation
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
