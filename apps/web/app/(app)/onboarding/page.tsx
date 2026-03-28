@@ -406,6 +406,10 @@ export default function OnboardingPage() {
                 blockExplorerUrls: [EXPLORER.base],
               }],
             });
+          } else {
+            throw new Error(
+              "Failed to switch to Avalanche network. Please manually switch your wallet to Avalanche C-Chain and try again."
+            );
           }
         }
 
@@ -415,18 +419,71 @@ export default function OnboardingPage() {
         });
         const [eoaAddress] = await walletClient.getAddresses();
 
-        const transferHash = await walletClient.sendTransaction({
-          account: eoaAddress,
-          to: CONTRACTS.USDC,
-          data: encodeFunctionData({
-            abi: ERC20_ABI,
-            functionName: "transfer",
-            args: [derivedAddr as `0x${string}`, shortfall],
-          }),
-        });
+        // Pre-flight check: verify EOA has enough AVAX for gas
+        const avaxBalance = await publicClient.getBalance({ address: eoaAddress });
+        // Need at least ~0.005 AVAX for a simple ERC-20 transfer on Avalanche
+        const minGasAvax = parseUnits("0.005", 18);
+        if (avaxBalance < minGasAvax) {
+          throw new Error(
+            `Insufficient AVAX for gas fees. You need at least 0.005 AVAX in your wallet (${eoaAddress.slice(0, 8)}…) to pay for the USDC transfer. ` +
+            `Current AVAX balance: ${formatUnits(avaxBalance, 18)} AVAX. ` +
+            `Send some AVAX to your wallet on Avalanche C-Chain and try again.`
+          );
+        }
 
-        await publicClient.waitForTransactionReceipt({ hash: transferHash });
-        toast.success("USDC transferred to smart account!");
+        // Pre-flight check: verify EOA has enough USDC
+        const eoaUsdcBalance = await publicClient.readContract({
+          address: CONTRACTS.USDC as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [eoaAddress],
+        }) as bigint;
+        if (eoaUsdcBalance < shortfall) {
+          throw new Error(
+            `Insufficient USDC balance. You need ${formatUnits(shortfall, 6)} USDC but only have ${formatUnits(eoaUsdcBalance, 6)} USDC in your wallet. ` +
+            `Please add more USDC to your wallet and try again.`
+          );
+        }
+
+        // Transfer USDC — wrapped with specific error handling
+        try {
+          const transferHash = await walletClient.sendTransaction({
+            account: eoaAddress,
+            to: CONTRACTS.USDC,
+            data: encodeFunctionData({
+              abi: ERC20_ABI,
+              functionName: "transfer",
+              args: [derivedAddr as `0x${string}`, shortfall],
+            }),
+            chain: CHAIN,
+          });
+
+          await publicClient.waitForTransactionReceipt({ hash: transferHash });
+          toast.success("USDC transferred to smart account!");
+        } catch (transferErr: unknown) {
+          const transferMsg = transferErr instanceof Error ? transferErr.message : String(transferErr);
+          // Re-throw user rejection as-is
+          if (transferMsg.includes("User denied") || transferMsg.includes("User rejected")) {
+            throw transferErr;
+          }
+          // Specific handling for common wallet/RPC errors
+          if (transferMsg.includes("Missing or invalid parameters") || transferMsg.includes("invalid params")) {
+            throw new Error(
+              "USDC transfer failed — your wallet reported invalid parameters. " +
+              "This usually happens when: (1) your wallet isn't connected to Avalanche C-Chain, " +
+              "(2) the wallet doesn't support this transaction type, or (3) there's a wallet version issue. " +
+              "Please ensure you are on Avalanche network in your wallet and try again. " +
+              "If using a mobile wallet, try MetaMask browser extension instead."
+            );
+          }
+          if (transferMsg.includes("insufficient funds") || transferMsg.includes("gas required exceeds")) {
+            throw new Error(
+              "Transaction failed — insufficient gas (AVAX). Please add AVAX to your wallet for gas fees and retry."
+            );
+          }
+          // Re-throw with context
+          throw new Error(`USDC transfer failed: ${transferMsg.slice(0, 200)}`);
+        }
       } else {
         toast.success("Smart account already funded — skipping transfer.");
       }
@@ -535,6 +592,22 @@ export default function OnboardingPage() {
           "Please try connecting with MetaMask or another EVM-compatible wallet."
         );
         toast.error("Wallet compatibility issue — try MetaMask instead.");
+      } else if (msg.includes("Insufficient AVAX") || msg.includes("insufficient gas")) {
+        setActivationPhase("error");
+        setActivationError(msg);
+        toast.error("Insufficient AVAX for gas — add AVAX to your wallet.");
+      } else if (msg.includes("Insufficient USDC")) {
+        setActivationPhase("error");
+        setActivationError(msg);
+        toast.error("Insufficient USDC balance.");
+      } else if (msg.includes("USDC transfer failed") || msg.includes("invalid parameters")) {
+        setActivationPhase("error");
+        setActivationError(msg);
+        toast.error("Transfer failed — check your wallet network.");
+      } else if (msg.includes("Failed to switch")) {
+        setActivationPhase("error");
+        setActivationError(msg);
+        toast.error("Please switch to Avalanche network manually.");
       } else {
         setActivationPhase("error");
         setActivationError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
