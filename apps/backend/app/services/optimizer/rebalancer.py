@@ -240,63 +240,76 @@ class Rebalancer:
         # session key every tick makes the problem worse. Wait 30 minutes
         # for the bundler's mempool to expire, then retry.
         try:
-            latest_log = (
+            # Look back over recent logs and anchor cooldown on the MOST RECENT
+            # PERMISSION_RECOVERY_NEEDED failure specifically. Using the latest
+            # generic log causes an alternating loop:
+            #   tick N: PERMISSION_RECOVERY_NEEDED
+            #   tick N+1: cooldown skip
+            #   tick N+2: retries again (because latest log is cooldown text)
+            # This query keeps cooldown stable until a new key is granted.
+            recent_logs = (
                 db.table("rebalance_logs")
                 .select("skip_reason, created_at")
                 .eq("account_id", account_id)
                 .order("created_at", desc=True)
-                .limit(1)
+                .limit(20)
                 .execute()
             )
-            if latest_log.data:
-                last = latest_log.data[0]
-                skip_reason = last.get("skip_reason") or ""
-                if "PERMISSION_RECOVERY_NEEDED" in skip_reason:
-                    last_time = datetime.fromisoformat(str(last["created_at"]).replace("Z", "+00:00"))
-                    now = datetime.now(timezone.utc)
+            latest_recovery_needed_log = None
+            for row in recent_logs.data or []:
+                reason = row.get("skip_reason") or ""
+                if "PERMISSION_RECOVERY_NEEDED" in reason:
+                    latest_recovery_needed_log = row
+                    break
 
-                    # If the user re-granted a fresh active key after the last
-                    # PERMISSION_RECOVERY failure, do NOT enforce the old cooldown.
-                    latest_active_key = (
-                        db.table("session_keys")
-                        .select("id, created_at")
-                        .eq("account_id", account_id)
-                        .eq("is_active", True)
-                        .order("created_at", desc=True)
-                        .limit(1)
-                        .execute()
-                    )
+            if latest_recovery_needed_log:
+                last_time = datetime.fromisoformat(
+                    str(latest_recovery_needed_log["created_at"]).replace("Z", "+00:00")
+                )
+                now = datetime.now(timezone.utc)
 
-                    has_newer_active_key = False
-                    if latest_active_key.data:
-                        key_created_raw = latest_active_key.data[0].get("created_at")
-                        if key_created_raw:
-                            key_created_at = datetime.fromisoformat(
-                                str(key_created_raw).replace("Z", "+00:00")
-                            )
-                            has_newer_active_key = key_created_at > last_time
-                            if has_newer_active_key:
-                                logger.info(
-                                    "Bypassing PERMISSION_RECOVERY cooldown for %s — "
-                                    "new active key detected (key_created=%s > failure=%s)",
-                                    smart_account_address,
-                                    key_created_at.isoformat(),
-                                    last_time.isoformat(),
-                                )
+                # If the user re-granted a fresh active key after the last
+                # PERMISSION_RECOVERY failure, do NOT enforce the old cooldown.
+                latest_active_key = (
+                    db.table("session_keys")
+                    .select("id, created_at")
+                    .eq("account_id", account_id)
+                    .eq("is_active", True)
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
 
-                    if not has_newer_active_key:
-                        cooldown_until = last_time + timedelta(minutes=30)
-                        if now < cooldown_until:
-                            mins_left = int((cooldown_until - now).total_seconds() / 60)
-                            logger.debug(
-                                "PERMISSION_RECOVERY cooldown for %s — %d min left. "
-                                "User must re-grant session key from dashboard.",
-                                smart_account_address, mins_left,
+                has_newer_active_key = False
+                if latest_active_key.data:
+                    key_created_raw = latest_active_key.data[0].get("created_at")
+                    if key_created_raw:
+                        key_created_at = datetime.fromisoformat(
+                            str(key_created_raw).replace("Z", "+00:00")
+                        )
+                        has_newer_active_key = key_created_at > last_time
+                        if has_newer_active_key:
+                            logger.info(
+                                "Bypassing PERMISSION_RECOVERY cooldown for %s — "
+                                "new active key detected (key_created=%s > failure=%s)",
+                                smart_account_address,
+                                key_created_at.isoformat(),
+                                last_time.isoformat(),
                             )
-                            return await self._log(
-                                db, account_id, "skipped",
-                                reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
-                            )
+
+                if not has_newer_active_key:
+                    cooldown_until = last_time + timedelta(minutes=30)
+                    if now < cooldown_until:
+                        mins_left = int((cooldown_until - now).total_seconds() / 60)
+                        logger.debug(
+                            "PERMISSION_RECOVERY cooldown for %s — %d min left. "
+                            "User must re-grant session key from dashboard.",
+                            smart_account_address, mins_left,
+                        )
+                        return await self._log(
+                            db, account_id, "skipped",
+                            reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
+                        )
         except Exception:
             pass  # Don't block rebalance if cooldown check fails
 

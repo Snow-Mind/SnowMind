@@ -453,6 +453,8 @@ export default function OnboardingPage() {
           args: [derivedAddr as `0x${string}`, shortfall],
         });
 
+        const toHex = (value: bigint) => `0x${value.toString(16)}`;
+
         let transferHash: `0x${string}` | undefined;
         try {
           transferHash = await walletClient.sendTransaction({
@@ -460,7 +462,6 @@ export default function OnboardingPage() {
             to: CONTRACTS.USDC,
             data: transferData,
             value: 0n,
-            chain: CHAIN,
           });
         } catch (transferErr: unknown) {
           const transferMsg = transferErr instanceof Error ? transferErr.message : String(transferErr);
@@ -477,18 +478,74 @@ export default function OnboardingPage() {
 
           if (isInvalidParams) {
             try {
-              const fallbackHash = await provider.request({
-                method: "eth_sendTransaction",
-                params: [
-                  {
-                    from: eoaAddress,
-                    to: CONTRACTS.USDC,
-                    data: transferData,
-                    value: "0x0",
-                  },
-                ],
-              }) as `0x${string}`;
-              transferHash = fallbackHash;
+              const estimatedGas = await publicClient.estimateGas({
+                account: eoaAddress,
+                to: CONTRACTS.USDC,
+                data: transferData,
+                value: 0n,
+              }).catch(() => 120000n);
+              const gasLimit = estimatedGas + (estimatedGas / 5n);
+
+              const fees = await publicClient.estimateFeesPerGas().catch(() => null);
+              const pendingNonce = await publicClient
+                .getTransactionCount({ address: eoaAddress, blockTag: "pending" })
+                .catch(() => null);
+              const walletChainId = await provider
+                .request({ method: "eth_chainId" })
+                .catch(() => hexChainId) as string;
+
+              const feeFields: Record<string, string> = {};
+              if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
+                feeFields.maxFeePerGas = toHex(fees.maxFeePerGas);
+                feeFields.maxPriorityFeePerGas = toHex(fees.maxPriorityFeePerGas);
+              } else if (fees?.gasPrice) {
+                feeFields.gasPrice = toHex(fees.gasPrice);
+              }
+
+              const baseTx: Record<string, string> = {
+                from: eoaAddress,
+                to: CONTRACTS.USDC,
+                value: "0x0",
+              };
+
+              const fullTxFields: Record<string, string> = {
+                chainId: walletChainId,
+                gas: toHex(gasLimit),
+                ...(pendingNonce !== null ? { nonce: toHex(BigInt(pendingNonce)) } : {}),
+                ...feeFields,
+              };
+
+              const fallbackVariants: Record<string, string>[] = [
+                { ...baseTx, data: transferData },
+                { ...baseTx, input: transferData },
+                { ...baseTx, data: transferData, ...fullTxFields },
+                { ...baseTx, input: transferData, ...fullTxFields },
+              ];
+
+              const fallbackErrors: string[] = [];
+              for (const txParams of fallbackVariants) {
+                try {
+                  const fallbackHash = await provider.request({
+                    method: "eth_sendTransaction",
+                    params: [txParams],
+                  }) as `0x${string}`;
+                  if (fallbackHash) {
+                    transferHash = fallbackHash;
+                    break;
+                  }
+                } catch (fallbackVariantErr: unknown) {
+                  const fallbackVariantMsg = fallbackVariantErr instanceof Error
+                    ? fallbackVariantErr.message
+                    : String(fallbackVariantErr);
+                  fallbackErrors.push(fallbackVariantMsg.slice(0, 160));
+                }
+              }
+
+              if (!transferHash) {
+                throw new Error(
+                  `No wallet-compatible transaction shape accepted. Attempts: ${fallbackErrors.join(" | ")}`
+                );
+              }
             } catch (fallbackErr: unknown) {
               const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
               throw new Error(

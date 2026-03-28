@@ -364,6 +364,53 @@ class TestRebalancerPipeline:
             assert "No spot rates available" in (result.get("skip_reason") or "")
 
     @pytest.mark.asyncio
+    async def test_permission_recovery_cooldown_uses_latest_failure_not_latest_log(self, rebalancer):
+        """Cooldown must anchor to latest *_NEEDED failure even if latest log is cooldown text."""
+
+        account_id = str(uuid4())
+        address = "0x940d4E6dd00882E98bdF4aaBB9e1af7Dec561ADD"
+        cooldown_log_ts = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        needed_failure_ts = (datetime.now(timezone.utc) - timedelta(minutes=12)).isoformat()
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk:
+
+            db = _make_db_mock()
+            gdb.return_value = db
+            gsk.return_value = {
+                "serialized_permission": "0xdeadbeef",
+                "session_private_key": "0xabc",
+                "allowed_protocols": ["silo_savusd_usdc"],
+            }
+
+            # Latest log is a cooldown message, but an earlier recent log has
+            # PERMISSION_RECOVERY_NEEDED. Cooldown must still be enforced.
+            db.table("rebalance_logs").execute.return_value = MagicMock(data=[
+                {
+                    "skip_reason": "PERMISSION_RECOVERY cooldown (24min left) — user must re-grant",
+                    "created_at": cooldown_log_ts,
+                },
+                {
+                    "skip_reason": "PERMISSION_RECOVERY_NEEDED for account",
+                    "created_at": needed_failure_ts,
+                },
+            ])
+
+            # No newly granted key after the failure.
+            db.table("session_keys").execute.return_value = MagicMock(data=[])
+
+            # If cooldown is not enforced, pipeline would continue and hit this.
+            rebalancer.rate_fetcher.fetch_all_rates = AsyncMock(return_value={})
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=address,
+            )
+
+            assert result["status"] == "skipped"
+            assert "PERMISSION_RECOVERY cooldown" in (result.get("skip_reason") or "")
+
+    @pytest.mark.asyncio
     async def test_initial_deployment_bypasses_min_interval_gate(self, rebalancer):
         """Initial idle-fund deployments should not be blocked by min-interval cooldown.
 
