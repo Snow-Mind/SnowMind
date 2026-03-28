@@ -8,10 +8,10 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
 import { formatUsd } from "@/lib/format";
+import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 
 export interface YieldDataPoint {
   date: string;
@@ -65,7 +65,7 @@ export default function YieldChart({ data7d, data30d }: YieldChartProps) {
       </div>
 
       <div className="mt-4 h-64 min-h-64 w-full min-w-[280px]">
-        <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={256}>
+        <SafeResponsiveContainer minWidth={280} minHeight={256}>
           <AreaChart data={data} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="glacierGradient" x1="0" y1="0" x2="0" y2="1">
@@ -130,7 +130,7 @@ export default function YieldChart({ data7d, data30d }: YieldChartProps) {
               animationDuration={800}
             />
           </AreaChart>
-        </ResponsiveContainer>
+        </SafeResponsiveContainer>
       </div>
     </div>
   );

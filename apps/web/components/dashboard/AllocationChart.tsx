@@ -5,12 +5,12 @@ import {
   PieChart,
   Pie,
   Cell,
-  ResponsiveContainer,
   Tooltip,
 } from "recharts";
 import { PieChart as PieChartIcon } from "lucide-react";
 import { PROTOCOL_CONFIG, IDLE_CONFIG } from "@/lib/constants";
 import { formatUsd, formatPct } from "@/lib/format";
+import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
 
 interface AllocationChartProps {
@@ -59,7 +59,7 @@ export default function AllocationChart({
           {/* Donut chart */}
           <div className="mt-4 flex items-center gap-6">
             <div className="relative h-44 min-h-44 w-44 min-w-44 shrink-0">
-              <ResponsiveContainer width="100%" height="100%" minWidth={176} minHeight={176}>
+              <SafeResponsiveContainer minWidth={176} minHeight={176}>
                 <PieChart>
                   <Pie
                     data={data}
@@ -92,7 +92,7 @@ export default function AllocationChart({
                     }}
                   />
                 </PieChart>
-              </ResponsiveContainer>
+              </SafeResponsiveContainer>
               {/* Center label */}
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="font-mono text-lg font-bold text-glacier">

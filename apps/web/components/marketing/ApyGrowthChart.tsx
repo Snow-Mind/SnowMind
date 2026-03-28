@@ -8,9 +8,9 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
 } from "recharts";
 import { BACKEND_URL } from "@/lib/constants";
+import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 
 interface TimeseriesPoint {
   date: string;
@@ -106,7 +106,7 @@ export default function ApyGrowthChart() {
 
         {/* Chart */}
         <div className="h-[280px] md:h-[320px]">
-          <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={280}>
+          <SafeResponsiveContainer minWidth={280} minHeight={280}>
             <AreaChart data={data} margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="snowmindGrad" x1="0" y1="0" x2="0" y2="1">
@@ -168,7 +168,7 @@ export default function ApyGrowthChart() {
                 dot={false}
               />
             </AreaChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
         </div>
       </div>
     </section>

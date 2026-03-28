@@ -10,7 +10,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
   Legend,
 } from "recharts";
 import { formatUsd, formatPct } from "@/lib/format";
@@ -19,6 +18,7 @@ import { usePortfolio } from "@/hooks/usePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import AllocationChart from "@/components/dashboard/AllocationChart";
+import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
 
 function derivePositions(allocations: ProtocolAllocation[]) {
@@ -324,7 +324,7 @@ export default function PortfolioPage() {
             </h2>
           </div>
           <div className="mt-4 h-52 min-h-52 w-full min-w-[280px]">
-            <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={208}>
+            <SafeResponsiveContainer minWidth={280} minHeight={208}>
               <BarChart
                 data={apyComparison}
                 margin={{ top: 5, right: 5, left: 0, bottom: 0 }}
@@ -388,7 +388,7 @@ export default function PortfolioPage() {
                   barSize={16}
                 />
               </BarChart>
-            </ResponsiveContainer>
+            </SafeResponsiveContainer>
           </div>
         </div>
       )}

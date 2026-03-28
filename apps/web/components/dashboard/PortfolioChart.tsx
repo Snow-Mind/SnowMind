@@ -1,9 +1,10 @@
 "use client";
 
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, Tooltip } from "recharts";
 import type { Portfolio } from "@snowmind/shared-types";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatUsd } from "@/lib/format";
+import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 
 interface PortfolioChartProps {
   portfolio: Portfolio | null;
@@ -50,35 +51,35 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
     return (
       <div className="w-[220px]">
         <div className="h-[180px] min-h-[180px]">
-          <ResponsiveContainer width={220} height={180} minWidth={220} minHeight={180}>
-          <PieChart>
-            <Pie
-              data={chartData}
-              cx="50%"
-              cy="50%"
-              innerRadius={44}
-              outerRadius={70}
-              paddingAngle={2}
-              labelLine={false}
-              dataKey="value"
-            >
-              {chartData.map((entry, index) => (
-                <Cell key={`compact-cell-${index}`} fill={entry.color} />
-              ))}
-            </Pie>
-            <Tooltip
-              formatter={(value?: number) => value ? formatUsd(value) : "—"}
-              contentStyle={{
-                backgroundColor: "#050A14",
-                border: "1px solid #E8E2DA",
-                borderRadius: "8px",
-                color: "#E8F4FF",
-              }}
-              itemStyle={{ color: "#E8F4FF" }}
-              labelStyle={{ color: "#E8F4FF" }}
-            />
-          </PieChart>
-          </ResponsiveContainer>
+          <SafeResponsiveContainer minWidth={220} minHeight={180}>
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={44}
+                outerRadius={70}
+                paddingAngle={2}
+                labelLine={false}
+                dataKey="value"
+              >
+                {chartData.map((entry, index) => (
+                  <Cell key={`compact-cell-${index}`} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(value?: number) => value ? formatUsd(value) : "—"}
+                contentStyle={{
+                  backgroundColor: "#050A14",
+                  border: "1px solid #E8E2DA",
+                  borderRadius: "8px",
+                  color: "#E8F4FF",
+                }}
+                itemStyle={{ color: "#E8F4FF" }}
+                labelStyle={{ color: "#E8F4FF" }}
+              />
+            </PieChart>
+          </SafeResponsiveContainer>
         </div>
         <div className="-mt-2 text-center">
           <p className="text-[11px] font-medium text-[#5C5550]">
@@ -93,7 +94,7 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
     <div className="crystal-card p-6">
       <h3 className="mb-4 text-sm font-semibold text-arctic">Portfolio Allocation</h3>
       <div className="h-64 min-h-64 w-full min-w-[280px]">
-        <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={256}>
+        <SafeResponsiveContainer minWidth={280} minHeight={256}>
           <PieChart>
             <Pie
               data={chartData}
@@ -121,7 +122,7 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
               labelStyle={{ color: "#E8F4FF" }}
             />
           </PieChart>
-        </ResponsiveContainer>
+        </SafeResponsiveContainer>
       </div>
 
       {/* Legend with amounts */}
