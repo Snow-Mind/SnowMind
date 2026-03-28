@@ -1,18 +1,11 @@
 "use client";
 
 import { usePrivy, useLogout, useWallets } from "@privy-io/react-auth";
-import { usePortfolioStore } from "@/stores/portfolio.store";
 
 export function useAuth() {
   const { ready, authenticated, user, login } = usePrivy();
   const { wallets } = useWallets();
-  const portfolioStore = usePortfolioStore();
-
-  const { logout } = useLogout({
-    onSuccess: () => {
-      portfolioStore.clearSmartAccount();
-    },
-  });
+  const { logout } = useLogout();
 
   const embeddedWallet = wallets.find((w) => w.walletClientType === "privy");
   const externalWallet = wallets.find((w) => w.walletClientType !== "privy");

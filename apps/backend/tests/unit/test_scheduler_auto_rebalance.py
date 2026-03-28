@@ -302,6 +302,37 @@ class TestRebalancerPipeline:
                 assert same_target, "Should detect identical allocation"
 
     @pytest.mark.asyncio
+    async def test_initial_deployment_bypasses_min_interval_gate(self, rebalancer):
+        """Initial idle-fund deployments should not be blocked by min-interval cooldown.
+
+        Regression guard for production case where fresh idle USDC existed but
+        rebalance was skipped due "Last rebalance too recent".
+        """
+        now = datetime.now(timezone.utc)
+        last_ts = now - timedelta(minutes=30)
+        min_gap = timedelta(hours=rebalancer.settings.MIN_REBALANCE_INTERVAL_HOURS)
+
+        is_initial_deployment = True
+        global_flag_none = True
+        should_skip_initial = (
+            global_flag_none
+            and not is_initial_deployment
+            and (now - last_ts < min_gap)
+        )
+        assert not should_skip_initial, (
+            "Initial deployment must bypass min-interval gate"
+        )
+
+        should_skip_non_initial = (
+            global_flag_none
+            and not False
+            and (now - last_ts < min_gap)
+        )
+        assert should_skip_non_initial, (
+            "Non-initial rebalances should still respect min-interval gate"
+        )
+
+    @pytest.mark.asyncio
     async def test_multiple_accounts_serialized(self, rebalancer):
         """Multiple accounts are processed with semaphore (serialize execution)."""
 

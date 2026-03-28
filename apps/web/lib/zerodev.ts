@@ -217,6 +217,21 @@ function getPublicClient(): PublicClient {
   })
 }
 
+function generatePerGrantGasNonce(): bigint {
+  // Use secure randomness to avoid permission-hash collisions across re-grants.
+  // Fallback to full timestamp if crypto is unavailable.
+  try {
+    if (typeof globalThis.crypto?.getRandomValues === "function") {
+      const random = new Uint32Array(1)
+      globalThis.crypto.getRandomValues(random)
+      return BigInt(random[0])
+    }
+  } catch {
+    // no-op
+  }
+  return BigInt(Date.now())
+}
+
 // ── Wallet compatibility wrapper ──────────────────────────────────────────────
 // Some wallets (e.g. Core wallet) fail on eth_signTypedData_v4 when the EIP-712
 // typed data contains `bytes`-type fields with raw ABI-encoded values that aren't
@@ -731,9 +746,8 @@ export async function grantAndSerializeSessionKey(
   // IMPORTANT: include a tiny per-grant nonce in the encoded gas-policy data.
   // CallPolicy V0.0.5 rejects duplicate permission hashes on re-install; if a
   // user re-grants with identical policy payloads, enable mode can revert with
-  // "duplicate permissionHash". Adding a negligible nonce in wei keeps the
-  // effective gas cap unchanged while making each permission hash unique.
-  const gasNonce = BigInt(Date.now() % 1_000_000)
+  // "duplicate permissionHash". The nonce MUST be collision-resistant.
+  const gasNonce = generatePerGrantGasNonce()
   const gasPolicyAllowed = parseUnits("10", 18) + gasNonce
   const gasPolicy = toGasPolicy({ allowed: gasPolicyAllowed })
   console.log("[ZeroDev] gasPolicy nonce:", gasNonce.toString())

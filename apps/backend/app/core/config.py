@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = False
     ALLOWED_ORIGINS: str = _DEFAULT_ORIGINS
+    ALLOWED_ORIGIN_REGEX: str = (
+        r"^https://([a-z0-9-]+\.)?snowmind\.xyz$"
+        r"|^https://[a-z0-9-]+-snowmind[a-z0-9-]*\.vercel\.app$"
+        r"|^http://localhost(:\d+)?$"
+        r"|^http://127\.0\.0\.1(:\d+)?$"
+    )
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -40,6 +46,11 @@ class Settings(BaseSettings):
             if prod not in origins:
                 origins.append(prod)
         return origins
+
+    @property
+    def allowed_origin_regex(self) -> str | None:
+        raw = self.ALLOWED_ORIGIN_REGEX.strip()
+        return raw or None
 
     # ── Supabase ─────────────────────────────────────────────
     SUPABASE_URL: str = ""

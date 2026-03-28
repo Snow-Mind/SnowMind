@@ -799,7 +799,7 @@ class Rebalancer:
             .limit(1)
             .execute()
         )
-        if last.data and global_flag == RebalanceFlag.NONE:
+        if last.data and global_flag == RebalanceFlag.NONE and not is_initial_deployment:
             last_ts = datetime.fromisoformat(last.data[0]["created_at"])
             min_gap = timedelta(hours=self.settings.MIN_REBALANCE_INTERVAL_HOURS)
             if datetime.now(timezone.utc) - last_ts < min_gap:
@@ -1137,7 +1137,7 @@ class Rebalancer:
                 if account_id:
                     db = get_supabase()
                     old_keys = get_deactivated_session_key_records(
-                        db, UUID(account_id), limit=5
+                        db, UUID(account_id), limit=12
                     )
                     for old_key in old_keys:
                         try:
@@ -1183,8 +1183,8 @@ class Rebalancer:
                         "All old session keys failed for %s. "
                         "This happens because the on-chain permissionHash belongs "
                         "to a session key signer that is no longer available. "
-                        "User must re-grant from dashboard (frontend must include "
-                        "gasNonce for unique permissionHash). "
+                        "User must re-grant from dashboard (frontend must include a "
+                        "non-repeating gasNonce for unique permissionHash). "
                         "NOT deactivating current key to avoid re-grant loop.",
                         smart_account_address,
                     )

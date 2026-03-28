@@ -100,6 +100,22 @@ export function useSmartAccount(wallet: ConnectedWallet | null) {
     }
   }, [storedAddress, state.address]);
 
+  // Keep local hook state aligned when persisted store is cleared
+  // (e.g. disconnect or full-withdraw/deactivate flows).
+  useEffect(() => {
+    if (!storedAddress && state.address) {
+      setState((prev) => ({
+        ...prev,
+        address: null,
+        isDeployed: false,
+        setupStep: "idle",
+        kernelClient: null,
+        txHashes: {},
+      }));
+      initializingRef.current = false;
+    }
+  }, [storedAddress, state.address]);
+
   const retry = useCallback(() => {
     initializingRef.current = false;
     setState({
