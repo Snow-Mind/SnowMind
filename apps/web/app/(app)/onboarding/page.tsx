@@ -445,45 +445,74 @@ export default function OnboardingPage() {
           );
         }
 
-        // Transfer USDC — wrapped with specific error handling
+        // Transfer USDC. Some mobile wallets reject viem's transaction path
+        // with -32602 invalid params; fall back to raw eth_sendTransaction.
+        const transferData = encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: "transfer",
+          args: [derivedAddr as `0x${string}`, shortfall],
+        });
+
+        let transferHash: `0x${string}` | undefined;
         try {
-          const transferHash = await walletClient.sendTransaction({
-            account: eoaAddress,
+          transferHash = await walletClient.sendTransaction({
+            account: eoaAddress as `0x${string}`,
             to: CONTRACTS.USDC,
-            data: encodeFunctionData({
-              abi: ERC20_ABI,
-              functionName: "transfer",
-              args: [derivedAddr as `0x${string}`, shortfall],
-            }),
+            data: transferData,
+            value: 0n,
             chain: CHAIN,
           });
-
-          await publicClient.waitForTransactionReceipt({ hash: transferHash });
-          toast.success("USDC transferred to smart account!");
         } catch (transferErr: unknown) {
           const transferMsg = transferErr instanceof Error ? transferErr.message : String(transferErr);
+
           // Re-throw user rejection as-is
           if (transferMsg.includes("User denied") || transferMsg.includes("User rejected")) {
             throw transferErr;
           }
-          // Specific handling for common wallet/RPC errors
-          if (transferMsg.includes("Missing or invalid parameters") || transferMsg.includes("invalid params")) {
-            throw new Error(
-              "USDC transfer failed — your wallet reported invalid parameters. " +
-              "This usually happens when: (1) your wallet isn't connected to Avalanche C-Chain, " +
-              "(2) the wallet doesn't support this transaction type, or (3) there's a wallet version issue. " +
-              "Please ensure you are on Avalanche network in your wallet and try again. " +
-              "If using a mobile wallet, try MetaMask browser extension instead."
-            );
-          }
-          if (transferMsg.includes("insufficient funds") || transferMsg.includes("gas required exceeds")) {
+
+          const isInvalidParams =
+            transferMsg.includes("Missing or invalid parameters") ||
+            transferMsg.includes("invalid params") ||
+            transferMsg.includes("-32602");
+
+          if (isInvalidParams) {
+            try {
+              const fallbackHash = await provider.request({
+                method: "eth_sendTransaction",
+                params: [
+                  {
+                    from: eoaAddress,
+                    to: CONTRACTS.USDC,
+                    data: transferData,
+                    value: "0x0",
+                  },
+                ],
+              }) as `0x${string}`;
+              transferHash = fallbackHash;
+            } catch (fallbackErr: unknown) {
+              const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+              throw new Error(
+                "USDC transfer failed — wallet rejected transaction parameters in both standard and mobile-compatible modes. " +
+                `Primary error: ${transferMsg.slice(0, 140)}. ` +
+                `Fallback error: ${fallbackMsg.slice(0, 140)}. ` +
+                "Please ensure Avalanche C-Chain is selected and your wallet app is up to date."
+              );
+            }
+          } else if (transferMsg.includes("insufficient funds") || transferMsg.includes("gas required exceeds")) {
             throw new Error(
               "Transaction failed — insufficient gas (AVAX). Please add AVAX to your wallet for gas fees and retry."
             );
+          } else {
+            throw new Error(`USDC transfer failed: ${transferMsg.slice(0, 200)}`);
           }
-          // Re-throw with context
-          throw new Error(`USDC transfer failed: ${transferMsg.slice(0, 200)}`);
         }
+
+        if (!transferHash) {
+          throw new Error("USDC transfer failed: no transaction hash returned by wallet.");
+        }
+
+        await publicClient.waitForTransactionReceipt({ hash: transferHash });
+        toast.success("USDC transferred to smart account!");
       } else {
         toast.success("Smart account already funded — skipping transfer.");
       }

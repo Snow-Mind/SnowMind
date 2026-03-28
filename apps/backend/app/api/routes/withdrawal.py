@@ -431,10 +431,9 @@ async def execute_withdrawal(
             "apy_improvement": None,
         }).execute()
 
-        # If full withdrawal, delete account from DB (cascading FKs clean up
-        # session_keys, allocations, rebalance_logs, account_yield_tracking).
-        # Smart account is deterministic (CREATE2) so user can re-onboard to
-        # the same address and get a fresh session key.
+        # If full withdrawal, deactivate account and clear live allocations.
+        # Keep historical rows (yield tracking, rebalance logs, session-key
+        # history) so lifetime metrics remain consistent.
         if req.is_full_withdrawal:
             # Revoke session key first (best-effort)
             try:
@@ -442,10 +441,16 @@ async def execute_withdrawal(
             except Exception as exc:
                 logger.warning("Session key revocation during full withdrawal failed: %s", exc)
 
-            db.table("accounts").delete().eq("id", account["id"]).execute()
+            # Clear live allocations now that funds have been withdrawn.
+            db.table("allocations").delete().eq("account_id", account["id"]).execute()
+
+            db.table("accounts").update({
+                "is_active": False,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", account["id"]).execute()
 
             logger.info(
-                "Full withdrawal complete for %s. Account deleted from DB.",
+                "Full withdrawal complete for %s. Account deactivated and history preserved.",
                 address,
             )
 

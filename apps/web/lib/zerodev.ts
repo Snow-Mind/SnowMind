@@ -728,7 +728,15 @@ export async function grantAndSerializeSessionKey(
   // Each UserOp on Avalanche can consume ~0.01-0.04 AVAX in gas (gasUsed × gasPrice).
   // 10 AVAX supports ~250-1000 operations — enough for months of rebalancing.
   // The rate limit policy (maxOpsPerDay) independently caps daily operations.
-  const gasPolicy = toGasPolicy({ allowed: parseUnits("10", 18) })
+  // IMPORTANT: include a tiny per-grant nonce in the encoded gas-policy data.
+  // CallPolicy V0.0.5 rejects duplicate permission hashes on re-install; if a
+  // user re-grants with identical policy payloads, enable mode can revert with
+  // "duplicate permissionHash". Adding a negligible nonce in wei keeps the
+  // effective gas cap unchanged while making each permission hash unique.
+  const gasNonce = BigInt(Date.now() % 1_000_000)
+  const gasPolicyAllowed = parseUnits("10", 18) + gasNonce
+  const gasPolicy = toGasPolicy({ allowed: gasPolicyAllowed })
+  console.log("[ZeroDev] gasPolicy nonce:", gasNonce.toString())
 
   // Rate limit: max rebalances per day
   const rateLimitPolicy = toRateLimitPolicy({

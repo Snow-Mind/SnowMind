@@ -7,13 +7,11 @@ import {
   X,
   Clock,
   RefreshCw,
-  AlertTriangle,
   Loader2,
 } from "lucide-react";
 import {
   PROTOCOL_CONFIG,
   SESSION_KEY_SELECTORS,
-  ACTIVE_PROTOCOLS,
   CONTRACTS,
 } from "@/lib/constants";
 import { api } from "@/lib/api-client";
@@ -23,13 +21,6 @@ import { useWallets } from "@privy-io/react-auth";
 import { createSmartAccount, grantAndSerializeSessionKey } from "@/lib/zerodev";
 import { toast } from "sonner";
 
-function hoursUntil(isoDate: string): number {
-  return Math.max(
-    0,
-    Math.floor((new Date(isoDate).getTime() - Date.now()) / (1000 * 60 * 60))
-  );
-}
-
 interface AuthorizedAction {
   protocol: string;
   action: string;
@@ -37,10 +28,39 @@ interface AuthorizedAction {
   color: string;
 }
 
-function getAuthorizedActions(): AuthorizedAction[] {
+const DEFAULT_ALLOWED_PROTOCOLS = [
+  "aave_v3",
+  "benqi",
+  "spark",
+  "euler_v2",
+  "silo_savusd_usdc",
+  "silo_susdp_usdc",
+] as const;
+
+type CanonicalProtocolId = (typeof DEFAULT_ALLOWED_PROTOCOLS)[number];
+
+function normalizeAllowedProtocols(protocols: string[] | undefined): CanonicalProtocolId[] {
+  if (!protocols || protocols.length === 0) {
+    return [];
+  }
+
+  const allowedSet = new Set<CanonicalProtocolId>(DEFAULT_ALLOWED_PROTOCOLS);
+  const normalized: CanonicalProtocolId[] = [];
+  for (const raw of protocols) {
+    const maybe = (raw ?? "").toLowerCase();
+    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    if (!allowedSet.has(canonical as CanonicalProtocolId)) continue;
+    if (normalized.includes(canonical as CanonicalProtocolId)) continue;
+    normalized.push(canonical as CanonicalProtocolId);
+  }
+  return normalized;
+}
+
+function getAuthorizedActions(protocolScope: CanonicalProtocolId[]): AuthorizedAction[] {
   const actions: AuthorizedAction[] = [];
-  for (const pid of ACTIVE_PROTOCOLS) {
+  for (const pid of protocolScope) {
     const meta = PROTOCOL_CONFIG[pid];
+    if (!meta) continue;
     const sels = SESSION_KEY_SELECTORS[pid];
     for (const [name, selector] of Object.entries(sels as Record<string, string>)) {
       actions.push({
@@ -61,13 +81,14 @@ export default function SessionKeyStatus() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { data: sk, isLoading, refetch } = useSessionKey(smartAccountAddress ?? undefined);
   const { wallets } = useWallets();
-  const authorized = getAuthorizedActions();
+  const scopedProtocols = normalizeAllowedProtocols(sk?.allowedProtocols);
+  const effectiveProtocols = scopedProtocols.length > 0
+    ? scopedProtocols
+    : [...DEFAULT_ALLOWED_PROTOCOLS];
+  const authorized = getAuthorizedActions(effectiveProtocols);
 
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const isActive = sk?.isActive ?? false;
-  const hoursLeft = sk?.expiresAt ? hoursUntil(sk.expiresAt) : 0;
-  const daysLeft = Math.floor(hoursLeft / 24);
-  const isExpiringSoon = hoursLeft <= 48;
 
   async function handleGrantSessionKey() {
     if (!wallet) {
@@ -110,23 +131,31 @@ export default function SessionKeyStatus() {
           },
         );
 
-      // Preserve the user's originally-selected protocols on re-grant.
-      // Users choose protocols during onboarding for a reason — re-grant
-      // must NOT silently add new protocols they never opted into.
-      const existingProtocols = sk?.allowedProtocols;
-      const protocols = existingProtocols && existingProtocols.length > 0
-        ? existingProtocols
-        : ACTIVE_PROTOCOLS as unknown as string[];
-
-      await api.storeSessionKey(saAddress, {
+      const existingProtocols = normalizeAllowedProtocols(sk?.allowedProtocols);
+      const payload: {
+        serializedPermission: string;
+        sessionPrivateKey: string;
+        sessionKeyAddress: string;
+        expiresAt: number;
+        allowedProtocols?: string[];
+        force: boolean;
+        ownerAddress: string;
+      } = {
         serializedPermission,
         sessionPrivateKey,
         sessionKeyAddress,
         expiresAt,
-        allowedProtocols: protocols,
         force: true,
         ownerAddress: wallet.address,
-      });
+      };
+
+      // Preserve the user's selected protocol scope when present.
+      // If unavailable, backend falls back to last-known scope or full default set.
+      if (existingProtocols.length > 0) {
+        payload.allowedProtocols = existingProtocols;
+      }
+
+      await api.storeSessionKey(saAddress, payload);
 
       // Mark agent as active in the store so layout redirects work
       usePortfolioStore.getState().setAgentActivated(true);

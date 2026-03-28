@@ -3,6 +3,7 @@
 Transaction ordering: withdrawals FIRST, then deposits (ensure funds are available).
 """
 
+import base64
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
@@ -34,7 +35,10 @@ from app.services.optimizer.health_checker import (
 from app.services.optimizer.rate_fetcher import RateFetcher, circuit_breaker
 from app.services.optimizer.rate_validator import RateValidator
 from app.services.protocols import ALL_ADAPTERS
-from app.services.fee_calculator import record_deposit, record_partial_withdrawal
+from app.services.fee_calculator import (
+    record_deposit,
+    record_partial_withdrawal,
+)
 from app.services.protocols import get_adapter
 from app.services.protocols.base import ProtocolHealth, ProtocolStatus, get_shared_async_web3
 
@@ -52,6 +56,32 @@ ERC20_BALANCE_ABI = [
         "stateMutability": "view",
     }
 ]
+
+
+def _permission_blob_contains_address(serialized_permission: str, address: str) -> bool:
+    """Return True if *address* is present in a serialized permission blob.
+
+    The permission payload is typically base64-encoded JSON. Some legacy flows
+    may store plain-text JSON. To avoid false negatives, check both the raw blob
+    and a best-effort base64-decoded representation.
+    """
+    if not serialized_permission or not address:
+        return False
+
+    normalized = address.lower().removeprefix("0x")
+    candidates = (normalized, f"0x{normalized}")
+
+    blob_lower = serialized_permission.lower()
+    if any(token in blob_lower for token in candidates):
+        return True
+
+    try:
+        padded = serialized_permission + ("=" * (-len(serialized_permission) % 4))
+        decoded = base64.b64decode(padded, validate=False)
+        decoded_lower = decoded.decode("utf-8", errors="ignore").lower()
+        return any(token in decoded_lower for token in candidates)
+    except Exception:
+        return False
 
 
 class Rebalancer:
@@ -75,6 +105,38 @@ class Rebalancer:
             self._protocol_addresses["silo_savusd_usdc"] = self.settings.SILO_SAVUSD_VAULT
         if self.settings.SILO_SUSDP_VAULT:
             self._protocol_addresses["silo_susdp_usdc"] = self.settings.SILO_SUSDP_VAULT
+
+    def _should_record_initial_deposit(self, db, account_id: str) -> bool:
+        """Return True when initial deposit tracking should be (re)seeded.
+
+        This prevents repeated scheduler retries from inflating
+        ``cumulative_deposited`` while keeping re-onboarding support when
+        outstanding principal is effectively zero.
+        """
+        try:
+            result = (
+                db.table("account_yield_tracking")
+                .select("cumulative_deposited, cumulative_net_withdrawn")
+                .eq("account_id", account_id)
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
+                return True
+
+            tracking = result.data[0]
+            cumulative_deposited = Decimal(str(tracking.get("cumulative_deposited", "0")))
+            cumulative_withdrawn = Decimal(str(tracking.get("cumulative_net_withdrawn", "0")))
+            outstanding_principal = cumulative_deposited - cumulative_withdrawn
+            return outstanding_principal <= Decimal("0.01")
+        except Exception as exc:
+            logger.warning(
+                "Deposit-tracking guard check failed for %s: %s — skipping deposit write",
+                account_id,
+                exc,
+            )
+            # Fail safe: avoid writing potentially wrong deposit totals.
+            return False
 
     async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
         """Read the on-chain USDC balance sitting idle in the smart account.
@@ -221,7 +283,10 @@ class Rebalancer:
         # permission blob — content-based check avoids false positives from
         # length changes due to ONE_OF rule consolidation.
         _perm_blob = session_key_record.get("serialized_permission", "")
-        _has_permit2 = "000000000022d473030f116ddee9f6b43ac78ba3" in _perm_blob.lower()
+        _has_permit2 = _permission_blob_contains_address(
+            _perm_blob,
+            self.settings.PERMIT2,
+        )
         if _perm_blob and not _has_permit2 and "euler_v2" in allowed_protocols:
             allowed_protocols.discard("euler_v2")
             logger.warning(
@@ -454,8 +519,9 @@ class Rebalancer:
                            f"Deposit: ${float(idle_usdc):.0f}",
                 )
 
-            # Record the deposit for fee tracking (initial deployment)
-            record_deposit(db, account_id, idle_usdc)
+            # Record the initial deposit once per principal lifecycle.
+            if self._should_record_initial_deposit(db, account_id):
+                record_deposit(db, account_id, idle_usdc)
 
         # ── 5. TARGETED health checks ──────────────────────────────
         # Architecture: check ONLY (a) protocols with active positions

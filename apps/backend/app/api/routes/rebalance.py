@@ -46,6 +46,11 @@ def _classify_reason(
 
     if last_status == "failed":
         detail = last_skip_reason or "Execution failed"
+        detail_l = detail.lower()
+        if "permission_recovery_needed" in detail_l or "deadlock" in detail_l:
+            return ("SESSION_KEY_INVALID", detail)
+        if "user must re-grant" in detail_l or "must regrant" in detail_l:
+            return ("SESSION_KEY_INVALID", detail)
         if "validateUserOp" in detail or "AA23" in detail:
             return ("USEROP_VALIDATE_REVERT", detail)
         if "EnableNotApproved" in detail:
@@ -54,6 +59,13 @@ def _classify_reason(
 
     if last_status == "skipped":
         detail = last_skip_reason or "Skipped"
+        detail_l = detail.lower()
+        if "permission_recovery_needed" in detail_l or "deadlock" in detail_l:
+            return ("SESSION_KEY_INVALID", detail)
+        if "stranded" in detail_l and "session key" in detail_l:
+            return ("NO_PERMITTED_PROTOCOLS", detail)
+        if "user must re-grant" in detail_l or "must regrant" in detail_l:
+            return ("SESSION_KEY_INVALID", detail)
         if "No active session key" in detail:
             return ("NO_ACTIVE_SESSION_KEY", detail)
         if "No deposited balance" in detail:

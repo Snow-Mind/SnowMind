@@ -28,6 +28,72 @@ logger = logging.getLogger("snowmind")
 
 router = APIRouter()  # Auth applied per-endpoint
 
+_DEFAULT_ALLOWED_PROTOCOLS = [
+    "aave_v3",
+    "benqi",
+    "spark",
+    "euler_v2",
+    "silo_savusd_usdc",
+    "silo_susdp_usdc",
+]
+
+
+def _normalize_allowed_protocols(protocols: list[str] | None) -> list[str]:
+    """Normalize allowed protocol IDs to canonical values and preserve order."""
+    if not protocols:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in protocols:
+        pid = str(raw).strip().lower()
+        if not pid:
+            continue
+        if pid == "aave":
+            pid = "aave_v3"
+        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        normalized.append(pid)
+    return normalized
+
+
+def _resolve_allowed_protocols(
+    db: Client,
+    account_id: str,
+    requested_protocols: list[str] | None,
+) -> list[str]:
+    """Resolve protocol scope for session-key storage.
+
+    Priority:
+      1) Explicit protocols from request.
+      2) Most recent stored session-key scope for this account.
+      3) Default full protocol set.
+    """
+    requested = _normalize_allowed_protocols(requested_protocols)
+    if requested:
+        return requested
+
+    try:
+        latest = (
+            db.table("session_keys")
+            .select("allowed_protocols")
+            .eq("account_id", account_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if latest.data:
+            preserved = _normalize_allowed_protocols(latest.data[0].get("allowed_protocols"))
+            if preserved:
+                return preserved
+    except Exception as exc:
+        logger.warning("Failed to reuse previous allowed_protocols for %s: %s", account_id, exc)
+
+    return list(_DEFAULT_ALLOWED_PROTOCOLS)
+
 
 # ── Request body ───────────────────────────────────────────
 
@@ -439,12 +505,14 @@ async def store_account_session_key(
         raise HTTPException(status_code=404, detail="Account not found")
 
     # Store session key
+    resolved_protocols = _resolve_allowed_protocols(db, account_id, req.allowed_protocols)
+
     session_key_data = {
         "serializedPermission": req.serialized_permission,
         "sessionPrivateKey": req.session_private_key,
         "sessionKeyAddress": req.session_key_address,
         "expiresAt": req.expires_at,
-        "allowedProtocols": req.allowed_protocols or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
+        "allowedProtocols": resolved_protocols,
     }
     try:
         key_id = store_session_key(db, account_id, session_key_data, force=req.force)
@@ -455,10 +523,6 @@ async def store_account_session_key(
             return {"success": True, "keyId": "", "message": str(exc)}
         raise HTTPException(status_code=400, detail=str(exc))
     logger.info("Session key stored via /session-key endpoint for %s (key_id=%s)", address, key_id)
-
-    # Trigger immediate rebalance so idle USDC gets deployed right away
-    # (same as register endpoint). The per-account lock prevents duplicates.
-    asyncio.create_task(_trigger_initial_rebalance(account_id, address))
 
     # Optionally record initial allocation
     if req.initial_allocation:
@@ -482,12 +546,9 @@ async def store_account_session_key(
             except Exception as exc:
                 logger.warning("Failed to record allocation %s/%s: %s", address, protocol_id, exc)
 
-    # NOTE: Do NOT trigger rebalance here. The register endpoint already fires
-    # _trigger_initial_rebalance when the session key is stored inline. Firing
-    # here as well causes TWO concurrent rebalance attempts that submit
-    # identical UserOps to the bundler → "duplicate permissionHash" AA23 revert.
-    # The per-account lock in _trigger_initial_rebalance prevents the collision
-    # if both endpoints fire — the second attempt will be skipped.
+    # Trigger immediate rebalance so idle USDC gets deployed right away.
+    # This endpoint may be called after a failed inline store on registration,
+    # so we run it here as a best-effort deployment kick-off.
     asyncio.create_task(_trigger_initial_rebalance(account_id, address))
 
     return {"success": True, "keyId": key_id}

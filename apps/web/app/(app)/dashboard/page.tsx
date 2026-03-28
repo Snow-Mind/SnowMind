@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import {
@@ -94,6 +95,7 @@ export default function DashboardPage() {
   } = usePortfolio(address);
 
   const {
+    data: rebalanceStatus,
     isLoading: rebalanceLoading,
   } = useRebalanceStatus(address);
 
@@ -118,6 +120,27 @@ export default function DashboardPage() {
 
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+
+  const requiresRegrant = (() => {
+    if (!rebalanceStatus) return false;
+    const code = rebalanceStatus.reasonCode;
+    const detail = (rebalanceStatus.reasonDetail ?? "").toLowerCase();
+
+    if (code === "NO_ACTIVE_SESSION_KEY") return true;
+    if (code === "SESSION_KEY_INVALID") return true;
+    if (code === "SESSION_KEY_NOT_APPROVED") return true;
+    if (code === "NO_PERMITTED_PROTOCOLS") return true;
+
+    return (
+      detail.includes("permission_recovery_needed") ||
+      detail.includes("user must re-grant") ||
+      detail.includes("must regrant") ||
+      detail.includes("session key")
+    );
+  })();
+
+  const regrantReason = rebalanceStatus?.reasonDetail
+    ?? "Your session key needs to be granted again before automated rebalancing can continue.";
 
   // Best available APY across active protocols (shown when blended APY is 0)
   const bestRate = rates
@@ -168,6 +191,30 @@ export default function DashboardPage() {
           Dashboard
         </h1>
       </div>
+
+      {/* Session key regrant banner */}
+      {!isLoading && requiresRegrant && (
+        <motion.div
+          className="flex items-start gap-3 rounded-lg border border-[#E84142]/25 bg-[#E84142]/8 px-4 py-3"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 text-[#E84142]" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-arctic">Session key action required</p>
+            <p className="mt-0.5 text-[11px] text-[#6E6761]">
+              {regrantReason}
+            </p>
+          </div>
+          <Link
+            href="/settings"
+            className="shrink-0 rounded-md border border-[#E84142]/30 bg-white px-3 py-1.5 text-[11px] font-medium text-[#E84142] hover:bg-[#FFF6F6]"
+          >
+            Re-grant in Settings
+          </Link>
+        </motion.div>
+      )}
 
       {/* Overview stats */}
       {isLoading || !stats ? (

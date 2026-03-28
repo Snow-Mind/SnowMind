@@ -128,9 +128,9 @@ async def platform_stats(request: Request):
     try:
         db = get_db()
 
-        # Total registered accounts
-        accounts = db.table("accounts").select("id, created_at").execute()
-        total_users = len(accounts.data) if accounts.data else 0
+        # Total registered accounts (exact count)
+        accounts_count = db.table("accounts").select("id", count="exact").execute()
+        total_users = accounts_count.count if accounts_count.count is not None else 0
 
         # Accounts with active session keys (active users)
         now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -143,33 +143,69 @@ async def platform_stats(request: Request):
         )
         active_users = len(set(r["account_id"] for r in active_keys.data)) if active_keys.data else 0
 
-        # Deposit tracking from account_yield_tracking
+        # Current TVL (live allocations)
+        alloc_rows = (
+            db.table("allocations")
+            .select("account_id, amount_usdc")
+            .neq("protocol_id", "idle")
+            .execute()
+        )
+        current_tvl = Decimal("0")
+        tvl_by_account: dict[str, Decimal] = {}
+        for row in (alloc_rows.data or []):
+            amt = Decimal(str(row.get("amount_usdc") or "0"))
+            current_tvl += amt
+            acct_id = row.get("account_id")
+            if acct_id:
+                tvl_by_account[acct_id] = tvl_by_account.get(acct_id, Decimal("0")) + amt
+
+        # Lifetime tracking from account_yield_tracking
         yield_rows = (
             db.table("account_yield_tracking")
-            .select("account_id, cumulative_deposited")
+            .select("account_id, cumulative_deposited, cumulative_net_withdrawn, cumulative_fees_collected")
             .execute()
         )
         accounts_with_deposits = 0
         total_deposited = Decimal("0")
+        total_net_withdrawn = Decimal("0")
+        total_fees_collected = Decimal("0")
+        anomalous_tracking_accounts = 0
+        tracked_accounts: set[str] = set()
+
         if yield_rows.data:
             for row in yield_rows.data:
-                amt = Decimal(str(row.get("cumulative_deposited", "0")))
-                if amt > Decimal("0"):
-                    accounts_with_deposits += 1
-                    total_deposited += amt
+                account_id = str(row.get("account_id"))
+                tracked_accounts.add(account_id)
 
-        # Current TVL (on-chain allocations)
-        alloc_rows = (
-            db.table("allocations")
-            .select("amount_usdc")
-            .neq("protocol_id", "idle")
-            .execute()
-        )
-        current_tvl = sum(
-            Decimal(str(r["amount_usdc"]))
-            for r in (alloc_rows.data or [])
-            if r.get("amount_usdc")
-        )
+                deposited = Decimal(str(row.get("cumulative_deposited", "0")))
+                withdrawn = Decimal(str(row.get("cumulative_net_withdrawn", "0")))
+                fees = Decimal(str(row.get("cumulative_fees_collected", "0")))
+
+                # Defensive correction for known overcount bug patterns:
+                # cumulative_deposited should not be far above
+                # (current_tvl + cumulative_net_withdrawn).
+                live_balance = tvl_by_account.get(account_id, Decimal("0"))
+                cap = live_balance + withdrawn
+                effective_deposited = deposited
+                if cap > Decimal("0") and deposited > cap:
+                    effective_deposited = cap
+                    anomalous_tracking_accounts += 1
+
+                if effective_deposited > Decimal("0"):
+                    accounts_with_deposits += 1
+                    total_deposited += effective_deposited
+
+                total_net_withdrawn += withdrawn
+                total_fees_collected += fees
+
+        # Accounts with on-chain TVL but no yield-tracking row yet.
+        for account_id, live_balance in tvl_by_account.items():
+            if account_id in tracked_accounts:
+                continue
+            if live_balance <= Decimal("0"):
+                continue
+            accounts_with_deposits += 1
+            total_deposited += live_balance
 
         # Rebalance stats
         executed = (
@@ -180,13 +216,25 @@ async def platform_stats(request: Request):
         )
         total_rebalances = executed.count if executed.count is not None else 0
 
+        failed = (
+            db.table("rebalance_logs")
+            .select("id", count="exact")
+            .eq("status", "failed")
+            .execute()
+        )
+        total_rebalances_failed = failed.count if failed.count is not None else 0
+
         return {
             "total_users": total_users,
             "active_users": active_users,
             "accounts_with_deposits": accounts_with_deposits,
             "total_deposited_usd": str(total_deposited),
+            "total_net_withdrawn_usd": str(total_net_withdrawn),
+            "total_fees_collected_usd": str(total_fees_collected),
             "current_tvl_usd": str(current_tvl),
             "total_rebalances_executed": total_rebalances,
+            "total_rebalances_failed": total_rebalances_failed,
+            "tracking_anomaly_accounts": anomalous_tracking_accounts,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
@@ -196,7 +244,11 @@ async def platform_stats(request: Request):
             "active_users": 0,
             "accounts_with_deposits": 0,
             "total_deposited_usd": "0",
+            "total_net_withdrawn_usd": "0",
+            "total_fees_collected_usd": "0",
             "current_tvl_usd": "0",
             "total_rebalances_executed": 0,
+            "total_rebalances_failed": 0,
+            "tracking_anomaly_accounts": 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
