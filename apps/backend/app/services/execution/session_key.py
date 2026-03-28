@@ -214,36 +214,12 @@ def store_session_key(
 
     Renewal guard: rejects the request if the current active key still has
     more than 24 hours until expiry to prevent unnecessary key churn.
-    Pass ``force=True`` to bypass the renewal guard (e.g. after a signing fix
-    that invalidates the old session key's on-chain enable signature).
+    If the incoming key address differs from the currently active key address,
+    treat it as an explicit re-grant and bypass the renewal guard.
+    Pass ``force=True`` to always bypass the guard.
 
     Returns the UUID of the new ``session_keys`` row.
     """
-    # ── Renewal guard — reject if current key has >24h remaining ─────
-    if not force:
-        now = datetime.now(timezone.utc)
-        now_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        existing = (
-            db.table("session_keys")
-            .select("expires_at")
-            .eq("account_id", str(account_id))
-            .eq("is_active", True)
-            .gte("expires_at", now_z)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if existing.data:
-            existing_expires = datetime.fromisoformat(existing.data[0]["expires_at"])
-            # Ensure timezone-aware comparison
-            if existing_expires.tzinfo is None:
-                existing_expires = existing_expires.replace(tzinfo=timezone.utc)
-            remaining = existing_expires - now
-            if remaining > timedelta(hours=24):
-                raise ValueError(
-                    f"Active session key still has {remaining.total_seconds() / 3600:.1f}h remaining "
-                    f"(>24h). Renewal not needed yet."
-                )
     # Accept both frontend camelCase and direct snake_case fields
     raw_key = (
         session_key_data.get("serializedPermission")
@@ -272,6 +248,48 @@ def store_session_key(
         or session_key_data.get("key_address")
         or ""
     )
+
+    # ── Renewal guard — reject if current key has >24h remaining ─────
+    if not force:
+        now = datetime.now(timezone.utc)
+        now_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        existing = (
+            db.table("session_keys")
+            .select("expires_at, key_address")
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .gte("expires_at", now_z)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            existing_row = existing.data[0]
+            existing_expires = datetime.fromisoformat(existing_row["expires_at"])
+            # Ensure timezone-aware comparison
+            if existing_expires.tzinfo is None:
+                existing_expires = existing_expires.replace(tzinfo=timezone.utc)
+            remaining = existing_expires - now
+            if remaining > timedelta(hours=24):
+                existing_key_address = str(existing_row.get("key_address") or "").strip().lower()
+                incoming_key_address = str(key_address).strip().lower()
+                is_explicit_regrant = (
+                    bool(existing_key_address)
+                    and bool(incoming_key_address)
+                    and existing_key_address != incoming_key_address
+                )
+                if not is_explicit_regrant:
+                    raise ValueError(
+                        f"Active session key still has {remaining.total_seconds() / 3600:.1f}h remaining "
+                        f"(>24h). Renewal not needed yet."
+                    )
+                logger.info(
+                    "Bypassing renewal guard for account %s — incoming key address differs "
+                    "(old=%s new=%s)",
+                    account_id,
+                    existing_key_address,
+                    incoming_key_address,
+                )
 
     # Handle expiresAt as either ISO string or unix timestamp
     expires_raw = session_key_data.get("expiresAt") or session_key_data.get("expires_at")
