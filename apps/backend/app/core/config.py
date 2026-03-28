@@ -110,7 +110,9 @@ class Settings(BaseSettings):
 
     # ── Scheduler ────────────────────────────────────────────
     REBALANCE_CHECK_INTERVAL: int = 360  # 6 minutes (seconds)
-    MIN_REBALANCE_INTERVAL_HOURS: int = 6  # Time gate: skip if < 6h ago
+    # Legacy cooldown knob; accept fractional hours for backward compatibility
+    # with existing envs that used 0.1 (6 minutes).
+    MIN_REBALANCE_INTERVAL_HOURS: float = 6.0
     SCHEDULER_LOCK_TTL_MINUTES: int = 35  # Lock expires after 35 min
 
     # ── Optimizer Thresholds ─────────────────────────────────
