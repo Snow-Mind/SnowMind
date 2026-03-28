@@ -239,6 +239,7 @@ export const api = {
       txHash: string | null;
       agentFee: string;
       userReceives: string;
+      accountDeactivated: boolean;
       message: string;
     }>("/api/v1/withdrawals/execute", {
       method: "POST",

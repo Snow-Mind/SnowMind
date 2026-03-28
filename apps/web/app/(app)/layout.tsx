@@ -20,7 +20,7 @@ import { ChainGuard } from "@/components/ChainGuard";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { usePortfolio } from "@/hooks/usePortfolio";
-import { useSessionKey } from "@/hooks/useSessionKey";
+import { useAccountDetail } from "@/hooks/useAccountDetail";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, CHAIN } from "@/lib/constants";
 import { api } from "@/lib/api-client";
@@ -174,7 +174,7 @@ export default function AppLayout({
   const { authenticated, ready, logout, activeWallet, eoaAddress } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const { data: portfolio, isLoading: portfolioLoading, error: portfolioError } = usePortfolio(smartAccount.address ?? undefined);
-  const { data: sessionKey, isLoading: sessionKeyLoading, error: sessionKeyError } = useSessionKey(smartAccount.address ?? undefined);
+  const { data: accountDetail, isLoading: accountDetailLoading, error: accountDetailError } = useAccountDetail(smartAccount.address ?? undefined);
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [showDeposit, setShowDeposit] = useState(false);
@@ -208,7 +208,8 @@ export default function AppLayout({
   const hasFunds = portfolio?.allocations?.some(
     (a) => Number(a.amountUsdc) > 0,
   ) ?? false;
-  const hasActiveSessionKey = sessionKey?.isActive ?? false;
+  const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
+  const hasInactiveAccount = !!smartAccount.address && accountDetail?.isActive === false;
   // True only after Zustand persist has finished hydrating from localStorage.
   const clientReady = usePortfolioHydrated();
 
@@ -216,14 +217,14 @@ export default function AppLayout({
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
   // Require clientReady + real API data (both queries finished AND smartAccount resolved)
   // NEVER clear on query errors — transient 500s/CORS failures must not deactivate agent
-  const dataLoaded = clientReady && !portfolioLoading && !sessionKeyLoading && !!smartAccount.address;
+  const dataLoaded = clientReady && !portfolioLoading && !accountDetailLoading && !!smartAccount.address;
   useEffect(() => {
-    if (dataLoaded && storeActivated && !hasActiveSessionKey && !hasFunds && !sessionKeyError && !portfolioError) {
+    if (dataLoaded && storeActivated && (hasInactiveAccount || (!hasActiveSessionKey && !hasFunds)) && !accountDetailError && !portfolioError) {
       setAgentActivated(false);
     }
-  }, [dataLoaded, storeActivated, hasActiveSessionKey, hasFunds, setAgentActivated, sessionKeyError, portfolioError]);
+  }, [dataLoaded, storeActivated, hasInactiveAccount, hasActiveSessionKey, hasFunds, setAgentActivated, accountDetailError, portfolioError]);
 
-  const isAgentActive = storeActivated || hasActiveSessionKey || hasFunds;
+  const isAgentActive = !!smartAccount.address && !hasInactiveAccount && (storeActivated || hasActiveSessionKey || hasFunds);
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -245,14 +246,15 @@ export default function AppLayout({
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
   // Never redirect when queries errored — transient failures must not disrupt UX.
-  const dataReady = clientReady && (storeActivated || (!!smartAccount.address && !portfolioLoading && !sessionKeyLoading));
+  const dataReady = clientReady && (storeActivated || (!!smartAccount.address && !portfolioLoading && !accountDetailLoading));
+  const accountDataReady = clientReady && !!smartAccount.address && !portfolioLoading && !accountDetailLoading;
   useEffect(() => {
     if (!dataReady) return;
-    if (sessionKeyError || portfolioError) return;
+    if (accountDetailError || portfolioError) return;
     if (!isAgentActive && pathname === "/dashboard") {
       router.replace("/onboarding");
     }
-  }, [dataReady, isAgentActive, pathname, router, sessionKeyError, portfolioError]);
+  }, [dataReady, isAgentActive, pathname, router, accountDetailError, portfolioError]);
 
   // Redirect portfolio to dashboard (removed page)
   useEffect(() => {
@@ -266,12 +268,13 @@ export default function AppLayout({
   // may be in the middle of signing a MetaMask transaction.
   const isOnboardingInProgress = usePortfolioStore((s) => s.isOnboardingInProgress);
   useEffect(() => {
-    if (!portfolio) return;
+    if (!accountDataReady) return;
+    if (accountDetailError || portfolioError) return;
     if (isOnboardingInProgress) return;
-    if (isAgentActive && pathname === "/onboarding") {
+    if (accountDetail?.isActive && isAgentActive && pathname === "/onboarding") {
       router.replace("/dashboard");
     }
-  }, [portfolio, isAgentActive, pathname, router, isOnboardingInProgress]);
+  }, [accountDataReady, accountDetail, isAgentActive, pathname, router, isOnboardingInProgress, accountDetailError, portfolioError]);
 
   // Don't render until auth is ready
   if (!ready) {

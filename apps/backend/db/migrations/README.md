@@ -40,6 +40,10 @@ Expected tables (after all migrations):
 | 006 | `006_twap_and_spark_snapshots.sql` | TWAP buffer persistence + Spark convertToAssets snapshots |
 | 007 | `007_fix_column_mismatches.sql` | Fix column names in yield_tracking, session_key_audit, rebalance_logs |
 | 008 | `008_add_silo_protocols_and_realtime.sql` | Silo protocols, Supabase Realtime, RLS gaps, data retention |
+| 009 | `009_add_allocations_unique_constraint.sql` | Enforce one allocation row per (account, protocol) for safe upserts |
+| 010 | `010_generalize_vault_snapshots.sql` | Generalize vault share-price snapshots across ERC-4626 protocols |
+| 011 | `011_add_privy_did.sql` | Add Privy DID ownership binding for endpoint authorization |
+| 012 | `012_enforce_single_active_session_key.sql` | Enforce single active session key per account to prevent race-induced divergence |
 
 ## Creating a new migration
 

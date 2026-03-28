@@ -105,3 +105,45 @@ def test_preview_request_same_validation():
             smartAccountAddress="0x1234567890abcdef1234567890abcdef12345678",
             withdrawAmount="99999999",
         )
+
+
+def test_infer_full_withdrawal_when_remaining_is_dust():
+    """Leaving <= $0.01 should be treated as full withdrawal."""
+    from app.api.routes.withdrawal import _resolve_withdrawal_intent
+
+    normalized_amount, is_full = _resolve_withdrawal_intent(
+        requested_amount_usdc=Decimal("99.995"),
+        current_balance_usdc=Decimal("100"),
+        requested_full_withdrawal=False,
+    )
+
+    assert is_full is True
+    assert normalized_amount == Decimal("100")
+
+
+def test_partial_withdrawal_remains_partial_above_dust_remainder():
+    """Leaving > $0.01 should remain a partial withdrawal."""
+    from app.api.routes.withdrawal import _resolve_withdrawal_intent
+
+    normalized_amount, is_full = _resolve_withdrawal_intent(
+        requested_amount_usdc=Decimal("99.97"),
+        current_balance_usdc=Decimal("100"),
+        requested_full_withdrawal=False,
+    )
+
+    assert is_full is False
+    assert normalized_amount == Decimal("99.97")
+
+
+def test_explicit_full_withdrawal_always_uses_current_balance():
+    """Explicit full withdrawal should normalize to full balance."""
+    from app.api.routes.withdrawal import _resolve_withdrawal_intent
+
+    normalized_amount, is_full = _resolve_withdrawal_intent(
+        requested_amount_usdc=Decimal("10"),
+        current_balance_usdc=Decimal("100"),
+        requested_full_withdrawal=True,
+    )
+
+    assert is_full is True
+    assert normalized_amount == Decimal("100")

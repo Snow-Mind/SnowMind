@@ -22,6 +22,7 @@ import {
   Shield,
   Info,
 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { EXPLORER, FEE_CONFIG } from '@/lib/constants'
 import { api, APIError } from '@/lib/api-client'
 import { usePortfolioStore } from '@/stores/portfolio.store'
@@ -45,7 +46,17 @@ interface WithdrawalResult {
   txHash: string | null
   agentFee: string
   userReceives: string
+  accountDeactivated: boolean
   message: string
+}
+
+const FULL_WITHDRAWAL_DUST_USDC = 0.01
+
+function isEffectivelyFullWithdrawal(amount: string, currentBalance: number): boolean {
+  const requested = parseFloat(amount)
+  if (!Number.isFinite(requested) || requested <= 0) return false
+  if (requested >= currentBalance) return true
+  return currentBalance - requested <= FULL_WITHDRAWAL_DUST_USDC
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -55,6 +66,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 export default function WithdrawPage() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const [step, setStep] = useState<WithdrawalStep>('input')
   const [amount, setAmount] = useState('')
   const [isFullWithdrawal, setIsFullWithdrawal] = useState(false)
@@ -65,6 +77,9 @@ export default function WithdrawPage() {
 
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress)
   const totalDepositedUsd = usePortfolioStore((s) => s.totalDepositedUsd)
+  const setAllocations = usePortfolioStore((s) => s.setAllocations)
+  const setTotals = usePortfolioStore((s) => s.setTotals)
+  const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated)
   const balance = parseFloat(totalDepositedUsd || '0')
 
   const handlePreview = useCallback(async () => {
@@ -73,7 +88,9 @@ export default function WithdrawPage() {
     try {
       if (!smartAccountAddress) throw new Error('Smart account not found')
 
-      const withdrawAmount = isFullWithdrawal ? String(balance) : amount
+      const requestedAmount = amount
+      const effectiveFullWithdrawal = isFullWithdrawal || isEffectivelyFullWithdrawal(requestedAmount, balance)
+      const withdrawAmount = effectiveFullWithdrawal ? String(balance) : requestedAmount
       if (!withdrawAmount || parseFloat(withdrawAmount) <= 0) {
         throw new Error('Please enter a valid amount')
       }
@@ -81,7 +98,7 @@ export default function WithdrawPage() {
       const data = await api.previewWithdrawal({
         smartAccountAddress,
         withdrawAmount,
-        isFullWithdrawal,
+        isFullWithdrawal: effectiveFullWithdrawal,
       })
 
       setPreview(data)
@@ -103,11 +120,27 @@ export default function WithdrawPage() {
     try {
       if (!smartAccountAddress) throw new Error('Smart account not found')
 
+      const fallbackAmount = preview?.withdrawAmount || amount
+      const previewBalance = parseFloat(preview?.currentBalance ?? String(balance))
+      const effectiveFullWithdrawal =
+        isFullWithdrawal || isEffectivelyFullWithdrawal(fallbackAmount, previewBalance)
+
       const data = await api.executeWithdrawal({
         smartAccountAddress,
-        withdrawAmount: preview?.withdrawAmount || amount,
-        isFullWithdrawal,
+        withdrawAmount: fallbackAmount,
+        isFullWithdrawal: effectiveFullWithdrawal,
       })
+
+      if (data.accountDeactivated) {
+        setAgentActivated(false)
+        setAllocations([])
+        setTotals('0', '0')
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['account-detail', smartAccountAddress] }),
+        queryClient.invalidateQueries({ queryKey: ['portfolio', smartAccountAddress] }),
+      ])
 
       setResult(data)
       setStep('success')
@@ -119,7 +152,7 @@ export default function WithdrawPage() {
       }
       setStep('error')
     }
-  }, [amount, isFullWithdrawal, preview, smartAccountAddress])
+  }, [amount, balance, isFullWithdrawal, preview, queryClient, setAgentActivated, setAllocations, setTotals, smartAccountAddress])
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
@@ -174,7 +207,11 @@ export default function WithdrawPage() {
                 <input
                   type="number"
                   value={amount}
-                  onChange={(e) => { setAmount(e.target.value); setIsFullWithdrawal(false) }}
+                  onChange={(e) => {
+                    const nextAmount = e.target.value
+                    setAmount(nextAmount)
+                    setIsFullWithdrawal(isEffectivelyFullWithdrawal(nextAmount, balance))
+                  }}
                   placeholder="0.00"
                   min="0"
                   max={balance}
@@ -353,11 +390,11 @@ export default function WithdrawPage() {
             </div>
 
             <button
-              onClick={() => router.push('/dashboard')}
+              onClick={() => router.push(result.accountDeactivated ? '/onboarding' : '/dashboard')}
               className="w-full rounded-xl bg-white/[0.06] hover:bg-white/[0.10] border border-white/[0.08]
                 px-4 py-3 text-sm font-medium text-white/70 transition-all duration-200"
             >
-              Return to Dashboard
+              {result.accountDeactivated ? 'Continue to Onboarding' : 'Return to Dashboard'}
             </button>
           </div>
         )}

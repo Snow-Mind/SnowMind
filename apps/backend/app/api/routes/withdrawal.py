@@ -108,6 +108,7 @@ class WithdrawalExecuteResponse(BaseModel):
     tx_hash: str | None = Field(None, alias="txHash")
     agent_fee: str = Field(..., alias="agentFee")
     user_receives: str = Field(..., alias="userReceives")
+    account_deactivated: bool = Field(..., alias="accountDeactivated")
     message: str
     model_config = {"populate_by_name": True}
 
@@ -177,6 +178,29 @@ def _compute_fee(
     )
 
 
+def _resolve_withdrawal_intent(
+    requested_amount_usdc: Decimal,
+    current_balance_usdc: Decimal,
+    requested_full_withdrawal: bool,
+) -> tuple[Decimal, bool]:
+    """Normalize withdrawal intent and infer full-withdrawal for dust remainders.
+
+    If the user leaves at most dust behind, treat it as a full withdrawal so the
+    account lifecycle (session-key revocation and deactivation) stays consistent.
+    """
+    if requested_full_withdrawal:
+        return current_balance_usdc, True
+
+    if requested_amount_usdc > current_balance_usdc:
+        return requested_amount_usdc, False
+
+    remaining = current_balance_usdc - requested_amount_usdc
+    if remaining <= _MIN_WITHDRAWAL_USDC:
+        return current_balance_usdc, True
+
+    return requested_amount_usdc, False
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/preview", response_model=WithdrawalPreviewResponse)
@@ -205,9 +229,12 @@ async def preview_withdrawal(
         )
 
     # Determine withdrawal amount
-    withdraw_amount = Decimal(req.withdraw_amount)
-    if req.is_full_withdrawal:
-        withdraw_amount = current_balance
+    requested_withdraw_amount = Decimal(req.withdraw_amount)
+    withdraw_amount, effective_full_withdrawal = _resolve_withdrawal_intent(
+        requested_withdraw_amount,
+        current_balance,
+        req.is_full_withdrawal,
+    )
 
     if withdraw_amount > current_balance:
         raise HTTPException(
@@ -290,9 +317,12 @@ async def execute_withdrawal(
         raise HTTPException(status_code=400, detail="No balance to withdraw")
 
     # Determine withdrawal amount
-    withdraw_amount = Decimal(req.withdraw_amount)
-    if req.is_full_withdrawal:
-        withdraw_amount = current_balance
+    requested_withdraw_amount = Decimal(req.withdraw_amount)
+    withdraw_amount, effective_full_withdrawal = _resolve_withdrawal_intent(
+        requested_withdraw_amount,
+        current_balance,
+        req.is_full_withdrawal,
+    )
 
     if withdraw_amount > current_balance:
         raise HTTPException(
@@ -365,7 +395,7 @@ async def execute_withdrawal(
             "ownerAddress": account.get("owner_address", ""),
             "withdrawAmount": str(withdraw_raw),
             "agentFeeAmount": str(agent_fee_raw),
-            "isFullWithdrawal": req.is_full_withdrawal,
+            "isFullWithdrawal": effective_full_withdrawal,
             "contracts": {
                 "AAVE_POOL": settings.AAVE_V3_POOL,
                 "BENQI_POOL": settings.BENQI_QIUSDC,
@@ -434,7 +464,7 @@ async def execute_withdrawal(
         # If full withdrawal, deactivate account and clear live allocations.
         # Keep historical rows (yield tracking, rebalance logs, session-key
         # history) so lifetime metrics remain consistent.
-        if req.is_full_withdrawal:
+        if effective_full_withdrawal:
             # Revoke session key first (best-effort)
             try:
                 revoke_session_key(db, UUID(account["id"]))
@@ -459,9 +489,10 @@ async def execute_withdrawal(
             txHash=tx_hash,
             agentFee=str(fee_calc.agent_fee),
             userReceives=str(fee_calc.user_receives),
+            accountDeactivated=effective_full_withdrawal,
             message=(
                 "Full withdrawal complete. Account deactivated."
-                if req.is_full_withdrawal
+                if effective_full_withdrawal
                 else f"Partial withdrawal of ${fee_calc.user_receives} complete."
             ),
         )
