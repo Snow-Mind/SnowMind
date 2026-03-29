@@ -179,7 +179,10 @@ async def check_protocol_health(
         )
 
     # ── 7-day APY stability check (step 14) ──────────────────────────
-    if daily_snapshots_7d and len(daily_snapshots_7d) >= 7:
+    # Apply this only to variable-rate lending pools. For ERC-4626 vaults
+    # (Euler/Silo), APY can change in discrete share-price steps and this
+    # max-min swing metric creates false positives.
+    if protocol_id in ("aave_v3", "benqi") and daily_snapshots_7d and len(daily_snapshots_7d) >= 7:
         max_7d = max(daily_snapshots_7d)
         min_7d = min(daily_snapshots_7d)
         avg_7d = sum(daily_snapshots_7d) / len(daily_snapshots_7d)

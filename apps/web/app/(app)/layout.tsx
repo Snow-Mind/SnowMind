@@ -364,8 +364,6 @@ function DepositModal({ onClose }: { onClose: () => void }) {
   const [amount, setAmount] = useState("");
   const [step, setStep] = useState<DepositStep>("idle");
   const [eoaBalance, setEoaBalance] = useState("0");
-  const [avaxBalance, setAvaxBalance] = useState("0");
-  const [showManualDeposit, setShowManualDeposit] = useState(false);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
@@ -373,25 +371,19 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
   const parsedAmount = parseFloat(amount);
   const eoaBalanceNum = parseFloat(eoaBalance);
-  const avaxBalanceNum = parseFloat(avaxBalance);
   const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
-  const hasGas = avaxBalanceNum > 0.001; // Need at least ~0.001 AVAX for gas
 
-  // Poll EOA balance (USDC + AVAX)
+  // Poll EOA USDC balance
   useEffect(() => {
     if (!wallet) return;
     const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
     const check = async () => {
       try {
-        const [usdcBal, avaxBal] = await Promise.all([
-          publicClient.readContract({
-            address: CONTRACTS.USDC, abi: ERC20_TRANSFER_ABI, functionName: "balanceOf",
-            args: [wallet.address as `0x${string}`],
-          }),
-          publicClient.getBalance({ address: wallet.address as `0x${string}` }),
-        ]);
+        const usdcBal = await publicClient.readContract({
+          address: CONTRACTS.USDC, abi: ERC20_TRANSFER_ABI, functionName: "balanceOf",
+          args: [wallet.address as `0x${string}`],
+        });
         setEoaBalance(formatUnits(usdcBal as bigint, 6));
-        setAvaxBalance(formatUnits(avaxBal as bigint, 18));
       } catch { /* ignore */ }
     };
     check();
@@ -401,13 +393,6 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
   async function handleDeposit() {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
-
-    // Check AVAX gas balance before initiating transaction
-    if (!hasGas) {
-      toast.error("You need AVAX in your wallet for gas fees. Send some AVAX to your wallet or use the manual deposit option below.");
-      setShowManualDeposit(true);
-      return;
-    }
 
     setStep("transferring");
     try {
@@ -436,8 +421,7 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         toast.error("Transaction cancelled.");
       } else if (msg.includes("insufficient") || msg.includes("gas") || msg.includes("funds")) {
-        toast.error("Insufficient AVAX for gas fees. Use the manual deposit option to send USDC directly.");
-        setShowManualDeposit(true);
+        toast.error("Transaction was rejected by wallet. Please review the wallet prompt and retry.");
       } else {
         toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
       }
@@ -486,14 +470,6 @@ function DepositModal({ onClose }: { onClose: () => void }) {
             </button>
           )}
         </div>
-
-        {/* Gas warning */}
-        {!hasGas && eoaBalanceNum > 0 && (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <p className="text-xs font-medium text-amber-800">You need a small amount of AVAX for gas fees.</p>
-            <p className="text-[10px] text-amber-600 mt-1">Send ~0.01 AVAX to your wallet ({wallet?.address?.slice(0, 6)}…{wallet?.address?.slice(-4)}) or use the manual deposit option below.</p>
-          </div>
-        )}
 
         {/* Deposit button */}
         <button

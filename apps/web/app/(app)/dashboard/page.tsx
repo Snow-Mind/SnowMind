@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -81,10 +81,12 @@ const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
 ];
 
 export default function DashboardPage() {
+  const queryClient = useQueryClient();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const address = smartAccountAddress || undefined;
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
+  const activatedFromOnboarding = searchParams.get("activated") === "1";
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
 
   const {
@@ -120,6 +122,69 @@ export default function DashboardPage() {
 
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+  const hasIdleAllocation = portfolio?.allocations.some(
+    (a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0,
+  ) ?? false;
+  const isIdleOnlyDeployment = !isLoading && !!stats && stats.activeProtocols === 0 && hasIdleAllocation;
+
+  // Mobile wallets often background the page during confirmation. Force a refresh
+  // when the app regains focus/visibility so dashboard state updates without manual reload.
+  useEffect(() => {
+    if (!address) return;
+
+    const refresh = () => {
+      queryClient.invalidateQueries({ queryKey: ["portfolio", address] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] });
+      queryClient.invalidateQueries({ queryKey: ["account-detail", address] });
+      queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+      }
+    };
+
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [address, queryClient]);
+
+  // After onboarding activation, aggressively poll for a short window so the
+  // "deploying" state clears quickly without requiring a manual refresh.
+  useEffect(() => {
+    if (!address || !activatedFromOnboarding || !isIdleOnlyDeployment) return;
+
+    let attempts = 0;
+    const maxAttempts = 24; // 24 * 5s = 2 minutes
+
+    const tick = async () => {
+      attempts += 1;
+      await Promise.allSettled([
+        refetchPortfolio(),
+        queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] }),
+        queryClient.invalidateQueries({ queryKey: ["account-detail", address] }),
+        queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] }),
+      ]);
+    };
+
+    void tick();
+    const interval = window.setInterval(() => {
+      if (attempts >= maxAttempts) {
+        window.clearInterval(interval);
+        return;
+      }
+      void tick();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [address, activatedFromOnboarding, isIdleOnlyDeployment, queryClient, refetchPortfolio]);
 
   const requiresRegrant = (() => {
     if (!rebalanceStatus) return false;
@@ -251,7 +316,7 @@ export default function DashboardPage() {
                   <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
                     {stats.activeProtocols > 0
                       ? stats.activeProtocols
-                      : portfolio?.allocations.some((a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0)
+                      : hasIdleAllocation
                         ? (
                           <span className="inline-flex items-center gap-1 text-glacier">
                             <Loader2 className="h-3 w-3 animate-spin" />
@@ -271,7 +336,7 @@ export default function DashboardPage() {
       )}
 
       {/* Deploying funds banner — shown when all funds are idle after activation */}
-      {!isLoading && stats && stats.activeProtocols === 0 && portfolio?.allocations.some((a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0) && (
+      {isIdleOnlyDeployment && (
         <motion.div
           className="flex items-center gap-3 rounded-lg border border-glacier/20 bg-glacier/[0.06] px-4 py-3"
           initial={{ opacity: 0, y: -8 }}

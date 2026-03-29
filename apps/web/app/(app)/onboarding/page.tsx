@@ -330,6 +330,35 @@ export default function OnboardingPage() {
     }
   };
 
+  const finalizeActivationSuccess = async (address: string, recoveredFromError = false) => {
+    setActivationPhase("done");
+    setAgentActivated(true);
+    setOnboardingInProgress(false);
+
+    await Promise.allSettled([
+      queryClient.invalidateQueries({ queryKey: ["portfolio", address] }),
+      queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] }),
+      queryClient.invalidateQueries({ queryKey: ["account-detail", address] }),
+    ]);
+
+    setActivated(true);
+    toast.success(
+      recoveredFromError
+        ? "Activation confirmed. Redirecting to dashboard…"
+        : "Agent activated! Redirecting to dashboard…"
+    );
+    setTimeout(() => router.push("/dashboard?tab=agent-log&activated=1"), 1500);
+  };
+
+  const hasConfirmedActivation = async (address: string): Promise<boolean> => {
+    try {
+      const accountDetail = await api.getAccountDetail(address);
+      return Boolean(accountDetail?.isActive && accountDetail?.sessionKey?.isActive);
+    } catch {
+      return false;
+    }
+  };
+
   // handleAccountDeploy removed — deployment is now part of the single
   // activation UserOp (deployInitialToProtocol). This eliminates one
   // wallet popup and reduces activation to: USDC transfer + session key
@@ -345,6 +374,7 @@ export default function OnboardingPage() {
 
     const effectiveSelectedProtocols = selectedProtocols;
     const amountWei = parseUnits(depositAmount, 6);
+    let activationAddress = smartAccountAddress;
 
     try {
       // Re-derive kernel account/client if refs are stale (e.g. page refresh)
@@ -357,6 +387,7 @@ export default function OnboardingPage() {
         kernelAccount = result.kernelAccount;
         kernelClient = result.kernelClient;
         derivedAddr = result.smartAccountAddress;
+        activationAddress = derivedAddr;
 
         if (derivedAddr.toLowerCase() !== smartAccountAddress.toLowerCase()) {
           setSmartAccountAddress(derivedAddr);
@@ -418,18 +449,6 @@ export default function OnboardingPage() {
           transport: custom(provider),
         });
         const [eoaAddress] = await walletClient.getAddresses();
-
-        // Pre-flight check: verify EOA has enough AVAX for gas
-        const avaxBalance = await publicClient.getBalance({ address: eoaAddress });
-        // Need at least ~0.005 AVAX for a simple ERC-20 transfer on Avalanche
-        const minGasAvax = parseUnits("0.005", 18);
-        if (avaxBalance < minGasAvax) {
-          throw new Error(
-            `Insufficient AVAX for gas fees. You need at least 0.005 AVAX in your wallet (${eoaAddress.slice(0, 8)}…) to pay for the USDC transfer. ` +
-            `Current AVAX balance: ${formatUnits(avaxBalance, 18)} AVAX. ` +
-            `Send some AVAX to your wallet on Avalanche C-Chain and try again.`
-          );
-        }
 
         // Pre-flight check: verify EOA has enough USDC
         const eoaUsdcBalance = await publicClient.readContract({
@@ -557,7 +576,7 @@ export default function OnboardingPage() {
             }
           } else if (transferMsg.includes("insufficient funds") || transferMsg.includes("gas required exceeds")) {
             throw new Error(
-              "Transaction failed — insufficient gas (AVAX). Please add AVAX to your wallet for gas fees and retry."
+              "USDC transfer failed in your wallet. Please confirm Avalanche C-Chain is selected and retry the transfer."
             );
           } else {
             throw new Error(`USDC transfer failed: ${transferMsg.slice(0, 200)}`);
@@ -650,21 +669,17 @@ export default function OnboardingPage() {
       try {
         await api.saveDiversificationPreference(derivedAddr, diversificationPref);
       } catch { /* non-critical — default is balanced */ }
-
-      setActivationPhase("done");
-      setAgentActivated(true);
-      setOnboardingInProgress(false);
-      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
-      queryClient.invalidateQueries({ queryKey: ["rebalance-status"] });
-      queryClient.invalidateQueries({ queryKey: ["account-detail"] });
-
-      setActivated(true);
-      toast.success("Agent activated! Redirecting to dashboard…");
-      setTimeout(() => router.push("/dashboard?tab=agent-log"), 2000);
+      await finalizeActivationSuccess(derivedAddr);
     } catch (err) {
       activateGuardRef.current = false;
       setOnboardingInProgress(false);
       const msg = err instanceof Error ? err.message : String(err);
+
+      if (activationAddress && await hasConfirmedActivation(activationAddress)) {
+        await finalizeActivationSuccess(activationAddress, true);
+        return;
+      }
+
       if (msg.includes("User denied") || msg.includes("User rejected")) {
         // User cancelled — go back to review state, don't show error phase
         setActivationPhase("idle");
@@ -678,10 +693,6 @@ export default function OnboardingPage() {
           "Please try connecting with MetaMask or another EVM-compatible wallet."
         );
         toast.error("Wallet compatibility issue — try MetaMask instead.");
-      } else if (msg.includes("Insufficient AVAX") || msg.includes("insufficient gas")) {
-        setActivationPhase("error");
-        setActivationError(msg);
-        toast.error("Insufficient AVAX for gas — add AVAX to your wallet.");
       } else if (msg.includes("Insufficient USDC")) {
         setActivationPhase("error");
         setActivationError(msg);
@@ -689,7 +700,7 @@ export default function OnboardingPage() {
       } else if (msg.includes("USDC transfer failed") || msg.includes("invalid parameters")) {
         setActivationPhase("error");
         setActivationError(msg);
-        toast.error("Transfer failed — check your wallet network.");
+        toast.error("Transfer failed in wallet — please retry.");
       } else if (msg.includes("Failed to switch")) {
         setActivationPhase("error");
         setActivationError(msg);
@@ -700,7 +711,7 @@ export default function OnboardingPage() {
         toast.error("Activation failed. You can retry — your funds are safe.");
       }
     } finally {
-      if (!activated) setActivating(false);
+      setActivating(false);
     }
   };
 

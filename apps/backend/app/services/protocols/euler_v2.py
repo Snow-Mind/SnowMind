@@ -247,7 +247,7 @@ class EulerV2Adapter(BaseProtocolAdapter):
 
     async def get_health(self) -> ProtocolHealth:
         """Health check: vault must have non-zero totalAssets, valid share price,
-        and utilization below 95%."""
+        and utilization below configured threshold."""
         vault = self._get_vault()
         if not vault:
             return ProtocolHealth(
@@ -315,16 +315,14 @@ class EulerV2Adapter(BaseProtocolAdapter):
             utilization = (total - cash) / total
             utilization = max(Decimal("0"), min(utilization, Decimal("1")))
 
-            # Euler 9Summits vault on Avalanche normally operates at 90-93%
-            # utilization — the high demand is what drives the elevated APY.
-            # A 90% threshold would permanently block deposits.  Use 95% to
-            # only exclude when withdrawal liquidity is genuinely constrained.
-            if utilization > Decimal("0.95"):
+            utilization_threshold = Decimal(str(settings.UTILIZATION_THRESHOLD))
+            if utilization > utilization_threshold:
                 status = ProtocolStatus.HIGH_UTILIZATION
                 is_deposit_safe = False
                 logger.info(
-                    "Euler utilization %.1f%% > 95%% — marking HIGH_UTILIZATION",
+                    "Euler utilization %.1f%% > %.1f%% — marking HIGH_UTILIZATION",
                     float(utilization * 100),
+                    float(utilization_threshold * 100),
                 )
         except Exception as exc:
             logger.warning("Euler utilization check failed: %s — assuming healthy", exc)
