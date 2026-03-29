@@ -291,8 +291,14 @@ function extractBundlerErrorInfo(err) {
   let decodedKernelError = null
   if (revertData && revertData.length >= 10) {
     const errorSelector = revertData.slice(0, 10).toLowerCase()
+    // Kernel v3.1 error selectors — computed via keccak256("ErrorName()").slice(0,10)
+    // CRITICAL: 0x756688fe was previously mapped to EnableNotApproved — WRONG.
+    //   keccak256("EnableNotApproved()") = 0xc48cf8ee...
+    //   keccak256("InvalidNonce()")      = 0x756688fe...
+    // This mismap caused EnableNotApproved to go UNDETECTED in all retry logic.
     const KERNEL_ERRORS = {
-      "0x756688fe": "EnableNotApproved",
+      "0xc48cf8ee": "EnableNotApproved",
+      "0x756688fe": "InvalidNonce",
       "0x5c427cd9": "PolicySignatureOrderError",
       "0xb3c44269": "PermissionNotAllowedForAction",
       "0x44e18ef4": "PermissionNotAllowedForSignature",
@@ -450,6 +456,118 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
       level: "warn",
       action: "onchain_diagnostic_failed",
       error: diagErr?.message?.slice(0, 300),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
+  // ── Diagnostic: verify enable data integrity ──────────────────────────
+  // Compute the enable typed data hash and enable data hash from the
+  // deserialized permission account. Compare with the stored enable
+  // signature to verify it will pass on-chain _checkApproval().
+  // This catches mismatches BEFORE submitting the UserOp to the bundler.
+  try {
+    const kpm = permissionAccount.kernelPluginManager
+    if (kpm && typeof kpm.getPluginsEnableTypedData === "function") {
+      const typedData = await kpm.getPluginsEnableTypedData(permissionAccount.address)
+      const typedDataHash = hashTypedData(typedData)
+      const enableDataHash = keccak256(typedData.message.validatorData)
+      const selectorDataHash = keccak256(typedData.message.selectorData)
+
+      const enableSig = typeof kpm.getPluginEnableSignature === "function"
+        ? await kpm.getPluginEnableSignature(permissionAccount.address)
+        : null
+
+      let recoveredSigner = null
+      let signerMatchesOwner = false
+      if (enableSig && typedData) {
+        try {
+          recoveredSigner = await recoverTypedDataAddress({
+            ...typedData,
+            signature: enableSig,
+          })
+          // Compare with ECDSA validator owner
+          const ECDSA_VALIDATOR_MODULE = "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57"
+          const storedOwner = await publicClient.readContract({
+            address: ECDSA_VALIDATOR_MODULE,
+            abi: [{
+              name: "ecdsaValidatorStorage",
+              type: "function",
+              stateMutability: "view",
+              inputs: [{ type: "address" }],
+              outputs: [{ type: "address" }],
+            }],
+            functionName: "ecdsaValidatorStorage",
+            args: [permissionAccount.address],
+          })
+          signerMatchesOwner =
+            recoveredSigner?.toLowerCase() === storedOwner?.toLowerCase()
+        } catch (recoverErr) {
+          console.log(JSON.stringify({
+            level: "warn",
+            action: "enable_sig_recovery_failed",
+            error: recoverErr?.message?.slice(0, 300),
+            timestamp: new Date().toISOString(),
+          }))
+        }
+      }
+
+      console.log(JSON.stringify({
+        level: "info",
+        action: "enable_data_diagnostic",
+        smartAccount: permissionAccount.address,
+        typedDataHash,
+        enableDataHash,
+        selectorDataHash,
+        enableSigHash: enableSig ? keccak256(enableSig) : null,
+        enableSigLength: enableSig?.length || 0,
+        validationId: typedData.message?.validationId,
+        nonce: typedData.message?.nonce,
+        hook: typedData.message?.hook,
+        domain: JSON.stringify(typedData.domain),
+        recoveredSigner,
+        signerMatchesOwner,
+        timestamp: new Date().toISOString(),
+      }))
+
+      if (!signerMatchesOwner && recoveredSigner) {
+        const errDetail = "The enable signature recovered a different address than the " +
+          "on-chain ECDSA validator owner. This UserOp WILL fail with " +
+          "EnableNotApproved on-chain. The session key must be re-granted."
+        console.error(JSON.stringify({
+          level: "error",
+          action: "enable_sig_will_fail",
+          smartAccount: permissionAccount.address,
+          detail: errDetail,
+          recoveredSigner,
+          timestamp: new Date().toISOString(),
+        }))
+        // Abort early — do not submit UserOp that is guaranteed to fail.
+        // The caller (rebalancer) treats EnableNotApproved as a definitive
+        // session key error and deactivates the key.
+        throw new Error(
+          `EnableNotApproved (pre-check): enable signature signer ${recoveredSigner} ` +
+          `does not match on-chain ECDSA owner. Session key must be re-granted.`
+        )
+      }
+    } else {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "enable_data_diagnostic_skipped",
+        hasKpm: !!kpm,
+        hasGetPluginsEnableTypedData: typeof kpm?.getPluginsEnableTypedData,
+        hasGetPluginEnableSignature: typeof kpm?.getPluginEnableSignature,
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  } catch (enableDiagErr) {
+    // Re-throw if this is our own pre-check abort (EnableNotApproved)
+    if (enableDiagErr?.message?.includes("EnableNotApproved (pre-check)")) {
+      throw enableDiagErr
+    }
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "enable_data_diagnostic_failed",
+      error: enableDiagErr?.message?.slice(0, 300),
       timestamp: new Date().toISOString(),
     }))
   }
@@ -1492,12 +1610,18 @@ export async function executeRebalance({
     // was ALREADY registered → duplicate/invalidnonce), retry with
     // regular mode. If we started with regular mode and it failed
     // (permission not on-chain), retry with enable mode.
+    //
+    // Also check bundlerInfo.decodedKernelError for decoded error names
+    // that don't appear in the text (e.g. EnableNotApproved from 0xc48cf8ee).
+    const decodedError = bundlerInfo?.decodedKernelError?.toLowerCase() || ""
     const isPermissionRelated = (
       allText.includes("aa24") ||
       allText.includes("signature error") ||
       allText.includes("enablenotapproved") ||
+      decodedError === "enablenotapproved" ||
       allText.includes("duplicate permissionhash") ||
       allText.includes("invalidnonce") ||
+      decodedError === "invalidnonce" ||
       (allText.includes("useroperation reverted") && allText.includes("simulation"))
     )
 
@@ -1535,10 +1659,14 @@ export async function executeRebalance({
           .filter(Boolean).join(" ").toLowerCase()
         const hasDuplicateHash = retryText.includes("duplicate permissionhash")
         const hasInvalidNonce = retryText.includes("invalidnonce")
-        const hasEnableNotApproved = retryText.includes("enablenotapproved")
 
         // Extract structured bundler error info for retry error
         const retryBundlerInfo = extractBundlerErrorInfo(retryErr)
+
+        // Check for EnableNotApproved in BOTH text search AND decoded kernel errors
+        const hasEnableNotApproved = retryText.includes("enablenotapproved")
+          || bundlerInfo?.decodedKernelError === "EnableNotApproved"
+          || retryBundlerInfo?.decodedKernelError === "EnableNotApproved"
 
         // Walk the retry error chain for full diagnostics
         const retryErrChain = []
@@ -1627,8 +1755,9 @@ export async function executeRebalance({
             "(enable mode: duplicate permissionHash) but the current session key's permissionId " +
             "is not the one installed (regular mode: AA23). This happens when a user re-grants " +
             "their session key — the new key has a different permissionId but the same policy hash. " +
-            "The backend should try the most recently deactivated session key for this account, " +
-            "which may have the matching permissionId installed on-chain. " +
+            "The frontend MUST include a unique gasNonce in the gas policy so each grant produces " +
+            "a distinct permissionHash. If the frontend already has gasNonce, ensure it is deployed " +
+            "to production (merge dev→main for Vercel). After deploying, user must re-grant. " +
             "DO NOT deactivate the session key — that would force another re-grant and repeat the cycle. " +
             `Regular error: ${regularErr || "unknown"}`
           )
@@ -1988,7 +2117,9 @@ export async function executeWithdrawal({
         const retryText = [retryErr?.shortMessage, retryErr?.message,
           retryErr?.details, retryErr?.cause?.message, retryErr?.cause?.details]
           .filter(Boolean).join(" ").toLowerCase()
+        const retryBundlerInfoWd = extractBundlerErrorInfo(retryErr)
         const hasEnableNotApprovedWd = retryText.includes("enablenotapproved")
+          || retryBundlerInfoWd?.decodedKernelError === "EnableNotApproved"
         if (hasEnableNotApprovedWd) {
           throw new Error(
             "EnableNotApproved: enable signature invalid. User must re-grant session key. " +
