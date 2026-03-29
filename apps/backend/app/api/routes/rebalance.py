@@ -5,7 +5,7 @@ frontend can use the address it already has from ZeroDev.
 """
 
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -154,10 +154,14 @@ async def trigger_rebalance(
     from app.services.optimizer.rebalancer import Rebalancer
 
     rebalancer = Rebalancer()
-    result = await rebalancer.check_and_rebalance(
-        account_id=account["id"],
-        smart_account_address=account["address"],
-    )
+    try:
+        result = await rebalancer.check_and_rebalance(
+            account_id=account["id"],
+            smart_account_address=account["address"],
+        )
+    except Exception as exc:
+        logger.exception("Manual rebalance trigger failed for %s: %s", account["address"], exc)
+        raise HTTPException(status_code=500, detail="Failed to run rebalance") from exc
 
     return RebalanceTriggerResponse(
         smart_account_address=account["address"],
@@ -364,11 +368,18 @@ async def partial_withdraw(
     account_id = account["id"]
 
     try:
-        amount = Decimal(body.amount_usdc)
-        if amount <= Decimal("0"):
-            raise HTTPException(status_code=400, detail="amount_usdc must be positive")
-    except Exception:
+        amount = Decimal(str(body.amount_usdc))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        logger.warning(
+            "Invalid partial withdraw amount for %s: %r (%s)",
+            addr,
+            body.amount_usdc,
+            exc,
+        )
         raise HTTPException(status_code=400, detail="amount_usdc must be a valid decimal string")
+
+    if amount <= Decimal("0"):
+        raise HTTPException(status_code=400, detail="amount_usdc must be positive")
 
     from app.services.optimizer.rebalancer import Rebalancer
 

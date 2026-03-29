@@ -80,7 +80,8 @@ def _permission_blob_contains_address(serialized_permission: str, address: str) 
         decoded = base64.b64decode(padded, validate=False)
         decoded_lower = decoded.decode("utf-8", errors="ignore").lower()
         return any(token in decoded_lower for token in candidates)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Serialized permission decode failed during address scan: %s", exc)
         return False
 
 
@@ -310,8 +311,12 @@ class Rebalancer:
                             db, account_id, "skipped",
                             reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
                         )
-        except Exception:
-            pass  # Don't block rebalance if cooldown check fails
+        except Exception as exc:
+            logger.warning(
+                "PERMISSION_RECOVERY cooldown check failed for %s: %s — proceeding",
+                smart_account_address,
+                exc,
+            )
 
         allowed_protocols = set(session_key_record["allowed_protocols"])
         logger.debug(
@@ -1161,7 +1166,12 @@ class Rebalancer:
             if exc.response is not None:
                 try:
                     err_msg = exc.response.json().get("error", "")
-                except Exception:
+                except Exception as parse_exc:
+                    logger.warning(
+                        "Execution error JSON parse failed for %s: %s",
+                        smart_account_address,
+                        parse_exc,
+                    )
                     err_msg = exc.response.text
 
             # 429 = execution service concurrency limit — transient, do NOT revoke

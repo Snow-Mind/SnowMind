@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
@@ -88,6 +88,7 @@ export default function DashboardPage() {
   const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
   const activatedFromOnboarding = searchParams.get("activated") === "1";
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
+  const deploymentKickRef = useRef<string | null>(null);
 
   const {
     data: portfolio,
@@ -120,12 +121,31 @@ export default function DashboardPage() {
 
   const { data: rates } = useProtocolRates();
 
+  const requiresRegrant = (() => {
+    if (!rebalanceStatus) return false;
+    const code = rebalanceStatus.reasonCode;
+    const detail = (rebalanceStatus.reasonDetail ?? "").toLowerCase();
+
+    if (code === "NO_ACTIVE_SESSION_KEY") return true;
+    if (code === "SESSION_KEY_INVALID") return true;
+    if (code === "SESSION_KEY_NOT_APPROVED") return true;
+    if (code === "NO_PERMITTED_PROTOCOLS") return true;
+
+    return (
+      detail.includes("permission_recovery_needed") ||
+      detail.includes("user must re-grant") ||
+      detail.includes("must regrant") ||
+      detail.includes("session key")
+    );
+  })();
+
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+  const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
   const hasIdleAllocation = portfolio?.allocations.some(
     (a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0,
   ) ?? false;
-  const isIdleOnlyDeployment = !isLoading && !!stats && stats.activeProtocols === 0 && hasIdleAllocation;
+  const isIdleOnlyDeployment = !isLoading && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
 
   // Mobile wallets often background the page during confirmation. Force a refresh
   // when the app regains focus/visibility so dashboard state updates without manual reload.
@@ -154,13 +174,34 @@ export default function DashboardPage() {
     };
   }, [address, queryClient]);
 
-  // After onboarding activation, aggressively poll for a short window so the
-  // "deploying" state clears quickly without requiring a manual refresh.
+  // If funds are idle and session key is active, kick a best-effort immediate
+  // rebalance so users do not wait for the next scheduler tick.
   useEffect(() => {
-    if (!address || !activatedFromOnboarding || !isIdleOnlyDeployment) return;
+    if (!address || !isIdleOnlyDeployment || !hasActiveSessionKey) return;
+    if (deploymentKickRef.current === address) return;
+    deploymentKickRef.current = address;
+
+    void api.triggerRebalance(address)
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ["portfolio", address] });
+        queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] });
+        queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] });
+      })
+      .catch((err: unknown) => {
+        if (process.env.NODE_ENV !== "production") {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.debug("[Dashboard] triggerRebalance bootstrap failed:", msg);
+        }
+      });
+  }, [address, isIdleOnlyDeployment, hasActiveSessionKey, queryClient]);
+
+  // Aggressively poll for a short window so the "deploying" state clears
+  // quickly without requiring a manual refresh (mobile and desktop).
+  useEffect(() => {
+    if (!address || !isIdleOnlyDeployment) return;
 
     let attempts = 0;
-    const maxAttempts = 24; // 24 * 5s = 2 minutes
+    const maxAttempts = activatedFromOnboarding ? 24 : 36; // 2-3 minutes
 
     const tick = async () => {
       attempts += 1;
@@ -185,24 +226,6 @@ export default function DashboardPage() {
       window.clearInterval(interval);
     };
   }, [address, activatedFromOnboarding, isIdleOnlyDeployment, queryClient, refetchPortfolio]);
-
-  const requiresRegrant = (() => {
-    if (!rebalanceStatus) return false;
-    const code = rebalanceStatus.reasonCode;
-    const detail = (rebalanceStatus.reasonDetail ?? "").toLowerCase();
-
-    if (code === "NO_ACTIVE_SESSION_KEY") return true;
-    if (code === "SESSION_KEY_INVALID") return true;
-    if (code === "SESSION_KEY_NOT_APPROVED") return true;
-    if (code === "NO_PERMITTED_PROTOCOLS") return true;
-
-    return (
-      detail.includes("permission_recovery_needed") ||
-      detail.includes("user must re-grant") ||
-      detail.includes("must regrant") ||
-      detail.includes("session key")
-    );
-  })();
 
   const regrantReason = rebalanceStatus?.reasonDetail
     ?? "Your session key needs to be granted again before automated rebalancing can continue.";

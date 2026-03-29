@@ -371,7 +371,13 @@ async def get_30day_average_apy(request: Request, db: Client = Depends(get_db)):
             if live_rate is not None and live_rate.utilization_rate is not None:
                 try:
                     utilization_rate = Decimal(str(live_rate.utilization_rate))
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Invalid utilization_rate for %s (%s): %s",
+                        pid,
+                        live_rate.utilization_rate,
+                        exc,
+                    )
                     utilization_rate = None
 
             # Utilization factor in [0.50, 1.00].
@@ -486,7 +492,14 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
             pid = snap["protocol_id"]
             try:
                 apy = Decimal(str(snap["apy"]))
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Skipping malformed APY snapshot in timeseries (date=%s, protocol=%s, apy=%s): %s",
+                    d,
+                    pid,
+                    snap.get("apy"),
+                    exc,
+                )
                 continue
             if d not in by_date:
                 by_date[d] = {}
