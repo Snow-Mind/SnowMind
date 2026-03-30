@@ -236,13 +236,13 @@ export default function AppLayout({
   // NEVER clear on query errors — transient 500s/CORS failures must not deactivate agent
   const dataLoaded = accountDataReady;
   useEffect(() => {
-    if (dataLoaded && storeActivated && (hasInactiveAccount || (!hasActiveSessionKey && !hasFunds)) && !accountDetailError && !portfolioError) {
+    if (dataLoaded && storeActivated && (hasInactiveAccount || !hasActiveSessionKey || !hasFunds) && !accountDetailError && !portfolioError) {
       setAgentActivated(false);
     }
   }, [dataLoaded, storeActivated, hasInactiveAccount, hasActiveSessionKey, hasFunds, setAgentActivated, accountDetailError, portfolioError]);
 
   const isAgentActive = !!effectiveSmartAccountAddress && !hasInactiveAccount
-    && (optimisticStoreActive || hasActiveSessionKey || hasFunds);
+    && (optimisticStoreActive || (hasActiveSessionKey && hasFunds));
   const isAuthFault = (err: unknown): boolean => {
     if (!err || typeof err !== "object") return false;
     const status = (err as { status?: unknown }).status;

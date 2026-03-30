@@ -30,6 +30,7 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
 import { useAccountDetail } from "@/hooks/useAccountDetail";
+import { usePortfolio } from "@/hooks/usePortfolio";
 import { api, APIError } from "@/lib/api-client";
 import {
   EXPLORER,
@@ -127,6 +128,23 @@ const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
 
 const RECEIPT_CONFIRMATION_TIMEOUT_MS = 120_000;
 const RECEIPT_POLL_INTERVAL_MS = 3_000;
+const MIN_FUNDED_BALANCE_USDC = 0.01;
+
+function portfolioHasFunds(
+  portfolio:
+    | {
+      totalDepositedUsd: string;
+      allocations: Array<{ amountUsdc: string }>;
+    }
+    | null
+    | undefined,
+): boolean {
+  const totalDeposited = Number(portfolio?.totalDepositedUsd ?? "0");
+  if (Number.isFinite(totalDeposited) && totalDeposited > MIN_FUNDED_BALANCE_USDC) {
+    return true;
+  }
+  return portfolio?.allocations?.some((allocation) => Number(allocation.amountUsdc) > MIN_FUNDED_BALANCE_USDC) ?? false;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -213,6 +231,8 @@ export default function OnboardingPage() {
   const { activeWallet, login, logout, authenticated, ready } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const { data: accountDetail, error: accountDetailError } = useAccountDetail(smartAccountAddress ?? undefined);
+  const { data: onboardingPortfolio, isLoading: onboardingPortfolioLoading } = usePortfolio(smartAccountAddress ?? undefined);
+  const hasPortfolioFunds = portfolioHasFunds(onboardingPortfolio);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
   const wallet =
@@ -249,12 +269,13 @@ export default function OnboardingPage() {
   // Returning account with no active session key should re-grant only.
   // This avoids forcing an additional deposit when funds are already on-chain.
   useEffect(() => {
-    if (!smartAccountAddress || !accountDetail) return;
+    if (!smartAccountAddress || !accountDetail || onboardingPortfolioLoading) return;
 
     const isKnownAccount = Boolean(accountDetail.id);
     const needsRegrant = isKnownAccount
       && Boolean(accountDetail.isActive)
-      && !Boolean(accountDetail.sessionKey?.isActive);
+      && !Boolean(accountDetail.sessionKey?.isActive)
+      && hasPortfolioFunds;
 
     if (!needsRegrant) {
       setRegrantOnlyMode(false);
@@ -266,7 +287,7 @@ export default function OnboardingPage() {
     if (formStep === "strategy" || formStep === "deposit") {
       setFormStep("activate");
     }
-  }, [smartAccountAddress, accountDetail, formStep]);
+  }, [smartAccountAddress, accountDetail, formStep, onboardingPortfolioLoading, hasPortfolioFunds]);
 
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
@@ -488,11 +509,13 @@ export default function OnboardingPage() {
       // Query backend for returning user
       if (ready && authenticated) {
         try {
-          const accountDetail = await api.getAccountDetail(derivedAddr);
-          if (accountDetail?.address && accountDetail.sessionKey?.isActive) {
+          const derivedAccountDetail = await api.getAccountDetail(derivedAddr);
+          const derivedPortfolio = await api.getPortfolio(derivedAddr).catch(() => null);
+          const hasDerivedFunds = portfolioHasFunds(derivedPortfolio);
+          if (derivedAccountDetail?.address && derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
             setAgentActivated(true);
           }
-          if (accountDetail?.id && accountDetail.isActive && !accountDetail.sessionKey?.isActive) {
+          if (derivedAccountDetail?.id && derivedAccountDetail.isActive && !derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
             setRegrantOnlyMode(true);
             setDepositAmount("0");
           }
@@ -510,9 +533,12 @@ export default function OnboardingPage() {
     }
   };
 
-  const finalizeActivationSuccess = async (address: string, recoveredFromError = false) => {
+  const finalizeActivationSuccess = async (
+    address: string,
+    recoveredFromError = false,
+    expectedFundsHint = false,
+  ) => {
     setActivationPhase("done");
-    setAgentActivated(true);
     setOnboardingInProgress(false);
 
     await Promise.allSettled([
@@ -521,13 +547,41 @@ export default function OnboardingPage() {
       queryClient.invalidateQueries({ queryKey: ["account-detail", address] }),
     ]);
 
-    setActivated(true);
-    toast.success(
-      recoveredFromError
-        ? "Activation confirmed. Redirecting to dashboard…"
-        : "Agent activated! Redirecting to dashboard…"
-    );
-    setTimeout(() => router.push("/dashboard?tab=agent-log&activated=1"), 1500);
+    const [latestAccountDetailResult, latestPortfolioResult] = await Promise.allSettled([
+      api.getAccountDetail(address),
+      api.getPortfolio(address),
+    ]);
+
+    const latestAccountDetail = latestAccountDetailResult.status === "fulfilled"
+      ? latestAccountDetailResult.value
+      : null;
+    const latestPortfolio = latestPortfolioResult.status === "fulfilled"
+      ? latestPortfolioResult.value
+      : null;
+
+    const hasLiveSessionKey = Boolean(latestAccountDetail?.isActive && latestAccountDetail?.sessionKey?.isActive);
+    const hasLiveFunds = portfolioHasFunds(latestPortfolio) || expectedFundsHint;
+    const canEnterDashboard = hasLiveSessionKey && hasLiveFunds;
+
+    setAgentActivated(canEnterDashboard);
+    setActivated(canEnterDashboard);
+
+    if (canEnterDashboard) {
+      toast.success(
+        recoveredFromError
+          ? "Activation confirmed. Redirecting to dashboard…"
+          : "Agent activated! Redirecting to dashboard…"
+      );
+      setTimeout(() => router.push("/dashboard?tab=agent-log&activated=1"), 1500);
+      return;
+    }
+
+    // Zero-balance accounts should stay on onboarding and require a fresh deposit.
+    setActivationPhase("idle");
+    setFormStep("deposit");
+    setDepositAmount("");
+    setRegrantOnlyMode(false);
+    toast.success("Session key granted. Deposit USDC to finish onboarding.");
   };
 
   const hasConfirmedActivation = async (address: string): Promise<boolean> => {
@@ -547,6 +601,14 @@ export default function OnboardingPage() {
   // Giza-style activation: ERC-20 transfer + session key + register (Signature 2)
   const handleActivate = async () => {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
+    if (regrantOnlyMode && !onboardingPortfolioLoading && !hasPortfolioFunds) {
+      setRegrantOnlyMode(false);
+      setActivationPhase("idle");
+      setFormStep("deposit");
+      setDepositAmount("");
+      toast.error("No deposited funds found. Please deposit USDC to continue onboarding.");
+      return;
+    }
     if (!ready || !authenticated || hasAuthError) {
       setActivationPhase("error");
       setActivationError("Authentication expired. Reconnect and re-grant your session key, then retry activation.");
@@ -868,7 +930,8 @@ export default function OnboardingPage() {
       try {
         await api.saveDiversificationPreference(derivedAddr, diversificationPref);
       } catch { /* non-critical — default is balanced */ }
-      await finalizeActivationSuccess(derivedAddr);
+      const expectedFundsAfterActivation = hasPortfolioFunds || amountWei > 0n;
+      await finalizeActivationSuccess(derivedAddr, false, expectedFundsAfterActivation);
     } catch (err) {
       activateGuardRef.current = false;
       setOnboardingInProgress(false);
@@ -886,7 +949,7 @@ export default function OnboardingPage() {
       const msg = err instanceof Error ? err.message : String(err);
 
       if (activationAddress && await hasConfirmedActivation(activationAddress)) {
-        await finalizeActivationSuccess(activationAddress, true);
+        await finalizeActivationSuccess(activationAddress, true, hasPortfolioFunds);
         return;
       }
 
