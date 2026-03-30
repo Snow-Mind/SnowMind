@@ -1,11 +1,13 @@
 """Authentication, authorisation, and rate-limiting primitives."""
 
+import base64
 import hmac
 import logging
 import time
 import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
 from fastapi import Header, HTTPException, Request, status
@@ -91,6 +93,9 @@ _PRIVY_JWKS_URLS = (
     # Legacy endpoint fallback.
     "https://auth.privy.io/api/v1/apps/{app_id}/.well-known/jwks.json",
 )
+_PRIVY_USER_CACHE_TTL = 300  # 5 minutes
+_privy_user_cache: dict[str, tuple[float, list[dict]]] = {}
+_privy_user_cache_lock = threading.Lock()
 _AUTH_REJECT_LOG_THROTTLE_SECONDS = 60.0
 _auth_reject_last_logged: dict[str, float] = {}
 _auth_reject_lock = threading.Lock()
@@ -147,6 +152,113 @@ async def _fetch_privy_jwks(app_id: str) -> dict:
     raise httpx.HTTPError("Unable to fetch Privy JWKS from known endpoints")
 
 
+def _get_cached_privy_linked_accounts(did: str) -> list[dict] | None:
+    now = time.time()
+    with _privy_user_cache_lock:
+        cached = _privy_user_cache.get(did)
+        if not cached:
+            return None
+        expires_at, linked_accounts = cached
+        if now >= expires_at:
+            _privy_user_cache.pop(did, None)
+            return None
+        return linked_accounts
+
+
+def _set_cached_privy_linked_accounts(did: str, linked_accounts: list[dict]) -> None:
+    expires_at = time.time() + _PRIVY_USER_CACHE_TTL
+    with _privy_user_cache_lock:
+        _privy_user_cache[did] = (expires_at, linked_accounts)
+
+
+def _extract_linked_accounts_from_privy_user_response(payload: dict) -> list[dict]:
+    """Extract linked_accounts from common Privy API response shapes."""
+    if not isinstance(payload, dict):
+        return []
+
+    candidates: list[dict] = [payload]
+    for key in ("user", "data", "result"):
+        val = payload.get(key)
+        if isinstance(val, dict):
+            candidates.append(val)
+
+    for candidate in candidates:
+        linked = candidate.get("linked_accounts")
+        if isinstance(linked, list):
+            return [entry for entry in linked if isinstance(entry, dict)]
+
+    return []
+
+
+async def _fetch_privy_user_linked_accounts(
+    app_id: str,
+    app_secret: str,
+    did: str,
+) -> list[dict]:
+    """Fetch linked accounts for a Privy DID using server credentials."""
+    cached = _get_cached_privy_linked_accounts(did)
+    if cached is not None:
+        return cached
+
+    credentials = f"{app_id}:{app_secret}".encode("utf-8")
+    auth = base64.b64encode(credentials).decode("utf-8")
+    url = f"https://api.privy.io/v1/users/{quote(did, safe='')}"
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "privy-app-id": app_id,
+        "Accept": "application/json",
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=headers, timeout=10)
+        if resp.status_code == 404:
+            _set_cached_privy_linked_accounts(did, [])
+            return []
+
+        resp.raise_for_status()
+        body = resp.json()
+        linked_accounts = _extract_linked_accounts_from_privy_user_response(body)
+        _set_cached_privy_linked_accounts(did, linked_accounts)
+        return linked_accounts
+
+
+async def _maybe_enrich_wallet_claims(
+    payload: dict,
+    *,
+    app_id: str,
+    app_secret: str,
+) -> dict:
+    """Hydrate wallet claims from Privy API when token only carries DID claims."""
+    if _extract_wallet_addresses(payload):
+        return payload
+
+    did = payload.get("sub")
+    if not isinstance(did, str) or not did:
+        return payload
+
+    if not app_id or not app_secret:
+        logger.debug("Skipping Privy claim hydration: missing app credentials")
+        return payload
+
+    try:
+        linked_accounts = await _fetch_privy_user_linked_accounts(app_id, app_secret, did)
+    except httpx.HTTPError as exc:
+        logger.warning("Privy user lookup failed for DID %s: %s", did, exc)
+        return payload
+    except Exception as exc:
+        logger.warning("Unexpected Privy user lookup error for DID %s: %s", did, exc)
+        return payload
+
+    if not linked_accounts:
+        return payload
+
+    enriched = dict(payload)
+    enriched["linked_accounts"] = linked_accounts
+    if _extract_wallet_addresses(enriched):
+        return enriched
+    return payload
+
+
 async def verify_privy_token(token: str) -> dict | None:
     """Verify a Privy-issued access token and return decoded claims.
 
@@ -175,7 +287,11 @@ async def verify_privy_token(token: str) -> dict | None:
                     audience=s.PRIVY_APP_ID,
                     issuer=issuer,
                 )
-                return payload
+                return await _maybe_enrich_wallet_claims(
+                    payload,
+                    app_id=s.PRIVY_APP_ID,
+                    app_secret=s.PRIVY_APP_SECRET,
+                )
             except JWTError as exc:
                 last_err = exc
                 continue
@@ -199,7 +315,11 @@ async def verify_privy_token(token: str) -> dict | None:
                     payload.get("aud"),
                     s.PRIVY_APP_ID,
                 )
-                return payload
+                return await _maybe_enrich_wallet_claims(
+                    payload,
+                    app_id=s.PRIVY_APP_ID,
+                    app_secret=s.PRIVY_APP_SECRET,
+                )
             except JWTError as exc:
                 last_err = exc
                 continue

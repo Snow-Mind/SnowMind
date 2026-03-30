@@ -124,6 +124,64 @@ def test_verify_account_ownership_backfills_legacy_did_once() -> None:
     table.update.assert_called_once_with({"privy_did": "did:privy:new"})
 
 
+def test_extract_linked_accounts_from_privy_user_response_handles_shapes() -> None:
+    direct = {"linked_accounts": [{"type": "wallet", "address": OWNER_ADDRESS}]}
+    nested_user = {"user": {"linked_accounts": [{"type": "wallet", "address": OWNER_ADDRESS}]}}
+    nested_data = {"data": {"linked_accounts": [{"type": "wallet", "address": OWNER_ADDRESS}]}}
+
+    assert security._extract_linked_accounts_from_privy_user_response(direct)
+    assert security._extract_linked_accounts_from_privy_user_response(nested_user)
+    assert security._extract_linked_accounts_from_privy_user_response(nested_data)
+
+
+@pytest.mark.asyncio
+async def test_maybe_enrich_wallet_claims_hydrates_from_privy_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_fetch(app_id: str, app_secret: str, did: str) -> list[dict]:
+        assert app_id == "app_123"
+        assert app_secret == "secret_123"
+        assert did == "did:privy:user-1"
+        return [{"type": "wallet", "address": OWNER_ADDRESS}]
+
+    monkeypatch.setattr(security, "_fetch_privy_user_linked_accounts", _fake_fetch)
+
+    payload = {
+        "sub": "did:privy:user-1",
+        "aud": "app_123",
+        "iss": "privy.io",
+    }
+
+    enriched = await security._maybe_enrich_wallet_claims(
+        payload,
+        app_id="app_123",
+        app_secret="secret_123",
+    )
+
+    wallets = security._extract_wallet_addresses(enriched)
+    assert OWNER_ADDRESS.lower() in wallets
+
+
+@pytest.mark.asyncio
+async def test_maybe_enrich_wallet_claims_skips_when_wallet_claim_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = False
+
+    async def _fake_fetch(app_id: str, app_secret: str, did: str) -> list[dict]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(security, "_fetch_privy_user_linked_accounts", _fake_fetch)
+
+    payload = _claims(OWNER_ADDRESS)
+    enriched = await security._maybe_enrich_wallet_claims(
+        payload,
+        app_id="app_123",
+        app_secret="secret_123",
+    )
+
+    assert enriched == payload
+    assert called is False
+
+
 class _FakeResponse:
     def __init__(self, url: str, status_code: int, payload: dict | None = None) -> None:
         self.url = url
