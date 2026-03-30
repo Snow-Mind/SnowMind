@@ -29,6 +29,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
+import { useAccountDetail } from "@/hooks/useAccountDetail";
 import { api } from "@/lib/api-client";
 import {
   EXPLORER,
@@ -211,6 +212,7 @@ export default function OnboardingPage() {
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const { activeWallet } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
+  const { data: accountDetail } = useAccountDetail(smartAccountAddress ?? undefined);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
   const wallet =
@@ -244,6 +246,28 @@ export default function OnboardingPage() {
     }
   }, [isAccountReady, deployPhase, formStep]);
 
+  // Returning account with no active session key should re-grant only.
+  // This avoids forcing an additional deposit when funds are already on-chain.
+  useEffect(() => {
+    if (!smartAccountAddress || !accountDetail) return;
+
+    const isKnownAccount = Boolean(accountDetail.id);
+    const needsRegrant = isKnownAccount
+      && Boolean(accountDetail.isActive)
+      && !Boolean(accountDetail.sessionKey?.isActive);
+
+    if (!needsRegrant) {
+      setRegrantOnlyMode(false);
+      return;
+    }
+
+    setRegrantOnlyMode(true);
+    setDepositAmount("0");
+    if (formStep === "strategy" || formStep === "deposit") {
+      setFormStep("activate");
+    }
+  }, [smartAccountAddress, accountDetail, formStep]);
+
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
     () => new Set(MARKET_PROTOCOLS.filter((p) => p.defaultEnabled).map((p) => p.id)),
@@ -275,12 +299,14 @@ export default function OnboardingPage() {
   const [activated, setActivated] = useState(false);
   const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
   const [activationError, setActivationError] = useState<string | null>(null);
+  const [regrantOnlyMode, setRegrantOnlyMode] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activateGuardRef = useRef(false);
 
   const eoaBalanceNum = parseFloat(eoaBalance);
   const parsedAmount = parseFloat(depositAmount);
-  const isValidAmount = !isNaN(parsedAmount) && parsedAmount >= 1 && parsedAmount <= eoaBalanceNum;
+  const effectiveDepositAmount = !isNaN(parsedAmount) ? parsedAmount : 0;
+  const isValidAmount = regrantOnlyMode || (effectiveDepositAmount >= 1 && effectiveDepositAmount <= eoaBalanceNum);
 
   // Best APY from selected protocols (for now, show Benqi APY as highest)
   const bestApy = (() => {
@@ -291,7 +317,7 @@ export default function OnboardingPage() {
   })();
 
   const selectedCount = selectedProtocols.size;
-  const yearlyEarning = !isNaN(parsedAmount) && parsedAmount >= 1 ? parsedAmount * (bestApy / 100) : 0;
+  const yearlyEarning = effectiveDepositAmount >= 1 ? effectiveDepositAmount * (bestApy / 100) : 0;
 
   // Determine top protocol for deployment — used in activate and review
   const normalizedRateRows = (protocolRates ?? [])
@@ -406,6 +432,10 @@ export default function OnboardingPage() {
         if (accountDetail?.address && accountDetail.sessionKey?.isActive) {
           setAgentActivated(true);
         }
+        if (accountDetail?.id && accountDetail.isActive && !accountDetail.sessionKey?.isActive) {
+          setRegrantOnlyMode(true);
+          setDepositAmount("0");
+        }
       } catch {
         // Backend doesn't know this account — new user, that's fine
       }
@@ -462,7 +492,8 @@ export default function OnboardingPage() {
     setOnboardingInProgress(true);
 
     const effectiveSelectedProtocols = selectedProtocols;
-    const amountWei = parseUnits(depositAmount, 6);
+    const requestedAmount = regrantOnlyMode ? "0" : depositAmount;
+    const amountWei = parseUnits(requestedAmount || "0", 6);
     let activationAddress = smartAccountAddress;
 
     try {
@@ -683,7 +714,11 @@ export default function OnboardingPage() {
         });
         toast.success("USDC transferred to smart account!");
       } else {
-        toast.success("Smart account already funded — skipping transfer.");
+        if (amountWei > 0n) {
+          toast.success("Smart account already funded — skipping transfer.");
+        } else {
+          toast.success("Re-grant mode detected — no new deposit transfer required.");
+        }
       }
 
       // Phase 1b: account deployment is handled automatically by the first
@@ -710,7 +745,7 @@ export default function OnboardingPage() {
             REGISTRY: CONTRACTS.REGISTRY,
           },
           {
-            maxAmountUSDC: Math.max(parsedAmount * 2, 50_000),
+            maxAmountUSDC: Math.max(effectiveDepositAmount * 2, 50_000),
             durationDays: 30,
             maxOpsPerDay: 20,
             userEOA: wallet.address as `0x${string}`,
@@ -1050,6 +1085,15 @@ export default function OnboardingPage() {
                 Select which markets your optimizer is allowed to use, then choose a diversification strategy.
               </p>
 
+              {regrantOnlyMode && (
+                <div className="rounded-lg border border-[#F59E0B]/20 bg-[#FEF3C7] p-3">
+                  <p className="text-[11px] text-[#92400E]">
+                    Existing account detected without an active session key. Re-granting is required.
+                    No additional deposit is needed.
+                  </p>
+                </div>
+              )}
+
               <div className="rounded-lg border border-[#E8E2DA] bg-[#F5F0EB] px-3 py-2.5 text-[11px] text-[#5C5550]">
                 Fee: Free (beta)
               </div>
@@ -1189,11 +1233,11 @@ export default function OnboardingPage() {
                   Back
                 </button>
                 <button
-                  onClick={() => setFormStep("deposit")}
+                  onClick={() => setFormStep(regrantOnlyMode ? "activate" : "deposit")}
                   disabled={selectedCount === 0}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                 >
-                  Continue
+                  {regrantOnlyMode ? "Continue to Re-grant" : "Continue"}
                   <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
@@ -1388,7 +1432,9 @@ export default function OnboardingPage() {
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <p className="text-[10px] text-[#8A837C]">Deposit</p>
-                        <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">${parsedAmount.toFixed(2)} USDC</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-[#1A1715]">
+                          {regrantOnlyMode ? "No new deposit" : `$${effectiveDepositAmount.toFixed(2)} USDC`}
+                        </p>
                       </div>
                       <div>
                         <p className="text-[10px] text-[#8A837C]">APY</p>
@@ -1419,7 +1465,7 @@ export default function OnboardingPage() {
 
                   <div className="flex gap-3">
                     <button
-                      onClick={() => setFormStep("deposit")}
+                      onClick={() => setFormStep(regrantOnlyMode ? "strategy" : "deposit")}
                       className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
                     >
                       Back
@@ -1430,7 +1476,7 @@ export default function OnboardingPage() {
                       className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                     >
                       <Zap className="h-4 w-4" />
-                      Deposit &amp; Activate
+                      {regrantOnlyMode ? "Re-grant &amp; Reactivate" : "Deposit &amp; Activate"}
                     </button>
                   </div>
                 </div>
