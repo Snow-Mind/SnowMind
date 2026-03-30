@@ -86,6 +86,11 @@ async def require_jwt(
 _privy_jwks_cache: dict | None = None
 _privy_jwks_last_fetch: float = 0.0
 _PRIVY_JWKS_CACHE_TTL = 3600  # 1 hour
+_PRIVY_JWKS_URLS = (
+    "https://auth.privy.io/api/v1/apps/{app_id}/jwks.json",
+    # Legacy endpoint fallback.
+    "https://auth.privy.io/api/v1/apps/{app_id}/.well-known/jwks.json",
+)
 _AUTH_REJECT_LOG_THROTTLE_SECONDS = 60.0
 _auth_reject_last_logged: dict[str, float] = {}
 _auth_reject_lock = threading.Lock()
@@ -111,14 +116,35 @@ async def _fetch_privy_jwks(app_id: str) -> dict:
     if _privy_jwks_cache and (now - _privy_jwks_last_fetch) < _PRIVY_JWKS_CACHE_TTL:
         return _privy_jwks_cache
 
-    url = f"https://auth.privy.io/api/v1/apps/{app_id}/.well-known/jwks.json"
+    last_http_error: httpx.HTTPError | None = None
     async with httpx.AsyncClient() as client:
-        resp = await client.get(url, timeout=10)
-        resp.raise_for_status()
-        _privy_jwks_cache = resp.json()
-        _privy_jwks_last_fetch = now
-        logger.info("Refreshed Privy JWKS cache")
-        return _privy_jwks_cache
+        for template in _PRIVY_JWKS_URLS:
+            url = template.format(app_id=app_id)
+            try:
+                resp = await client.get(url, timeout=10)
+                resp.raise_for_status()
+                jwks = resp.json()
+                if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
+                    raise httpx.HTTPError(f"Invalid JWKS payload from {url}")
+
+                _privy_jwks_cache = jwks
+                _privy_jwks_last_fetch = now
+                logger.info("Refreshed Privy JWKS cache from %s", url)
+                return _privy_jwks_cache
+            except httpx.HTTPStatusError as exc:
+                last_http_error = exc
+                # Try fallback endpoint on 404/410; surface all other status codes.
+                status_code = exc.response.status_code if exc.response is not None else None
+                if status_code in {404, 410}:
+                    continue
+                raise
+            except httpx.HTTPError as exc:
+                last_http_error = exc
+                continue
+
+    if last_http_error is not None:
+        raise last_http_error
+    raise httpx.HTTPError("Unable to fetch Privy JWKS from known endpoints")
 
 
 async def verify_privy_token(token: str) -> dict | None:
