@@ -219,6 +219,10 @@ def _validate_environment() -> None:
         if not getattr(settings, var_name, ""):
             logger.warning("Environment variable %s is not set", var_name)
 
+    # User-authenticated routes require Privy app id.
+    if not settings.PRIVY_APP_ID:
+        errors.append("PRIVY_APP_ID is required")
+
     # Execution-service request signing key must exist in all environments.
     if not settings.INTERNAL_SERVICE_KEY:
         errors.append("INTERNAL_SERVICE_KEY is required")
