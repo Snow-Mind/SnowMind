@@ -117,14 +117,36 @@ async def verify_privy_token(token: str) -> dict | None:
 
     try:
         jwks = await _fetch_privy_jwks(s.PRIVY_APP_ID)
-        payload = jwt.decode(
-            token,
-            jwks,
-            algorithms=["ES256"],
-            audience=s.PRIVY_APP_ID,
-            issuer="privy.io",
-        )
-        return payload
+        issuers = ("privy.io", "https://auth.privy.io")
+        last_err: Exception | None = None
+
+        for issuer in issuers:
+            try:
+                payload = jwt.decode(
+                    token,
+                    jwks,
+                    algorithms=["ES256"],
+                    audience=s.PRIVY_APP_ID,
+                    issuer=issuer,
+                )
+                return payload
+            except JWTError as exc:
+                last_err = exc
+                continue
+
+        if last_err is not None:
+            try:
+                claims = jwt.get_unverified_claims(token)
+                logger.warning(
+                    "Privy token rejected (iss=%s aud=%s expected_aud=%s): %s",
+                    claims.get("iss"),
+                    claims.get("aud"),
+                    s.PRIVY_APP_ID,
+                    last_err,
+                )
+            except Exception:
+                logger.debug("Privy token rejected; unable to decode unverified claims")
+        return None
     except (JWTError, httpx.HTTPError) as exc:
         logger.debug("Privy token verification failed: %s", exc)
         return None

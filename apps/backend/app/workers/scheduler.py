@@ -252,12 +252,21 @@ class SnowMindScheduler:
                 if attempt < self.MAX_RETRIES - 1:
                     wait = 5 * (2 ** attempt)   # 5s, 10s, 20s
                     logger.warning(
-                        "Rebalance attempt %d failed for %s, retrying in %ds: %s",
-                        attempt + 1, account_id, wait, e,
+                        "Rebalance attempt %d failed for %s (%s), retrying in %ds: %s",
+                        attempt + 1,
+                        account_id,
+                        type(e).__name__,
+                        wait,
+                        e,
                     )
                     await asyncio.sleep(wait)
 
-        logger.error("All retries exhausted for %s: %s", account_id, last_err)
+        logger.error(
+            "All retries exhausted for %s (%s): %s",
+            account_id,
+            type(last_err).__name__ if last_err is not None else "UnknownError",
+            last_err,
+        )
         return "error"
 
     # ── Protocol circuit breaker ─────────────────────────────────────────────

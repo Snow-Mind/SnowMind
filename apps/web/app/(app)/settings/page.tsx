@@ -41,7 +41,7 @@ const fadeUp = {
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { eoaAddress, activeWallet } = useAuth();
+  const { eoaAddress, activeWallet, authenticated } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
 
@@ -51,13 +51,13 @@ export default function SettingsPage() {
 
   // Fetch current preference from backend
   useEffect(() => {
-    if (!smartAccountAddress) return;
+    if (!authenticated || !smartAccountAddress) return;
     api.getAccountDetail(smartAccountAddress).then((detail) => {
       if (detail.diversificationPreference) {
         setDivPref(detail.diversificationPreference);
       }
     }).catch(() => { /* use default */ });
-  }, [smartAccountAddress]);
+  }, [authenticated, smartAccountAddress]);
 
   const handlePrefChange = async (pref: DiversificationPreference) => {
     if (!smartAccountAddress || pref === divPref) return;

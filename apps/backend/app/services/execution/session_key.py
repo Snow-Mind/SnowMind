@@ -376,7 +376,7 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
     now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = (
         db.table("session_keys")
-        .select("serialized_permission, expires_at, allowed_protocols")
+        .select("id, serialized_permission, expires_at, allowed_protocols")
         .eq("account_id", str(account_id))
         .eq("is_active", True)
         .gte("expires_at", now_z)
@@ -413,7 +413,33 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
         else ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"]
     )
 
-    decrypted = decrypt_session_key(row["serialized_permission"])
+    try:
+        decrypted = decrypt_session_key(row["serialized_permission"])
+    except Exception as exc:
+        key_id = row.get("id")
+        logger.error(
+            "Failed to decrypt active session key for account %s (key_id=%s): %s (%s)",
+            account_id,
+            key_id,
+            exc,
+            type(exc).__name__,
+        )
+
+        # Fail-safe: deactivate this unusable key so scheduler stops retrying.
+        try:
+            if key_id:
+                db.table("session_keys").update({"is_active": False}).eq("id", key_id).execute()
+        except Exception as deact_exc:
+            logger.warning(
+                "Failed to deactivate unreadable session key %s for %s: %s",
+                key_id,
+                account_id,
+                deact_exc,
+            )
+
+        raise ValueError(
+            "Active session key cannot be decrypted. User must re-grant session key."
+        ) from exc
 
     # Parse JSON envelope format: {"approval": "...", "sessionPrivateKey": "0x..."}
     # Backward compat: legacy keys stored as plain strings (no JSON envelope)

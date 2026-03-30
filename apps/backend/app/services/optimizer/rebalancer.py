@@ -228,7 +228,20 @@ class Rebalancer:
         db = get_supabase()
 
         # 0. Early session-key check — skip expensive pipeline if no key
-        session_key_record = get_active_session_key_record(db, UUID(account_id))
+        try:
+            session_key_record = get_active_session_key_record(db, UUID(account_id))
+        except ValueError as exc:
+            logger.warning(
+                "Session key unreadable for %s: %s",
+                smart_account_address,
+                exc,
+            )
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason=str(exc),
+            )
         if not session_key_record:
             logger.debug("No active session key for %s — skipping", account_id)
             return await self._log(db, account_id, "skipped",
@@ -1423,7 +1436,10 @@ class Rebalancer:
                 )
 
         # Step 3: Get session key and call execution service
-        session_record = get_active_session_key_record(db, UUID(account_id))
+        try:
+            session_record = get_active_session_key_record(db, UUID(account_id))
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         if not session_record:
             raise ValueError(f"No active session key for account {account_id}")
         session_key = session_record["serialized_permission"]

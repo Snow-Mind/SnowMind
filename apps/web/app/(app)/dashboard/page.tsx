@@ -24,6 +24,7 @@ import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHis
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api } from "@/lib/api-client";
+import { useAuth } from "@/hooks/useAuth";
 import type { Portfolio } from "@snowmind/shared-types";
 
 function deriveOverviewStats(p: Portfolio) {
@@ -82,8 +83,9 @@ const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
 
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const { authenticated, ready } = useAuth();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
-  const address = smartAccountAddress || undefined;
+  const address = ready && authenticated ? (smartAccountAddress || undefined) : undefined;
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
   const activatedFromOnboarding = searchParams.get("activated") === "1";
@@ -113,7 +115,7 @@ export default function DashboardPage() {
   } = useQuery({
     queryKey: ["account-detail", address],
     queryFn: () => (address ? api.getAccountDetail(address) : Promise.reject("No address")),
-    enabled: !!address,
+    enabled: !!address && ready && authenticated,
     staleTime: 60000, // 1 minute
   });
 
