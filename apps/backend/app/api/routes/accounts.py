@@ -10,7 +10,11 @@ from supabase import Client
 
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth, verify_account_ownership
+from app.core.security import (
+    assert_owner_matches_claims,
+    require_privy_auth,
+    verify_account_ownership,
+)
 from app.core.validators import validate_eth_address
 from app.models.account import (
     AccountDetailResponse,
@@ -137,6 +141,13 @@ async def _do_register(
     address = validate_eth_address(req.resolved_address())
     owner_address = validate_eth_address(req.resolved_owner())
 
+    if not auth_claims:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication identity",
+        )
+    assert_owner_matches_claims(auth_claims, owner_address)
+
     # Guard: prevent overwriting an existing account's owner
     existing = (
         db.table("accounts")
@@ -154,7 +165,7 @@ async def _do_register(
             )
 
     # Store Privy DID for future authorization checks
-    privy_did = auth_claims.get("sub") if auth_claims else None
+    privy_did = auth_claims.get("sub")
 
     # Upsert: if account already exists, just return it
     upsert_data = {
@@ -163,7 +174,7 @@ async def _do_register(
         "is_active": True,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    if privy_did and privy_did != "service":
+    if privy_did:
         upsert_data["privy_did"] = privy_did
 
     result = (
@@ -324,7 +335,7 @@ async def get_account(
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
-        .select("*")
+        .select("id, address, owner_address, is_active, created_at, diversification_preference, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
@@ -343,6 +354,7 @@ async def get_account(
         )
 
     row = acct.data[0]
+    verify_account_ownership(_auth, row, db=db)
 
     # Fetch latest active session key metadata (not the encrypted key itself)
     now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -462,18 +474,16 @@ async def store_account_session_key(
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
-        .select("id, is_active")
+        .select("id, is_active, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
     )
 
     if acct.data:
-        account_id = acct.data[0]["id"]
-        # Verify ownership before storing a session key
-        full_acct = db.table("accounts").select("id, owner_address, privy_did").eq("id", account_id).limit(1).execute()
-        if full_acct.data:
-            verify_account_ownership(_auth, full_acct.data[0], db=db)
+        account_row = acct.data[0]
+        account_id = account_row["id"]
+        verify_account_ownership(_auth, account_row, db=db)
         # Auto-reactivate if deactivated (e.g. after emergency withdrawal)
         if not acct.data[0].get("is_active", True):
             db.table("accounts").update({
@@ -486,12 +496,14 @@ async def store_account_session_key(
         # This handles the case where a full withdrawal deleted the row
         # and the user re-grants from the dashboard.
         owner_addr = validate_eth_address(req.owner_address)
+        assert_owner_matches_claims(_auth, owner_addr)
         result = (
             db.table("accounts")
             .upsert(
                 {
                     "address": address,
                     "owner_address": owner_addr,
+                    "privy_did": _auth.get("sub"),
                     "is_active": True,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
@@ -577,13 +589,14 @@ async def update_diversification_preference(
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
     )
     if not acct.data:
         raise HTTPException(status_code=404, detail="Account not found")
+    verify_account_ownership(_auth, acct.data[0], db=db)
 
     db.table("accounts").update(
         {

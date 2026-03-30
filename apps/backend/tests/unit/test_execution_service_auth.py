@@ -45,7 +45,6 @@ async def test_post_adds_signed_headers_when_internal_key_present() -> None:
     assert args[0] == "http://execution.local/execute-rebalance"
 
     headers = kwargs["headers"]
-    assert headers["x-internal-key"] == "super-secret-key"
     assert headers["x-request-timestamp"] == "1700000000"
     assert headers["x-request-nonce"] == "abc123nonce"
 
@@ -61,7 +60,7 @@ async def test_post_adds_signed_headers_when_internal_key_present() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_omits_signature_headers_without_internal_key() -> None:
+async def test_post_raises_without_internal_service_key() -> None:
     service = ExecutionService()
     payload = {"foo": "bar"}
 
@@ -70,25 +69,8 @@ async def test_post_omits_signature_headers_without_internal_key() -> None:
         INTERNAL_SERVICE_KEY="",
     )
 
-    response = MagicMock()
-    response.raise_for_status = MagicMock()
-    response.json.return_value = {"ok": True}
-
-    client_ctx = AsyncMock()
-    client_ctx.post.return_value = response
-    client_ctx.__aenter__.return_value = client_ctx
-    client_ctx.__aexit__.return_value = False
-
     with (
         patch("app.services.execution.executor.get_settings", return_value=settings),
-        patch("app.services.execution.executor.httpx.AsyncClient", return_value=client_ctx),
     ):
-        result = await service._post("/execute/withdrawal", payload)
-
-    assert result == {"ok": True}
-    kwargs = client_ctx.post.call_args.kwargs
-    headers = kwargs["headers"]
-    assert headers["x-internal-key"] == ""
-    assert "x-request-timestamp" not in headers
-    assert "x-request-nonce" not in headers
-    assert "x-request-signature" not in headers
+        with pytest.raises(RuntimeError, match="INTERNAL_SERVICE_KEY is required"):
+            await service._post("/execute/withdrawal", payload)

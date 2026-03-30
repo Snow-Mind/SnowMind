@@ -515,7 +515,7 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
-        min_balance = Decimal(str(getattr(self.settings, "MIN_BALANCE_USD", 10)))
+        min_balance = Decimal(str(getattr(self.settings, "MIN_BALANCE_USD", 0)))
         if total_usd < min_balance:
             return await self._log(
                 db,
@@ -546,7 +546,7 @@ class Rebalancer:
                 prev_total = sum(
                     Decimal(str(v)) for v in prev_allocs.values()
                 )
-                if prev_total > Decimal("1"):
+                if prev_total > Decimal("0.01"):
                     drop_pct = (prev_total - total_usd) / prev_total
                     drop_threshold = Decimal(str(self.settings.PORTFOLIO_VALUE_DROP_PCT))
                     if drop_pct > drop_threshold:
@@ -566,8 +566,8 @@ class Rebalancer:
             logger.warning("Portfolio circuit breaker check failed: %s — proceeding", exc)
 
         # 4b. Guarded launch — enforce platform-wide deposit cap
-        has_existing_positions = any(v > Decimal("1") for v in current.values())
-        if not has_existing_positions and idle_usdc > Decimal("1"):
+        has_existing_positions = any(v > Decimal("0.01") for v in current.values())
+        if not has_existing_positions and idle_usdc > Decimal("0.01"):
             cap = Decimal(str(self.settings.MAX_TOTAL_PLATFORM_DEPOSIT_USD))
             all_allocs = db.table("allocations").select("amount_usdc").execute()
             platform_total = sum(
@@ -684,7 +684,7 @@ class Rebalancer:
         stranded_positions: dict[str, Decimal] = {}  # pid → USD amount
 
         for pid, position_amt in current.items():
-            if position_amt < Decimal("1"):
+            if position_amt < Decimal("0.01"):
                 continue
             if pid not in allowed_rates:
                 # Session key does NOT cover this protocol — we CANNOT
@@ -874,39 +874,39 @@ class Rebalancer:
                     proposed=result_allocations,
                 )
 
-        # 8. Delta check — skip if total movement is below $1 (bypassed by FORCED/EMERGENCY
+        # 8. Delta check — skip if total movement is below $0.01 (bypassed by FORCED/EMERGENCY
         #    and initial deployments where idle USDC has no counterpart in current)
         all_protocols = set(current.keys()) | set(result_allocations.keys())
         total_movement = sum(
             abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
             for pid in all_protocols
         ) / Decimal("2")
-        if global_flag == RebalanceFlag.NONE and not is_initial_deployment and total_movement < Decimal("1"):
+        if global_flag == RebalanceFlag.NONE and not is_initial_deployment and total_movement < Decimal("0.01"):
             return await self._log(
                 db,
                 account_id,
                 "skipped",
-                reason="Total movement below $1",
+                reason="Total movement below $0.01",
                 proposed=result_allocations,
             )
 
-        # 8b. Profitability gate — skip if daily gain does not cover gas + fees
-        #     Bypass for initial deployments: idle USDC at 0% → any protocol is
-        #     better than idle regardless of deposit size. Gas is paymaster-sponsored.
-        #     (is_initial_deployment computed above at step 6)
-        #     TEMPORARILY DISABLED for testing — uncomment when moving to production.
-        # if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
-        #     daily_gain = apy_improvement * total_usd / Decimal("365")
-        #     gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
-        #     breakeven_days = Decimal(str(self.settings.PROFITABILITY_BREAKEVEN_DAYS))
-        #     if daily_gain * breakeven_days < gas_cost:
-        #         return await self._log(
-        #             db,
-        #             account_id,
-        #             "skipped",
-        #             reason=f"Profitability gate: {int(breakeven_days)}d gain ${float(daily_gain * breakeven_days):.4f} < gas ${float(gas_cost):.4f}",
-        #             proposed=result_allocations,
-        #         )
+        # 8b. Profitability gate — skip if expected gain does not cover gas.
+        # Bypassed for initial deployments: idle USDC at 0% should be deployed.
+        if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
+            daily_gain = apy_improvement * total_usd / Decimal("365")
+            gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
+            breakeven_days = Decimal(str(self.settings.PROFITABILITY_BREAKEVEN_DAYS))
+            if daily_gain * breakeven_days < gas_cost:
+                return await self._log(
+                    db,
+                    account_id,
+                    "skipped",
+                    reason=(
+                        f"Profitability gate: {int(breakeven_days)}d gain "
+                        f"${float(daily_gain * breakeven_days):.4f} < gas ${float(gas_cost):.4f}"
+                    ),
+                    proposed=result_allocations,
+                )
 
         # 8c. Max single rebalance value — cap per-operation movement
         max_rebalance = Decimal(str(self.settings.MAX_SINGLE_REBALANCE_USD))
@@ -1030,8 +1030,8 @@ class Rebalancer:
 
             # Initial deployment fallback: if top protocol fails, try next-best protocol
             # so idle USDC is still put to work.
-            has_existing_positions = any(v > Decimal("1") for v in current.values())
-            is_initial_deployment = (not has_existing_positions) and idle_usdc > Decimal("1")
+            has_existing_positions = any(v > Decimal("0.01") for v in current.values())
+            is_initial_deployment = (not has_existing_positions) and idle_usdc > Decimal("0.01")
 
             if is_initial_deployment and ranked_protocols:
                 primary_protocol = max(result_allocations, key=result_allocations.get)
@@ -1545,7 +1545,7 @@ class Rebalancer:
         current = await self._get_current_allocations(account_id, smart_account_address)
         current_amt = current.get(protocol_id, Decimal("0"))
         new_amt = max(current_amt - amount, Decimal("0"))
-        if new_amt < Decimal("1"):
+        if new_amt < Decimal("0.01"):
             # Remove the allocation entirely
             db.table("allocations").delete().eq(
                 "account_id", account_id
@@ -1581,7 +1581,7 @@ class Rebalancer:
         exec_withdrawals = []
         _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
         for protocol_id, amount_usd in current.items():
-            if amount_usd < Decimal("1"):
+            if amount_usd < Decimal("0.01"):
                 continue
             entry: dict = {"protocol": protocol_id, "amountUSDC": "MAX"}
             if protocol_id == "benqi":
@@ -1724,7 +1724,7 @@ class Rebalancer:
                 "allocation_pct": str((amt / total).quantize(Decimal("0.0001"))) if total else "0",
             }
             for pid, amt in target_allocations.items()
-            if amt > Decimal("1")
+            if amt > Decimal("0.01")
         ]
         if rows:
             db.table("allocations").insert(rows).execute()

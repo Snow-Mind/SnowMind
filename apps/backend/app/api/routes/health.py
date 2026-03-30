@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_api_key
+from app.core.security import require_service_auth
 from app.services.protocols import ACTIVE_ADAPTERS
 from app.services.protocols.circuit_breaker import protocol_circuit_breaker
 
@@ -28,7 +28,7 @@ async def health_check(request: Request):
 
 
 @router.get("/health/detailed")
-async def health_detailed(request: Request, _key: str = Depends(require_api_key)):
+async def health_detailed(request: Request, _svc: dict = Depends(require_service_auth)):
     """Comprehensive system health for ops monitoring."""
     settings = get_settings()
     now = datetime.now(timezone.utc).isoformat()

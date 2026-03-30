@@ -39,11 +39,8 @@ export class NetworkError extends Error {
 
 // ── Core request helper ────────────────────────────────────
 
-const API_KEY = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-
 /**
  * Token getter set by the Privy provider — returns a fresh access token.
- * Falls back to API-key-only auth if not configured.
  */
 let _getAccessToken: (() => Promise<string | null>) | null = null;
 
@@ -60,7 +57,6 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(API_KEY && { "X-API-Key": API_KEY }),
     ...(token && { Authorization: `Bearer ${token}` }),
     ...(options?.headers as Record<string, string>),
   };

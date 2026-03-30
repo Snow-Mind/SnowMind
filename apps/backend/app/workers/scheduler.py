@@ -98,19 +98,43 @@ class SnowMindScheduler:
     # ── Distributed Lock ─────────────────────────────────────────────────────
 
     async def _acquire_lock(self) -> bool:
-        expiry = (datetime.now(timezone.utc) + timedelta(seconds=self.LOCK_TTL)).isoformat()
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        expiry = (now + timedelta(seconds=self.LOCK_TTL)).isoformat()
+
         try:
-            # Upsert — only succeeds if key doesn't exist or has expired
-            self.db.table("scheduler_locks").upsert(
-                {"key": "rebalance_lock", "holder": self.instance, "expires_at": expiry},
-                on_conflict="key",
+            # Fast path: try creating the lock row.
+            self.db.table("scheduler_locks").insert(
+                {
+                    "key": "rebalance_lock",
+                    "holder": self.instance,
+                    "expires_at": expiry,
+                }
             ).execute()
-            # Verify we actually hold it
+            return True
+        except Exception:
+            # Row already exists (or transient insert failure). Try claiming only
+            # if the existing lock is expired.
+            pass
+
+        try:
+            claimed = (
+                self.db.table("scheduler_locks")
+                .update({"holder": self.instance, "expires_at": expiry})
+                .eq("key", "rebalance_lock")
+                .lte("expires_at", now_iso)
+                .execute()
+            )
+            if claimed.data:
+                return True
+
+            # Verify we still hold a non-expired lock from an earlier cycle.
             check = (
                 self.db.table("scheduler_locks")
                 .select("holder")
                 .eq("key", "rebalance_lock")
                 .eq("holder", self.instance)
+                .gte("expires_at", now_iso)
                 .execute()
             )
             return len(check.data) > 0

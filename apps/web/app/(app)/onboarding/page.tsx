@@ -291,7 +291,7 @@ export default function OnboardingPage() {
   })();
 
   const selectedCount = selectedProtocols.size;
-  const yearlyEarning = !isNaN(parsedAmount) && parsedAmount > 0 ? parsedAmount * (bestApy / 100) : 0;
+  const yearlyEarning = !isNaN(parsedAmount) && parsedAmount >= 1 ? parsedAmount * (bestApy / 100) : 0;
 
   // Determine top protocol for deployment — used in activate and review
   const normalizedRateRows = (protocolRates ?? [])

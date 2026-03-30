@@ -11,6 +11,15 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_ORIGINS = "https://www.snowmind.xyz,https://snowmind.xyz"
+_PROD_ORIGIN_REGEX = (
+    r"^https://([a-z0-9-]+\.)?snowmind\.xyz$"
+    r"|^https://[a-z0-9-]+-snowmind[a-z0-9-]*\.vercel\.app$"
+)
+_DEV_ORIGIN_REGEX = (
+    _PROD_ORIGIN_REGEX
+    + r"|^http://localhost(:\d+)?$"
+    + r"|^http://127\.0\.0\.1(:\d+)?$"
+)
 
 
 class Settings(BaseSettings):
@@ -19,12 +28,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = False
     ALLOWED_ORIGINS: str = _DEFAULT_ORIGINS
-    ALLOWED_ORIGIN_REGEX: str = (
-        r"^https://([a-z0-9-]+\.)?snowmind\.xyz$"
-        r"|^https://[a-z0-9-]+-snowmind[a-z0-9-]*\.vercel\.app$"
-        r"|^http://localhost(:\d+)?$"
-        r"|^http://127\.0\.0\.1(:\d+)?$"
-    )
+    ALLOWED_ORIGIN_REGEX: str = _DEV_ORIGIN_REGEX
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -50,7 +54,13 @@ class Settings(BaseSettings):
     @property
     def allowed_origin_regex(self) -> str | None:
         raw = self.ALLOWED_ORIGIN_REGEX.strip()
-        return raw or None
+        if not raw:
+            return None
+        if self.DEBUG:
+            return raw
+        if raw == _DEV_ORIGIN_REGEX:
+            return _PROD_ORIGIN_REGEX
+        return raw
 
     # ── Supabase ─────────────────────────────────────────────
     SUPABASE_URL: str = ""
@@ -93,11 +103,11 @@ class Settings(BaseSettings):
     # ── Security ─────────────────────────────────────────────
     # KMS key ID for session key encryption (AES-256-GCM envelope encryption).
     # The actual encryption key NEVER lives in env vars — it stays in KMS.
-    KMS_KEY_ID: str = ""  # AWS KMS key ID or Supabase Vault key reference
+    KMS_KEY_ID: str = ""  # AWS KMS key ID/ARN
     SESSION_KEY_ENCRYPTION_KEY: str = ""  # Local fallback only; production should use KMS_KEY_ID
     JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
-    BACKEND_API_KEY: str = ""  # Frontend → backend auth (fallback)
+    BACKEND_API_KEY: str = ""  # Service-to-service auth key (never expose to frontend)
 
     # Legacy local deploy key path (not used in production runtime)
     DEPLOYER_PRIVATE_KEY: str = ""
@@ -119,7 +129,7 @@ class Settings(BaseSettings):
     # All thresholds from ARCHITECTURE.md — change in ONE place only.
     TVL_CAP_PCT: float = 0.075           # Max 7.5% of Aave/Benqi pool TVL (Spark: no cap)
     BEAT_MARGIN: float = 0.0001          # 0.01% — skip rebalance if improvement below this
-    MIN_BALANCE_USD: float = 10.0        # Skip rebalance if total balance < $10 (dust)
+    MIN_BALANCE_USD: float = 0.0         # Skip rebalance only when total balance <= $0
     MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (Aave/Benqi only)
     VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)
     UTILIZATION_THRESHOLD: float = 0.95  # 95% — exclude from new deposits

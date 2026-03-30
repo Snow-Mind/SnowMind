@@ -17,12 +17,28 @@ function signedHeaders({
   const message = buildSignatureMessage(method, path, timestamp, nonce, body)
   const signature = crypto.createHmac("sha256", key).update(message, "utf8").digest("hex")
   return {
-    "x-internal-key": key,
     "x-request-timestamp": timestamp,
     "x-request-nonce": nonce,
     "x-request-signature": signature,
   }
 }
+
+test("verifyInternalRequest fails closed when key is missing", () => {
+  const result = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers: {},
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: "",
+    ttlSeconds: 300,
+    recentNonces: new Map(),
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.status, 500)
+  assert.equal(result.error, "Service auth key not configured")
+})
 
 test("verifyInternalRequest rejects invalid signature", () => {
   const nonces = new Map()

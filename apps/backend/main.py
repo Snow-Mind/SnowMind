@@ -1,6 +1,7 @@
 """SnowMind FastAPI application entry point."""
 
 import logging
+import os
 import time
 
 from fastapi import FastAPI, Request
@@ -217,6 +218,44 @@ def _validate_environment() -> None:
     for var_name in ("JWT_SECRET", "BACKEND_API_KEY", "PRIVY_APP_ID"):
         if not getattr(settings, var_name, ""):
             logger.warning("Environment variable %s is not set", var_name)
+
+    # Execution-service request signing key must exist in all environments.
+    if not settings.INTERNAL_SERVICE_KEY:
+        errors.append("INTERNAL_SERVICE_KEY is required")
+
+    # In production, enforce explicit session-key encryption keying material.
+    if (
+        not settings.DEBUG
+        and not settings.KMS_KEY_ID
+        and not settings.SESSION_KEY_ENCRYPTION_KEY
+    ):
+        errors.append(
+            "Set KMS_KEY_ID or SESSION_KEY_ENCRYPTION_KEY for session-key encryption"
+        )
+
+    if settings.KMS_KEY_ID:
+        if not (
+            settings.KMS_KEY_ID.startswith("arn:aws:kms:")
+            or settings.KMS_KEY_ID.startswith("alias/")
+        ):
+            logger.warning(
+                "KMS_KEY_ID does not look like an AWS KMS key id/arn. "
+                "Current backend implementation supports AWS KMS only."
+            )
+        if not (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")):
+            logger.warning(
+                "KMS_KEY_ID is set but AWS region is missing (set AWS_REGION or AWS_DEFAULT_REGION)"
+            )
+        if not (
+            (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
+            or os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+            or os.getenv("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+            or os.getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        ):
+            logger.warning(
+                "KMS_KEY_ID is set but no AWS credential source was detected in env; "
+                "session-key encryption calls may fail at runtime"
+            )
 
     if errors:
         for msg in errors:

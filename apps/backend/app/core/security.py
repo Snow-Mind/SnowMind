@@ -135,17 +135,11 @@ async def verify_privy_token(token: str) -> dict | None:
 
 async def require_privy_auth(
     authorization: str | None = Header(None),
-    x_api_key: str | None = Header(None, alias="X-API-Key"),
 ) -> dict:
-    """FastAPI dependency — verifies Privy auth token or API key fallback.
+    """FastAPI dependency for user-facing routes (Privy token only).
 
-    Returns a claims dict with at minimum ``sub`` (Privy DID or "service").
-
-    Priority:
-      1. Privy Bearer token (per-user auth — recommended)
-      2. API key (service-to-service / backward compat)
+    Returns Privy claims with at minimum ``sub`` (Privy DID).
     """
-    # 1. Try Privy token
     if authorization:
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() == "bearer" and token:
@@ -153,14 +147,86 @@ async def require_privy_auth(
             if payload:
                 return payload
 
-    # 2. Fall back to shared API key
-    if x_api_key and verify_api_key(x_api_key):
-        return {"sub": "service", "type": "api_key"}
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or missing authentication",
     )
+
+
+async def require_service_auth(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> dict:
+    """FastAPI dependency for service-to-service routes (API key only)."""
+    if not x_api_key or not verify_api_key(x_api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+        )
+    return {"sub": "service", "type": "api_key"}
+
+
+def _normalize_eth_address(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().lower()
+    if candidate.startswith("0x") and len(candidate) == 42:
+        return candidate
+    return None
+
+
+def _extract_wallet_addresses(auth_claims: dict) -> set[str]:
+    """Extract wallet addresses from common Privy claim shapes."""
+    wallets: set[str] = set()
+
+    for key in ("wallet_address", "walletAddress", "address"):
+        normalized = _normalize_eth_address(auth_claims.get(key))
+        if normalized:
+            wallets.add(normalized)
+
+    for list_key in ("linked_accounts", "linkedAccounts", "accounts"):
+        entries = auth_claims.get(list_key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+
+            entry_type = str(entry.get("type", "")).lower()
+            if entry_type and "wallet" not in entry_type and entry_type not in {"eoa", "ethereum"}:
+                continue
+
+            normalized = _normalize_eth_address(
+                entry.get("address")
+                or entry.get("wallet_address")
+                or entry.get("walletAddress")
+            )
+            if normalized:
+                wallets.add(normalized)
+
+    return wallets
+
+
+def assert_owner_matches_claims(auth_claims: dict, owner_address: str) -> None:
+    """Ensure the authenticated token contains the account owner wallet."""
+    normalized_owner = _normalize_eth_address(owner_address)
+    if not normalized_owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account owner metadata is invalid",
+        )
+
+    wallets = _extract_wallet_addresses(auth_claims)
+    if not wallets:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated token missing wallet identity",
+        )
+
+    if normalized_owner not in wallets:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated wallet does not match account owner",
+        )
 
 
 # ── Account ownership verification ──────────────────────────
@@ -178,8 +244,6 @@ def verify_account_ownership(
     stored ``privy_did``. If unknown (legacy account), backfills it on
     first authenticated access.
 
-    Service-to-service calls (``sub == "service"``) bypass the check.
-
     Raises ``HTTPException(403)`` on mismatch.
     """
     caller_did = auth_claims.get("sub", "")
@@ -188,10 +252,6 @@ def verify_account_ownership(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication identity",
         )
-
-    # Service-to-service (API key) calls are trusted
-    if caller_did == "service":
-        return
 
     stored_did = account.get("privy_did")
 
@@ -206,23 +266,22 @@ def verify_account_ownership(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not own this account",
             )
-    else:
-        # Legacy account: no DID stored yet — backfill on first access.
-        # This is safe because (a) only the wallet owner can sign the
-        # Privy challenge to obtain a JWT, and (b) we trust the first
-        # authenticated request after migration.
-        if db is not None:
-            account_id = account.get("id", "")
-            try:
-                db.table("accounts").update(
-                    {"privy_did": caller_did}
-                ).eq("id", str(account_id)).execute()
-                logger.info(
-                    "Backfilled privy_did=%s for account %s",
-                    caller_did, account.get("address", "?"),
-                )
-            except Exception as exc:
-                logger.warning("Failed to backfill privy_did: %s", exc)
+    owner_address = account.get("owner_address", "")
+    assert_owner_matches_claims(auth_claims, owner_address)
+
+    # Legacy account with missing DID: backfill only after owner-wallet check.
+    if not stored_did and db is not None:
+        account_id = account.get("id", "")
+        try:
+            db.table("accounts").update(
+                {"privy_did": caller_did}
+            ).eq("id", str(account_id)).execute()
+            logger.info(
+                "Backfilled privy_did=%s for account %s",
+                caller_did, account.get("address", "?"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to backfill privy_did: %s", exc)
 
 
 # ── In-memory sliding-window rate limiter ────────────────────

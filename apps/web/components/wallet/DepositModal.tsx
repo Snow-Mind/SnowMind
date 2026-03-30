@@ -141,7 +141,7 @@ export default function DepositModal({ open, onClose }: DepositModalProps) {
                 <input
                   type="number"
                   min={1}
-                  step={1}
+                  step="any"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="100"

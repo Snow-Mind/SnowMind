@@ -81,6 +81,11 @@ def _get_legacy_aes_key() -> bytes:
     # Auto-derive from SUPABASE_SERVICE_KEY — deterministic, stable across restarts
     supabase_key = settings.SUPABASE_SERVICE_KEY
     if supabase_key:
+        if not settings.DEBUG:
+            raise RuntimeError(
+                "SESSION_KEY_ENCRYPTION_KEY must be set when KMS_KEY_ID is not configured"
+            )
+
         derived = hmac.new(
             key=supabase_key.encode("utf-8"),
             msg=b"snowmind-session-key-encryption-v1",
@@ -164,6 +169,16 @@ def encrypt_session_key(raw_key: str) -> str:
 
         return _encode_envelope(ciphertext, nonce, encrypted_data_key)
     except Exception as exc:
+        if not get_settings().DEBUG:
+            logger.error(
+                "KMS envelope encryption failed in non-debug mode (%s): %s",
+                type(exc).__name__,
+                exc,
+            )
+            raise RuntimeError(
+                "KMS session-key encryption failed; refusing insecure fallback"
+            ) from exc
+
         logger.warning(
             "KMS envelope encryption failed (%s), falling back to local AES: %s",
             type(exc).__name__,

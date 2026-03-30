@@ -170,7 +170,7 @@ def compute_allocation(
 
     # Handle idle funds
     idle_amount = remaining
-    if idle_amount > Decimal("1"):  # More than $1 idle
+    if idle_amount > Decimal("0.01"):  # More than $0.01 idle
         logger.warning(
             "TVL overflow: $%.2f idle after allocation. "
             "Platform TVL cap may need tightening.",

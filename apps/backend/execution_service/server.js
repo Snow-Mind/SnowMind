@@ -1,5 +1,6 @@
 import express from "express"
 import {
+  pruneNonces,
   verifyInternalRequest,
 } from "./auth.js"
 import { executeRebalance, executeWithdrawal } from "./execute.js"
@@ -8,7 +9,116 @@ const VERSION = "1.5.1"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
 const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 60000)
 const MAX_CONCURRENT_OPS = Number(process.env.MAX_CONCURRENT_OPS || 2)
+const NONCE_STORE_MODE = String(process.env.NONCE_STORE_MODE || "memory").toLowerCase()
+const NONCE_STORE_STRICT = String(process.env.NONCE_STORE_STRICT || "false").toLowerCase() === "true"
+const NONCE_STORE_TABLE = String(process.env.NONCE_STORE_TABLE || "internal_request_nonces")
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "")
+const SUPABASE_SERVICE_KEY = String(process.env.SUPABASE_SERVICE_KEY || "")
+
+const supabaseNonceStoreConfigured = Boolean(SUPABASE_URL && SUPABASE_SERVICE_KEY)
+let effectiveNonceStoreMode = NONCE_STORE_MODE
+
+if (NONCE_STORE_MODE === "supabase" && !supabaseNonceStoreConfigured) {
+  const msg = "NONCE_STORE_MODE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_KEY"
+  if (NONCE_STORE_STRICT) {
+    console.error(`FATAL: ${msg}. Exiting.`)
+    process.exit(1)
+  }
+  console.warn(`WARN: ${msg}. Falling back to in-memory nonce store.`)
+  effectiveNonceStoreMode = "memory"
+}
+
+const usePersistentNonceStore = effectiveNonceStoreMode === "supabase"
+
 const recentNonces = new Map()
+let noncePersistOps = 0
+
+
+function supabaseHeaders() {
+  return {
+    apikey: SUPABASE_SERVICE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+    "Content-Type": "application/json",
+    Prefer: "return=minimal",
+  }
+}
+
+
+async function storeNonceInSupabase(nonce, timestampSeconds) {
+  const seenAt = new Date(timestampSeconds * 1000).toISOString()
+  const expiresAt = new Date((timestampSeconds + REQUEST_TTL_SECONDS) * 1000).toISOString()
+  const url = `${SUPABASE_URL}/rest/v1/${NONCE_STORE_TABLE}`
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: supabaseHeaders(),
+      body: JSON.stringify([
+        {
+          nonce,
+          seen_at: seenAt,
+          expires_at: expiresAt,
+        },
+      ]),
+    })
+
+    if (response.ok) {
+      return { ok: true }
+    }
+    if (response.status === 409) {
+      return { ok: false, status: 409, error: "Replay request blocked" }
+    }
+
+    const body = await response.text()
+    console.error(
+      `Nonce store insert failed (status=${response.status} body=${body.slice(0, 300)})`,
+    )
+    if (NONCE_STORE_STRICT) {
+      return { ok: false, status: 503, error: "Persistent nonce store unavailable" }
+    }
+  } catch (err) {
+    console.error(`Nonce store insert error: ${String(err)}`)
+    if (NONCE_STORE_STRICT) {
+      return { ok: false, status: 503, error: "Persistent nonce store unavailable" }
+    }
+  }
+
+  // Non-strict fallback: keep replay protection via in-memory TTL map.
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  pruneNonces(recentNonces, nowSeconds, REQUEST_TTL_SECONDS)
+  if (recentNonces.has(nonce)) {
+    return { ok: false, status: 409, error: "Replay request blocked" }
+  }
+  recentNonces.set(nonce, timestampSeconds)
+  return { ok: true }
+}
+
+
+async function purgeExpiredSupabaseNonces() {
+  if (!usePersistentNonceStore) {
+    return
+  }
+
+  noncePersistOps += 1
+  if (noncePersistOps % 50 !== 0) {
+    return
+  }
+
+  const nowIso = new Date().toISOString()
+  const url = `${SUPABASE_URL}/rest/v1/${NONCE_STORE_TABLE}?expires_at=${encodeURIComponent(`lt.${nowIso}`)}`
+
+  try {
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: supabaseHeaders(),
+    })
+    if (!response.ok) {
+      console.warn(`Nonce purge failed with status ${response.status}`)
+    }
+  } catch (err) {
+    console.warn(`Nonce purge error: ${String(err)}`)
+  }
+}
 // Global concurrency limiter: each rebalance creates multiple ZeroDev SDK
 // client instances (primary + retry modes, each with HTTP transports and
 // RPC-heavy diagnostics).  Running 3+ concurrently exhausts Node.js heap
@@ -103,6 +213,8 @@ app.get("/health", (_req, res) =>
   res.json({
     status: "ok",
     version: VERSION,
+    nonceStore: effectiveNonceStoreMode,
+    nonceStoreStrict: NONCE_STORE_STRICT,
     activeOps,
     maxConcurrentOps: MAX_CONCURRENT_OPS,
     activeSenders: activeSenders.size,
@@ -111,21 +223,32 @@ app.get("/health", (_req, res) =>
 )
 
 // ── Internal auth — only backend should call this service ────────────────────
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const key = process.env.INTERNAL_SERVICE_KEY
+  const nowSeconds = Math.floor(Date.now() / 1000)
   const result = verifyInternalRequest({
     method: req.method,
     path: req.path,
     headers: req.headers,
     rawBody: req.rawBody || "",
-    nowSeconds: Math.floor(Date.now() / 1000),
+    nowSeconds,
     key,
     ttlSeconds: REQUEST_TTL_SECONDS,
     recentNonces,
+    skipReplayCheck: usePersistentNonceStore,
   })
   if (!result.ok) {
     return res.status(result.status).json({ error: result.error })
   }
+
+  if (usePersistentNonceStore) {
+    const persist = await storeNonceInSupabase(result.nonce, result.timestamp)
+    if (!persist.ok) {
+      return res.status(persist.status).json({ error: persist.error })
+    }
+    void purgeExpiredSupabaseNonces()
+  }
+
   next()
 })
 

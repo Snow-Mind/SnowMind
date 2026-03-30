@@ -22,6 +22,7 @@ Expected tables (after all migrations):
 - `protocol_health`
 - `rate_snapshots`
 - `rebalance_logs`
+- `internal_request_nonces`
 - `scheduler_locks`
 - `session_key_audit`
 - `session_keys`
@@ -44,6 +45,7 @@ Expected tables (after all migrations):
 | 010 | `010_generalize_vault_snapshots.sql` | Generalize vault share-price snapshots across ERC-4626 protocols |
 | 011 | `011_add_privy_did.sql` | Add Privy DID ownership binding for endpoint authorization |
 | 012 | `012_enforce_single_active_session_key.sql` | Enforce single active session key per account to prevent race-induced divergence |
+| 013 | `013_add_internal_request_nonces.sql` | Add persistent nonce table for execution-service replay protection across restarts |
 
 ## Creating a new migration
 

@@ -11,7 +11,7 @@ def validate_eth_address(address: str) -> str:
         raise ValueError(f"Invalid Ethereum address: {address}")
 
 
-def validate_usdc_amount(amount: float, min_usd: float = 100.0) -> float:
+def validate_usdc_amount(amount: float, min_usd: float = 1.0) -> float:
     """Validates USDC amount is positive and above minimum."""
     if amount <= 0:
         raise ValueError("Amount must be positive")

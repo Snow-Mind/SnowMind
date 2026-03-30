@@ -40,7 +40,7 @@ def mock_settings():
     settings.TVL_CAP_PCT = 0.01
     settings.MAX_SINGLE_REBALANCE_USD = 50000
     settings.MAX_TOTAL_PLATFORM_DEPOSIT_USD = 100000
-    settings.MIN_BALANCE_USD = 10.0
+    settings.MIN_BALANCE_USD = 0.0
     settings.PORTFOLIO_VALUE_DROP_PCT = 0.10
     settings.PROFITABILITY_BREAKEVEN_DAYS = 7
     settings.REBALANCE_CHECK_INTERVAL = 360
@@ -248,6 +248,8 @@ class TestRebalancerPipeline:
         with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
              patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk, \
              patch("app.services.optimizer.rebalancer.ALL_ADAPTERS", {}):
+
+            rebalancer.settings.MIN_BALANCE_USD = 10.0
 
             db = _make_db_mock()
             gdb.return_value = db

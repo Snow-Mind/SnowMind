@@ -14,7 +14,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_db, get_supabase
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth
+from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryResponse
@@ -91,7 +91,11 @@ def _classify_reason(
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-async def _lookup_account(db: Client, address: str) -> dict:
+async def _lookup_account(
+    db: Client,
+    address: str,
+    auth_claims: dict | None = None,
+) -> dict:
     """Resolve a checksummed address → account row, or raise 404."""
     import asyncio
     from postgrest.exceptions import APIError
@@ -102,14 +106,17 @@ async def _lookup_account(db: Client, address: str) -> dict:
         try:
             acct = (
                 db.table("accounts")
-                .select("id, address, is_active")
+                .select("id, address, is_active, owner_address, privy_did")
                 .eq("address", address)
                 .limit(1)
                 .execute()
             )
             if not acct.data:
                 raise HTTPException(status_code=404, detail="Account not found")
-            return acct.data[0]
+            account = acct.data[0]
+            if auth_claims is not None:
+                verify_account_ownership(auth_claims, account, db=db)
+            return account
         except HTTPException:
             raise
         except APIError as exc:
@@ -146,7 +153,7 @@ async def trigger_rebalance(
     _auth: dict = Depends(require_privy_auth),
 ):
     """Manually trigger a rebalance check for one account."""
-    account = await _lookup_account(db, address)
+    account = await _lookup_account(db, address, _auth)
 
     if not account.get("is_active", True):
         raise HTTPException(status_code=400, detail="Account is inactive")
@@ -182,8 +189,10 @@ async def get_rebalance_status(
 ):
     """Return the most recent rebalance result and overall status."""
     try:
-        account = await _lookup_account(db, address)
-    except HTTPException:
+        account = await _lookup_account(db, address, _auth)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
         # Account not yet registered — return idle stub
         addr = validate_eth_address(address)
         return {
@@ -265,8 +274,10 @@ async def get_rebalance_history(
 ):
     """Return paginated rebalance history for one account."""
     try:
-        account = await _lookup_account(db, address)
-    except HTTPException:
+        account = await _lookup_account(db, address, _auth)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
         # Account not yet registered — return empty history
         return RebalanceHistoryResponse(logs=[], total=0)
     addr = account["address"]
@@ -313,7 +324,7 @@ async def withdraw_all(
     Fee transfer to treasury is included atomically in the same UserOp batch.
     Returns the fee breakdown so the user can see exactly what was charged.
     """
-    account = await _lookup_account(db, address)
+    account = await _lookup_account(db, address, _auth)
     addr = account["address"]
     account_id = account["id"]
 
@@ -363,7 +374,7 @@ async def partial_withdraw(
     Tracks cumulative_withdrawn so the full-withdrawal profit calculation
     remains correct (Mark's fee architecture: fee only on deactivation).
     """
-    account = await _lookup_account(db, address)
+    account = await _lookup_account(db, address, _auth)
     addr = account["address"]
     account_id = account["id"]
 
@@ -660,9 +671,9 @@ async def dry_run_rebalance(request: Request, body: DryRunRequest):
         abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
         for pid in all_protocols
     ) / Decimal("2")
-    if rebalance_needed and total_movement < Decimal("1"):
+    if rebalance_needed and total_movement < Decimal("0.01"):
         rebalance_needed = False
-        skip_reason = f"Total movement below $1 (${float(total_movement):.2f})"
+        skip_reason = f"Total movement below $0.01 (${float(total_movement):.2f})"
         reasoning.append(f"SKIP: {skip_reason}")
 
     # Profitability gate

@@ -11,7 +11,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth
+from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
@@ -552,7 +552,7 @@ async def run_optimizer_preview(
     # Validate account exists
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
@@ -560,6 +560,7 @@ async def run_optimizer_preview(
     if not acct.data:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    verify_account_ownership(_auth, acct.data[0], db=db)
     account_id = acct.data[0]["id"]
 
     # Max exposure = 100% — the 15% TVL cap is the binding constraint.
@@ -676,6 +677,7 @@ async def preview_by_address(
         request,
         RunOptimizerRequest(account_address=address, risk_tolerance=risk_tolerance),
         db,
+        _auth,
     )
 
 
@@ -693,6 +695,7 @@ async def run_and_execute(
         request,
         RunOptimizerRequest(account_address=address),
         db,
+        _auth,
     )
 
     if not preview.rebalance_needed:
@@ -705,7 +708,7 @@ async def run_and_execute(
     # Look up account_id for the address
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
@@ -713,13 +716,14 @@ async def run_and_execute(
     if not acct.data:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    verify_account_ownership(_auth, acct.data[0], db=db)
     account_id = acct.data[0]["id"]
 
     # Build target_allocations dict from preview
     target_allocations: dict[str, Decimal] = {
         alloc.protocol_id: alloc.proposed_amount_usd
         for alloc in preview.proposed_allocations
-        if alloc.proposed_amount_usd > Decimal("1")
+        if alloc.proposed_amount_usd > Decimal("0.01")
     }
 
     if not target_allocations:

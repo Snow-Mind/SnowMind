@@ -31,13 +31,10 @@ export function verifyInternalRequest({
   key,
   ttlSeconds,
   recentNonces,
+  skipReplayCheck = false,
 }) {
   if (!key) {
-    return { ok: true }
-  }
-
-  if (headers["x-internal-key"] !== key) {
-    return { ok: false, status: 401, error: "Unauthorized" }
+    return { ok: false, status: 500, error: "Service auth key not configured" }
   }
 
   const timestamp = String(headers["x-request-timestamp"] || "")
@@ -56,9 +53,11 @@ export function verifyInternalRequest({
     return { ok: false, status: 401, error: "Request timestamp expired" }
   }
 
-  pruneNonces(recentNonces, nowSeconds, ttlSeconds)
-  if (recentNonces.has(nonce)) {
-    return { ok: false, status: 409, error: "Replay request blocked" }
+  if (!skipReplayCheck) {
+    pruneNonces(recentNonces, nowSeconds, ttlSeconds)
+    if (recentNonces.has(nonce)) {
+      return { ok: false, status: 409, error: "Replay request blocked" }
+    }
   }
 
   const expected = crypto
@@ -70,6 +69,8 @@ export function verifyInternalRequest({
     return { ok: false, status: 401, error: "Invalid request signature" }
   }
 
-  recentNonces.set(nonce, tsInt)
-  return { ok: true }
+  if (!skipReplayCheck) {
+    recentNonces.set(nonce, tsInt)
+  }
+  return { ok: true, nonce, timestamp: tsInt }
 }

@@ -21,34 +21,35 @@ class ExecutionService:
 
     async def _post(self, path: str, payload: dict) -> dict:
         settings = get_settings()
+        if not settings.INTERNAL_SERVICE_KEY:
+            raise RuntimeError("INTERNAL_SERVICE_KEY is required for execution service auth")
+
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
         headers = {
             "content-type": "application/json",
-            "x-internal-key": settings.INTERNAL_SERVICE_KEY,
         }
-        if settings.INTERNAL_SERVICE_KEY:
-            timestamp = str(int(time.time()))
-            nonce = secrets.token_hex(16)
-            message = self._build_signature_message(
-                method="POST",
-                path=path,
-                timestamp=timestamp,
-                nonce=nonce,
-                body=body,
-            )
-            signature = hmac.new(
-                settings.INTERNAL_SERVICE_KEY.encode("utf-8"),
-                message.encode("utf-8"),
-                hashlib.sha256,
-            ).hexdigest()
-            headers.update(
-                {
-                    "x-request-timestamp": timestamp,
-                    "x-request-nonce": nonce,
-                    "x-request-signature": signature,
-                }
-            )
+        timestamp = str(int(time.time()))
+        nonce = secrets.token_hex(16)
+        message = self._build_signature_message(
+            method="POST",
+            path=path,
+            timestamp=timestamp,
+            nonce=nonce,
+            body=body,
+        )
+        signature = hmac.new(
+            settings.INTERNAL_SERVICE_KEY.encode("utf-8"),
+            message.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        headers.update(
+            {
+                "x-request-timestamp": timestamp,
+                "x-request-nonce": nonce,
+                "x-request-signature": signature,
+            }
+        )
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(

@@ -10,7 +10,7 @@ from supabase import Client
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_privy_auth
+from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.allocation import AllocationResponse, PortfolioResponse
 from app.services.protocols import get_adapter, ACTIVE_ADAPTERS
@@ -127,7 +127,7 @@ async def get_portfolio(
     # (prevents 404 spam from frontend polling before registration completes)
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
@@ -140,6 +140,7 @@ async def get_portfolio(
             last_rebalance_at=None,
         )
 
+    verify_account_ownership(_auth, acct.data[0], db=db)
     account_id = acct.data[0]["id"]
 
     # Fetch allocations
@@ -287,7 +288,7 @@ async def get_rebalance_history(
     address = validate_eth_address(address)
     acct = (
         db.table("accounts")
-        .select("id")
+        .select("id, owner_address, privy_did")
         .eq("address", address)
         .limit(1)
         .execute()
@@ -295,6 +296,7 @@ async def get_rebalance_history(
     if not acct.data:
         return RebalanceHistoryResponse(logs=[], total=0)
 
+    verify_account_ownership(_auth, acct.data[0], db=db)
     account_id = acct.data[0]["id"]
 
     # Total count
