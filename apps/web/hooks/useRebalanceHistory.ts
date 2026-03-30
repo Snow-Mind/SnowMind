@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
+import { api, APIError } from "@/lib/api-client";
 import { useAuth } from "@/hooks/useAuth";
 
 /** Latest status (single last log). */
@@ -12,7 +12,15 @@ export function useRebalanceStatus(address: string | undefined) {
     queryKey: ["rebalance-status", address],
     queryFn: () => api.getRebalanceStatus(address!),
     enabled: !!address && ready && authenticated,
-    refetchInterval: 30_000,
+    refetchInterval: (query) => {
+      const err = query.state.error;
+      if (err instanceof APIError && err.status === 401) return false;
+      return 30_000;
+    },
+    retry: (failureCount, error) => {
+      if (error instanceof APIError && error.status === 401) return false;
+      return failureCount < 2;
+    },
   });
 }
 
@@ -27,6 +35,14 @@ export function useRebalanceHistory(
     queryKey: ["rebalance-history", address, page],
     queryFn: () => api.getRebalanceHistory(address!, page),
     enabled: !!address && ready && authenticated,
-    refetchInterval: 30_000,
+    refetchInterval: (query) => {
+      const err = query.state.error;
+      if (err instanceof APIError && err.status === 401) return false;
+      return 30_000;
+    },
+    retry: (failureCount, error) => {
+      if (error instanceof APIError && error.status === 401) return false;
+      return failureCount < 2;
+    },
   });
 }

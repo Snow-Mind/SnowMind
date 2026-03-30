@@ -14,7 +14,7 @@ export function useAccountDetail(smartAccountAddress: string | undefined) {
     enabled: !!smartAccountAddress && ready && authenticated,
     staleTime: 60_000,
     retry: (failureCount, error) => {
-      if (error instanceof APIError && error.status === 404) return false;
+      if (error instanceof APIError && (error.status === 401 || error.status === 404)) return false;
       return failureCount < 2;
     },
   });

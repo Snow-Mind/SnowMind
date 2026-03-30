@@ -26,6 +26,12 @@ def _claims(owner_address: str, did: str = "did:privy:user-1") -> dict:
     }
 
 
+def _claims_without_wallet(did: str = "did:privy:user-1") -> dict:
+    return {
+        "sub": did,
+    }
+
+
 def _db_mock() -> tuple[MagicMock, MagicMock]:
     db = MagicMock()
     table = MagicMock()
@@ -87,6 +93,18 @@ def test_verify_account_ownership_rejects_wallet_mismatch() -> None:
         verify_account_ownership(claims, account)
 
     assert exc.value.status_code == 403
+
+
+def test_verify_account_ownership_allows_did_match_without_wallet_claims() -> None:
+    claims = _claims_without_wallet(did="did:privy:user-1")
+    account = {
+        "id": "acc-1",
+        "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "owner_address": OWNER_ADDRESS,
+        "privy_did": "did:privy:user-1",
+    }
+
+    verify_account_ownership(claims, account)
 
 
 def test_verify_account_ownership_backfills_legacy_did_once() -> None:

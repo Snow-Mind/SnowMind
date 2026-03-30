@@ -30,7 +30,7 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
 import { useAccountDetail } from "@/hooks/useAccountDetail";
-import { api } from "@/lib/api-client";
+import { api, APIError } from "@/lib/api-client";
 import {
   EXPLORER,
   CONTRACTS,
@@ -210,9 +210,9 @@ export default function OnboardingPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
-  const { activeWallet } = useAuth();
+  const { activeWallet, login } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
-  const { data: accountDetail } = useAccountDetail(smartAccountAddress ?? undefined);
+  const { data: accountDetail, error: accountDetailError } = useAccountDetail(smartAccountAddress ?? undefined);
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
   const wallet =
@@ -340,6 +340,8 @@ export default function OnboardingPage() {
   const selectedMarketNames = MARKET_PROTOCOLS
     .filter((p) => selectedProtocols.has(p.id))
     .map((p) => p.name);
+
+  const hasAuthError = accountDetailError instanceof APIError && accountDetailError.status === 401;
 
   // Poll USDC balance of user's EOA wallet
   useEffect(() => {
@@ -880,6 +882,31 @@ export default function OnboardingPage() {
               : "Complete each step to activate autonomous yield optimization."}
           </p>
         </div>
+
+        {hasAuthError && (
+          <div className="rounded-xl border border-[#DC2626]/20 bg-[#DC2626]/5 p-4">
+            <p className="text-sm font-medium text-[#DC2626]">
+              Session expired or authentication mismatch.
+            </p>
+            <p className="mt-1 text-xs text-[#5C5550]">
+              Re-authenticate with Privy to load your account state and continue re-grant.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => login()}
+                className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
+              >
+                Re-authenticate
+              </button>
+              <button
+                onClick={() => router.replace("/")}
+                className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+              >
+                Go to Landing
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Step progress bar */}
         <div className="flex items-center justify-center">

@@ -276,6 +276,7 @@ def verify_account_ownership(
         )
 
     stored_did = account.get("privy_did")
+    owner_address = account.get("owner_address", "")
 
     if stored_did:
         # DID stored — strict match required
@@ -288,7 +289,32 @@ def verify_account_ownership(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not own this account",
             )
-    owner_address = account.get("owner_address", "")
+
+        # If wallet claims are present, enforce owner-wallet match.
+        # Some valid Privy access tokens can omit linked wallet claims; for
+        # DID-matched accounts, we allow those tokens to proceed.
+        wallets = _extract_wallet_addresses(auth_claims)
+        if wallets:
+            normalized_owner = _normalize_eth_address(owner_address)
+            if not normalized_owner:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Account owner metadata is invalid",
+                )
+            if normalized_owner not in wallets:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Authenticated wallet does not match account owner",
+                )
+        else:
+            logger.debug(
+                "Privy token for DID %s has no wallet claims; using DID ownership for account %s",
+                caller_did,
+                account.get("address", "?"),
+            )
+        return
+
+    # Legacy accounts with no stored DID must still prove wallet ownership.
     assert_owner_matches_claims(auth_claims, owner_address)
 
     # Legacy account with missing DID: backfill only after owner-wallet check.
