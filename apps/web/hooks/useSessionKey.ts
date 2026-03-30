@@ -15,7 +15,7 @@ export function useSessionKey(smartAccountAddress: string | undefined) {
     staleTime: 60_000,
     select: (data) => data.sessionKey,
     retry: (failureCount, error) => {
-      if (error instanceof APIError && (error.status === 401 || error.status === 404)) return false;
+      if (error instanceof APIError && (error.status === 401 || error.status === 404 || error.status === 429)) return false;
       return failureCount < 2;
     },
   });

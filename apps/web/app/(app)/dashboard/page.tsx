@@ -102,10 +102,12 @@ export default function DashboardPage() {
   const {
     data: rebalanceStatus,
     isLoading: rebalanceLoading,
+    error: rebalanceStatusError,
   } = useRebalanceStatus(address);
 
   const {
     data: historyData,
+    error: rebalanceHistoryError,
   } = useRebalanceHistory(address);
 
   // Fetch account detail to get allowedProtocols (selected markets during onboarding)
@@ -118,10 +120,16 @@ export default function DashboardPage() {
     enabled: !!address && ready && authenticated,
     staleTime: 60000, // 1 minute
     retry: (failureCount, error) => {
-      if (error instanceof APIError && error.status === 401) return false;
+      if (error instanceof APIError && (error.status === 401 || error.status === 429)) return false;
       return failureCount < 2;
     },
   });
+
+  const hasAuthFault = [
+    portfolioError,
+    rebalanceStatusError,
+    rebalanceHistoryError,
+  ].some((err) => err instanceof APIError && (err.status === 401 || err.status === 429));
 
   useRealtimePortfolio(address);
 
@@ -156,7 +164,7 @@ export default function DashboardPage() {
   // Mobile wallets often background the page during confirmation. Force a refresh
   // when the app regains focus/visibility so dashboard state updates without manual reload.
   useEffect(() => {
-    if (!address) return;
+    if (!address || hasAuthFault) return;
 
     const refresh = () => {
       queryClient.invalidateQueries({ queryKey: ["portfolio", address] });
@@ -178,12 +186,12 @@ export default function DashboardPage() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [address, queryClient]);
+  }, [address, hasAuthFault, queryClient]);
 
   // If funds are idle and session key is active, kick a best-effort immediate
   // rebalance so users do not wait for the next scheduler tick.
   useEffect(() => {
-    if (!address || !isIdleOnlyDeployment || !hasActiveSessionKey) return;
+    if (!address || !isIdleOnlyDeployment || !hasActiveSessionKey || hasAuthFault) return;
     if (deploymentKickRef.current === address) return;
     deploymentKickRef.current = address;
 
@@ -199,12 +207,12 @@ export default function DashboardPage() {
           console.debug("[Dashboard] triggerRebalance bootstrap failed:", msg);
         }
       });
-  }, [address, isIdleOnlyDeployment, hasActiveSessionKey, queryClient]);
+  }, [address, isIdleOnlyDeployment, hasActiveSessionKey, hasAuthFault, queryClient]);
 
   // Aggressively poll for a short window so the "deploying" state clears
   // quickly without requiring a manual refresh (mobile and desktop).
   useEffect(() => {
-    if (!address || !isIdleOnlyDeployment) return;
+    if (!address || !isIdleOnlyDeployment || hasAuthFault) return;
 
     let attempts = 0;
     const maxAttempts = activatedFromOnboarding ? 24 : 36; // 2-3 minutes
@@ -231,7 +239,7 @@ export default function DashboardPage() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [address, activatedFromOnboarding, isIdleOnlyDeployment, queryClient, refetchPortfolio]);
+  }, [address, activatedFromOnboarding, isIdleOnlyDeployment, hasAuthFault, queryClient, refetchPortfolio]);
 
   const regrantReason = rebalanceStatus?.reasonDetail
     ?? "Your session key needs to be granted again before automated rebalancing can continue.";

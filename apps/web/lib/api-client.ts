@@ -65,10 +65,25 @@ const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 const AUTH_COOLDOWN_MS = 15_000;
+const AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS = 30_000;
+const AUTH_MISSING_TOKEN_COOLDOWN_MS = 5_000;
 let _authRejectedUntil = 0;
 
+function setAuthCooldown(ms: number): void {
+  const until = Date.now() + ms;
+  if (until > _authRejectedUntil) {
+    _authRejectedUntil = until;
+  }
+}
+
+export function markAuthRateLimited(cooldownMs = AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS): void {
+  setAuthCooldown(cooldownMs);
+}
+
 async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
-  if (!isPublicPath(path) && Date.now() < _authRejectedUntil) {
+  const requiresAuth = !isPublicPath(path);
+
+  if (requiresAuth && Date.now() < _authRejectedUntil) {
     throw new APIError(
       401,
       "AUTH_COOLDOWN",
@@ -76,11 +91,33 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
     );
   }
 
-  const rawToken = _getAccessToken ? await _getAccessToken() : null;
+  let rawToken: string | null = null;
+  if (requiresAuth && _getAccessToken) {
+    try {
+      rawToken = await _getAccessToken();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err ?? "");
+      if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) {
+        setAuthCooldown(AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS);
+        throw new APIError(
+          429,
+          "AUTH_PROVIDER_RATE_LIMIT",
+          "Authentication provider is rate-limited. Please retry shortly.",
+        );
+      }
+      throw new APIError(
+        401,
+        "AUTH_TOKEN_FETCH_FAILED",
+        "Failed to obtain authentication token. Please re-authenticate.",
+      );
+    }
+  }
+
   const token = isLikelyJwt(rawToken) ? rawToken : null;
 
   // Fail closed for protected endpoints before hitting the backend.
-  if (!token && !isPublicPath(path)) {
+  if (requiresAuth && !token) {
+    setAuthCooldown(AUTH_MISSING_TOKEN_COOLDOWN_MS);
     throw new APIError(
       401,
       "AUTH_REQUIRED",
@@ -90,7 +127,7 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(token && { Authorization: `Bearer ${token}` }),
+    ...(requiresAuth && token && { Authorization: `Bearer ${token}` }),
     ...(options?.headers as Record<string, string>),
   };
 
@@ -116,7 +153,10 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
 
     if (!res.ok) {
       if (res.status === 401) {
-        _authRejectedUntil = Date.now() + AUTH_COOLDOWN_MS;
+        setAuthCooldown(AUTH_COOLDOWN_MS);
+      }
+      if (res.status === 429) {
+        setAuthCooldown(AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS);
       }
       if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
         continue;
@@ -125,7 +165,7 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
       throw new APIError(res.status, `HTTP_${res.status}`, text);
     }
 
-    if (!isPublicPath(path)) {
+    if (requiresAuth) {
       _authRejectedUntil = 0;
     }
 

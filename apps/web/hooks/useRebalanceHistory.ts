@@ -14,11 +14,11 @@ export function useRebalanceStatus(address: string | undefined) {
     enabled: !!address && ready && authenticated,
     refetchInterval: (query) => {
       const err = query.state.error;
-      if (err instanceof APIError && err.status === 401) return false;
+      if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;
       return 30_000;
     },
     retry: (failureCount, error) => {
-      if (error instanceof APIError && error.status === 401) return false;
+      if (error instanceof APIError && (error.status === 401 || error.status === 429)) return false;
       return failureCount < 2;
     },
   });
@@ -37,11 +37,11 @@ export function useRebalanceHistory(
     enabled: !!address && ready && authenticated,
     refetchInterval: (query) => {
       const err = query.state.error;
-      if (err instanceof APIError && err.status === 401) return false;
+      if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;
       return 30_000;
     },
     retry: (failureCount, error) => {
-      if (error instanceof APIError && error.status === 401) return false;
+      if (error instanceof APIError && (error.status === 401 || error.status === 429)) return false;
       return failureCount < 2;
     },
   });
