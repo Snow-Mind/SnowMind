@@ -378,6 +378,11 @@ def verify_account_ownership(
     """
     caller_did = auth_claims.get("sub", "")
     if not caller_did:
+        logger.warning(
+            "Authorization denied: missing token subject for account %s (claim_keys=%s)",
+            account.get("address", "?"),
+            sorted(list(auth_claims.keys())),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication identity",
@@ -423,6 +428,14 @@ def verify_account_ownership(
         return
 
     # Legacy accounts with no stored DID must still prove wallet ownership.
+    wallets = _extract_wallet_addresses(auth_claims)
+    if not wallets:
+        logger.warning(
+            "Authorization denied for legacy account %s: token has no wallet identity claims (did=%s claim_keys=%s)",
+            account.get("address", "?"),
+            caller_did,
+            sorted(list(auth_claims.keys())),
+        )
     assert_owner_matches_claims(auth_claims, owner_address)
 
     # Legacy account with missing DID: backfill only after owner-wallet check.

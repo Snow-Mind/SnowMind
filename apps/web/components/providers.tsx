@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { useState, useEffect, useRef } from "react";
-import { PrivyProvider, usePrivy, getIdentityToken } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
 import { privyConfig, PRIVY_APP_ID } from "@/lib/privy";
 import { markAuthRateLimited, setPrivyTokenGetter } from "@/lib/api-client";
 
@@ -54,13 +54,6 @@ function PrivyTokenBridge({ children }: { children: React.ReactNode }) {
     return false;
   };
 
-  const audMatchesAppId = (aud: unknown): boolean => {
-    if (!PRIVY_APP_ID) return false;
-    if (typeof aud === "string") return aud === PRIVY_APP_ID;
-    if (Array.isArray(aud)) return aud.some((v) => v === PRIVY_APP_ID);
-    return false;
-  };
-
   useEffect(() => {
     tokenCacheRef.current = null;
     inFlightRef.current = null;
@@ -102,32 +95,15 @@ function PrivyTokenBridge({ children }: { children: React.ReactNode }) {
           return null;
         }
 
-        let identityToken: string | null = null;
-        try {
-          identityToken = await getIdentityToken();
-        } catch (err) {
-          if (isLikelyRateLimitError(err)) {
-            markAuthRateLimited();
-          }
-        }
-
-        const candidates = [accessToken, identityToken].filter(isLikelyJwt);
-        for (const candidate of candidates) {
-          const payload = parseJwtPayload(candidate);
-          if (payload && audMatchesAppId(payload.aud)) {
-            setCachedToken(candidate);
-            return candidate;
-          }
-        }
-
-        // If audience could not be parsed/matched, prefer access token, then identity token.
+        // Use Privy ACCESS token only for backend authorization.
+        // Identity tokens can omit ownership claims required by account authz checks.
         if (isLikelyJwt(accessToken)) {
-          setCachedToken(accessToken);
-          return accessToken;
-        }
-        if (isLikelyJwt(identityToken)) {
-          setCachedToken(identityToken);
-          return identityToken;
+          const payload = parseJwtPayload(accessToken);
+          const sub = payload?.sub;
+          if (typeof sub === "string" && sub.length > 0) {
+            setCachedToken(accessToken);
+            return accessToken;
+          }
         }
 
         // No valid token available: short cooldown to avoid tight auth loops.
