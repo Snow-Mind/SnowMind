@@ -230,6 +230,12 @@ export default function AppLayout({
   }, [dataLoaded, storeActivated, hasInactiveAccount, hasActiveSessionKey, hasFunds, setAgentActivated, accountDetailError, portfolioError]);
 
   const isAgentActive = !!effectiveSmartAccountAddress && !hasInactiveAccount && (storeActivated || hasActiveSessionKey || hasFunds);
+  const isAuthFault = (err: unknown): boolean => {
+    if (!err || typeof err !== "object") return false;
+    const status = (err as { status?: unknown }).status;
+    return status === 401 || status === 429;
+  };
+  const hasAuthFault = isAuthFault(portfolioError) || isAuthFault(accountDetailError);
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -330,7 +336,7 @@ export default function AppLayout({
   }
 
   // Dashboard-specific loading: wait for hydration to determine routing
-  if (pathname === "/dashboard" && (!clientReady || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady))) {
+  if (pathname === "/dashboard" && (!clientReady || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady && !hasAuthFault))) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
