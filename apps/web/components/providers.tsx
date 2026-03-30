@@ -16,17 +16,43 @@ function PrivyTokenBridge({ children }: { children: React.ReactNode }) {
     return token.split(".").length === 3;
   };
 
+  const parseJwtPayload = (token: string): Record<string, unknown> | null => {
+    try {
+      const [, payloadB64] = token.split(".");
+      if (!payloadB64) return null;
+      const normalized = payloadB64.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+      const json = atob(padded);
+      return JSON.parse(json) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  };
+
+  const audMatchesAppId = (aud: unknown): boolean => {
+    if (!PRIVY_APP_ID) return false;
+    if (typeof aud === "string") return aud === PRIVY_APP_ID;
+    if (Array.isArray(aud)) return aud.some((v) => v === PRIVY_APP_ID);
+    return false;
+  };
+
   useEffect(() => {
     setPrivyTokenGetter(async () => {
-      // Prefer identity token for backend auth; it is always a JWT.
+      const accessToken = await getAccessToken().catch(() => null);
       const identityToken = await getIdentityToken().catch(() => null);
-      if (isLikelyJwt(identityToken)) {
-        return identityToken;
+
+      const candidates = [accessToken, identityToken].filter(isLikelyJwt);
+      for (const candidate of candidates) {
+        const payload = parseJwtPayload(candidate);
+        if (payload && audMatchesAppId(payload.aud)) {
+          return candidate;
+        }
       }
 
-      // Fallback for older sessions where identity token is unavailable.
-      const accessToken = await getAccessToken().catch(() => null);
-      return isLikelyJwt(accessToken) ? accessToken : null;
+      // If audience could not be parsed/matched, prefer access token, then identity token.
+      if (isLikelyJwt(accessToken)) return accessToken;
+      if (isLikelyJwt(identityToken)) return identityToken;
+      return null;
     });
   }, [getAccessToken]);
   return <>{children}</>;

@@ -387,6 +387,10 @@ export default function OnboardingPage() {
 
     setIsReauthenticating(true);
     try {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem("snowmind_auth_repair", "1");
+      }
+
       // Privy login() cannot be called while already authenticated.
       if (authenticated) {
         await logout();
@@ -399,6 +403,13 @@ export default function OnboardingPage() {
       setIsReauthenticating(false);
     }
   };
+
+  useEffect(() => {
+    if (!ready || !authenticated) return;
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem("snowmind_auth_repair");
+    }
+  }, [ready, authenticated]);
 
   // Hydration guard — Zustand persist loads from localStorage as a microtask.
   // By the time this useEffect fires, the store has the correct persisted values.

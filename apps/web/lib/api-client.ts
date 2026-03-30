@@ -64,8 +64,18 @@ export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const AUTH_COOLDOWN_MS = 15_000;
+let _authRejectedUntil = 0;
 
 async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
+  if (!isPublicPath(path) && Date.now() < _authRejectedUntil) {
+    throw new APIError(
+      401,
+      "AUTH_COOLDOWN",
+      "Authentication is being refreshed. Please re-authenticate.",
+    );
+  }
+
   const rawToken = _getAccessToken ? await _getAccessToken() : null;
   const token = isLikelyJwt(rawToken) ? rawToken : null;
 
@@ -105,11 +115,18 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
     }
 
     if (!res.ok) {
+      if (res.status === 401) {
+        _authRejectedUntil = Date.now() + AUTH_COOLDOWN_MS;
+      }
       if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
         continue;
       }
       const text = await res.text().catch(() => "Unknown error");
       throw new APIError(res.status, `HTTP_${res.status}`, text);
+    }
+
+    if (!isPublicPath(path)) {
+      _authRejectedUntil = 0;
     }
 
     return res.json() as Promise<T>;

@@ -231,9 +231,17 @@ export default function AppLayout({
   // Redirect to landing if not authenticated
   useEffect(() => {
     if (ready && !authenticated) {
+      const authRepairInProgress =
+        typeof window !== "undefined"
+        && window.sessionStorage.getItem("snowmind_auth_repair") === "1";
+
+      // Keep the user on onboarding during explicit re-auth repair flow.
+      if (pathname === "/onboarding" && authRepairInProgress) {
+        return;
+      }
       router.replace("/");
     }
-  }, [ready, authenticated, router]);
+  }, [ready, authenticated, router, pathname]);
 
   // Redirect new users (no stored smart account) to onboarding.
   // Gated on clientReady to prevent false redirect during Zustand hydration.
