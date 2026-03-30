@@ -210,7 +210,7 @@ export default function OnboardingPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
-  const { activeWallet, login } = useAuth();
+  const { activeWallet, login, logout, authenticated, ready } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
   const { data: accountDetail, error: accountDetailError } = useAccountDetail(smartAccountAddress ?? undefined);
   const { wallets } = useWallets();
@@ -300,6 +300,7 @@ export default function OnboardingPage() {
   const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
   const [activationError, setActivationError] = useState<string | null>(null);
   const [regrantOnlyMode, setRegrantOnlyMode] = useState(false);
+  const [isReauthenticating, setIsReauthenticating] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activateGuardRef = useRef(false);
 
@@ -381,6 +382,24 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleReauthenticate = async () => {
+    if (isReauthenticating) return;
+
+    setIsReauthenticating(true);
+    try {
+      // Privy login() cannot be called while already authenticated.
+      if (authenticated) {
+        await logout();
+        await sleep(150);
+      }
+      login();
+    } catch {
+      toast.error("Could not reset your session. Please try again.");
+    } finally {
+      setIsReauthenticating(false);
+    }
+  };
+
   // Hydration guard — Zustand persist loads from localStorage as a microtask.
   // By the time this useEffect fires, the store has the correct persisted values.
   // This prevents false-positive "new user" detection during SSR→client hydration.
@@ -429,17 +448,19 @@ export default function OnboardingPage() {
       setSmartAccountAddress(derivedAddr);
 
       // Query backend for returning user
-      try {
-        const accountDetail = await api.getAccountDetail(derivedAddr);
-        if (accountDetail?.address && accountDetail.sessionKey?.isActive) {
-          setAgentActivated(true);
+      if (ready && authenticated) {
+        try {
+          const accountDetail = await api.getAccountDetail(derivedAddr);
+          if (accountDetail?.address && accountDetail.sessionKey?.isActive) {
+            setAgentActivated(true);
+          }
+          if (accountDetail?.id && accountDetail.isActive && !accountDetail.sessionKey?.isActive) {
+            setRegrantOnlyMode(true);
+            setDepositAmount("0");
+          }
+        } catch {
+          // Backend doesn't know this account — new user, that's fine
         }
-        if (accountDetail?.id && accountDetail.isActive && !accountDetail.sessionKey?.isActive) {
-          setRegrantOnlyMode(true);
-          setDepositAmount("0");
-        }
-      } catch {
-        // Backend doesn't know this account — new user, that's fine
       }
 
       setDeployPhase("deployed");
@@ -488,6 +509,12 @@ export default function OnboardingPage() {
   // Giza-style activation: ERC-20 transfer + session key + register (Signature 2)
   const handleActivate = async () => {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
+    if (!ready || !authenticated || hasAuthError) {
+      setActivationPhase("error");
+      setActivationError("Authentication expired. Please re-authenticate and retry activation.");
+      toast.error("Please re-authenticate first.");
+      return;
+    }
     if (activateGuardRef.current) return;
     activateGuardRef.current = true;
     setActivating(true);
@@ -499,6 +526,10 @@ export default function OnboardingPage() {
     let activationAddress = smartAccountAddress;
 
     try {
+      // Preflight auth check before any on-chain action.
+      // Prevents transferring/signing when the backend session is already invalid.
+      await api.getAccountDetail(smartAccountAddress);
+
       // Re-derive kernel account/client if refs are stale (e.g. page refresh)
       let kernelAccount = kernelAccountRef.current;
       let kernelClient = kernelClientRef.current;
@@ -803,6 +834,17 @@ export default function OnboardingPage() {
     } catch (err) {
       activateGuardRef.current = false;
       setOnboardingInProgress(false);
+
+      if (err instanceof APIError && err.status === 401) {
+        setActivationPhase("error");
+        setActivationError(
+          "Authentication expired while activating. Re-authenticate and retry. "
+          + "Your funds remain safe in your smart account."
+        );
+        toast.error("Session expired. Re-authenticate and retry activation.");
+        return;
+      }
+
       const msg = err instanceof Error ? err.message : String(err);
 
       if (activationAddress && await hasConfirmedActivation(activationAddress)) {
@@ -893,10 +935,13 @@ export default function OnboardingPage() {
             </p>
             <div className="mt-3 flex gap-2">
               <button
-                onClick={() => login()}
+                onClick={() => {
+                  void handleReauthenticate();
+                }}
+                disabled={isReauthenticating}
                 className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
               >
-                Re-authenticate
+                {isReauthenticating ? "Re-authenticating..." : "Re-authenticate"}
               </button>
               <button
                 onClick={() => router.replace("/")}
@@ -1435,8 +1480,8 @@ export default function OnboardingPage() {
                       Back
                     </button>
                     <button
-                      onClick={() => { setActivationError(null); handleActivate(); }}
-                      disabled={!wallet}
+                      onClick={() => { setActivationError(null); void handleActivate(); }}
+                      disabled={!wallet || hasAuthError || !ready || !authenticated}
                       className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                     >
                       <Zap className="h-4 w-4" />
@@ -1498,8 +1543,10 @@ export default function OnboardingPage() {
                       Back
                     </button>
                     <button
-                      onClick={handleActivate}
-                      disabled={!wallet || !isValidAmount}
+                      onClick={() => {
+                        void handleActivate();
+                      }}
+                      disabled={!wallet || !isValidAmount || hasAuthError || !ready || !authenticated}
                       className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                     >
                       <Zap className="h-4 w-4" />

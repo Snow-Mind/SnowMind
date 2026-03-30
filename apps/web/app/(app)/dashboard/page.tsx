@@ -23,7 +23,7 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
-import { api } from "@/lib/api-client";
+import { api, APIError } from "@/lib/api-client";
 import { useAuth } from "@/hooks/useAuth";
 import type { Portfolio } from "@snowmind/shared-types";
 
@@ -117,6 +117,10 @@ export default function DashboardPage() {
     queryFn: () => (address ? api.getAccountDetail(address) : Promise.reject("No address")),
     enabled: !!address && ready && authenticated,
     staleTime: 60000, // 1 minute
+    retry: (failureCount, error) => {
+      if (error instanceof APIError && error.status === 401) return false;
+      return failureCount < 2;
+    },
   });
 
   useRealtimePortfolio(address);

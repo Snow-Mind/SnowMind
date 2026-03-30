@@ -86,6 +86,21 @@ async def require_jwt(
 _privy_jwks_cache: dict | None = None
 _privy_jwks_last_fetch: float = 0.0
 _PRIVY_JWKS_CACHE_TTL = 3600  # 1 hour
+_AUTH_REJECT_LOG_THROTTLE_SECONDS = 60.0
+_auth_reject_last_logged: dict[str, float] = {}
+_auth_reject_lock = threading.Lock()
+
+
+def _log_auth_rejection(reason: str) -> None:
+    """Log auth reject reasons with throttling to avoid log storms."""
+    now = time.time()
+    with _auth_reject_lock:
+        last = _auth_reject_last_logged.get(reason, 0.0)
+        if (now - last) < _AUTH_REJECT_LOG_THROTTLE_SECONDS:
+            return
+        _auth_reject_last_logged[reason] = now
+
+    logger.warning("Privy auth rejected: %s", reason)
 
 
 async def _fetch_privy_jwks(app_id: str) -> dict:
@@ -162,12 +177,26 @@ async def require_privy_auth(
 
     Returns Privy claims with at minimum ``sub`` (Privy DID).
     """
-    if authorization:
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() == "bearer" and token:
-            payload = await verify_privy_token(token)
-            if payload:
-                return payload
+    if not authorization:
+        _log_auth_rejection("missing_authorization_header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing authentication",
+        )
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        _log_auth_rejection("malformed_authorization_header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing authentication",
+        )
+
+    payload = await verify_privy_token(token)
+    if payload:
+        return payload
+
+    _log_auth_rejection("invalid_or_unverifiable_bearer_token")
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

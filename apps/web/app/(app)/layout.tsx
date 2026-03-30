@@ -173,15 +173,17 @@ export default function AppLayout({
   const pathname = usePathname();
   const { authenticated, ready, logout, activeWallet, eoaAddress } = useAuth();
   const smartAccount = useSmartAccount(activeWallet);
-  const { data: portfolio, isLoading: portfolioLoading, error: portfolioError } = usePortfolio(smartAccount.address ?? undefined);
-  const { data: accountDetail, isLoading: accountDetailLoading, error: accountDetailError } = useAccountDetail(smartAccount.address ?? undefined);
+  const storedSmartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const effectiveSmartAccountAddress = smartAccount.address ?? storedSmartAccountAddress;
+  const { data: portfolio, isLoading: portfolioLoading, error: portfolioError } = usePortfolio(effectiveSmartAccountAddress ?? undefined);
+  const { data: accountDetail, isLoading: accountDetailLoading, error: accountDetailError } = useAccountDetail(effectiveSmartAccountAddress ?? undefined);
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
 
   const handleDeactivateAgent = async () => {
-    const addr = smartAccount.address;
+    const addr = effectiveSmartAccountAddress;
     smartAccount.resetAccount();
     setAgentActivated(false);
     setShowAgentDetails(false);
@@ -209,7 +211,7 @@ export default function AppLayout({
     (a) => Number(a.amountUsdc) > 0,
   ) ?? false;
   const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
-  const hasInactiveAccount = !!smartAccount.address && accountDetail?.isActive === false;
+  const hasInactiveAccount = !!effectiveSmartAccountAddress && accountDetail?.isActive === false;
   // True only after Zustand persist has finished hydrating from localStorage.
   const clientReady = usePortfolioHydrated();
 
@@ -217,14 +219,14 @@ export default function AppLayout({
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
   // Require clientReady + real API data (both queries finished AND smartAccount resolved)
   // NEVER clear on query errors — transient 500s/CORS failures must not deactivate agent
-  const dataLoaded = clientReady && !portfolioLoading && !accountDetailLoading && !!smartAccount.address;
+  const dataLoaded = clientReady && !portfolioLoading && !accountDetailLoading && !!effectiveSmartAccountAddress;
   useEffect(() => {
     if (dataLoaded && storeActivated && (hasInactiveAccount || (!hasActiveSessionKey && !hasFunds)) && !accountDetailError && !portfolioError) {
       setAgentActivated(false);
     }
   }, [dataLoaded, storeActivated, hasInactiveAccount, hasActiveSessionKey, hasFunds, setAgentActivated, accountDetailError, portfolioError]);
 
-  const isAgentActive = !!smartAccount.address && !hasInactiveAccount && (storeActivated || hasActiveSessionKey || hasFunds);
+  const isAgentActive = !!effectiveSmartAccountAddress && !hasInactiveAccount && (storeActivated || hasActiveSessionKey || hasFunds);
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -246,8 +248,8 @@ export default function AppLayout({
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
   // Never redirect when queries errored — transient failures must not disrupt UX.
-  const dataReady = clientReady && (storeActivated || (!!smartAccount.address && !portfolioLoading && !accountDetailLoading));
-  const accountDataReady = clientReady && !!smartAccount.address && !portfolioLoading && !accountDetailLoading;
+  const dataReady = clientReady && (storeActivated || (!!effectiveSmartAccountAddress && !portfolioLoading && !accountDetailLoading));
+  const accountDataReady = clientReady && !!effectiveSmartAccountAddress && !portfolioLoading && !accountDetailLoading;
   useEffect(() => {
     if (!dataReady) return;
     if (accountDetailError || portfolioError) return;
@@ -288,7 +290,7 @@ export default function AppLayout({
   if (!authenticated) return null;
 
   // Dashboard-specific loading: wait for hydration to determine routing
-  if (pathname === "/dashboard" && (!clientReady || (!storeActivated && !isAgentActive && !dataReady))) {
+  if (pathname === "/dashboard" && (!clientReady || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady))) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
@@ -300,7 +302,7 @@ export default function AppLayout({
     <div className="app-light min-h-screen bg-[#F5F0EB] text-[#1A1715]">
       <div className="flex min-h-screen flex-col">
         <TopBar
-          smartAccountAddress={smartAccount.address}
+          smartAccountAddress={effectiveSmartAccountAddress}
           eoaAddress={eoaAddress}
           isAgentActive={isAgentActive}
           onDeposit={() => setShowDeposit(true)}
@@ -325,9 +327,9 @@ export default function AppLayout({
       )}
 
       {/* Agent Details Modal — Giza-style */}
-      {showAgentDetails && smartAccount.address && (
+      {showAgentDetails && effectiveSmartAccountAddress && (
         <AgentDetailsModal
-          smartAccountAddress={smartAccount.address}
+          smartAccountAddress={effectiveSmartAccountAddress}
           onClose={() => setShowAgentDetails(false)}
           onDeactivate={handleDeactivateAgent}
         />

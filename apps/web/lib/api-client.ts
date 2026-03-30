@@ -44,6 +44,19 @@ export class NetworkError extends Error {
  */
 let _getAccessToken: (() => Promise<string | null>) | null = null;
 
+function isLikelyJwt(token: string | null | undefined): token is string {
+  if (!token) return false;
+  return token.split(".").length === 3;
+}
+
+function isPublicPath(path: string): boolean {
+  return (
+    path === "/api/v1/health"
+    || path.startsWith("/api/v1/optimizer/rates")
+    || path === "/api/v1/platform/tvl"
+  );
+}
+
 export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
   _getAccessToken = getter;
 }
@@ -53,7 +66,17 @@ const RETRY_DELAY_MS = 1000;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 
 async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
-  const token = _getAccessToken ? await _getAccessToken() : null;
+  const rawToken = _getAccessToken ? await _getAccessToken() : null;
+  const token = isLikelyJwt(rawToken) ? rawToken : null;
+
+  // Fail closed for protected endpoints before hitting the backend.
+  if (!token && !isPublicPath(path)) {
+    throw new APIError(
+      401,
+      "AUTH_REQUIRED",
+      "Missing or invalid authentication token. Please re-authenticate.",
+    );
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
