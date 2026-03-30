@@ -296,34 +296,6 @@ async def verify_privy_token(token: str) -> dict | None:
                 last_err = exc
                 continue
 
-        # Some valid Privy tokens can carry non-standard audience shapes.
-        # As a fallback, accept tokens with valid signature/issuer and expiry
-        # when audience verification is the only failing condition.
-        for issuer in issuers:
-            try:
-                payload = jwt.decode(
-                    token,
-                    jwks,
-                    algorithms=algorithms,
-                    issuer=issuer,
-                    options={"verify_aud": False},
-                )
-                logger.warning(
-                    "Privy token accepted with relaxed audience check "
-                    "(iss=%s aud=%s expected_aud=%s)",
-                    payload.get("iss"),
-                    payload.get("aud"),
-                    s.PRIVY_APP_ID,
-                )
-                return await _maybe_enrich_wallet_claims(
-                    payload,
-                    app_id=s.PRIVY_APP_ID,
-                    app_secret=s.PRIVY_APP_SECRET,
-                )
-            except JWTError as exc:
-                last_err = exc
-                continue
-
         if last_err is not None:
             try:
                 header = jwt.get_unverified_header(token)

@@ -275,3 +275,52 @@ async def test_fetch_privy_jwks_falls_back_to_legacy_endpoint(monkeypatch: pytes
         "https://auth.privy.io/api/v1/apps/app_123/jwks.json",
         "https://auth.privy.io/api/v1/apps/app_123/.well-known/jwks.json",
     ]
+
+
+@pytest.mark.asyncio
+async def test_verify_privy_token_rejects_audience_mismatch_without_relaxed_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Settings:
+        PRIVY_APP_ID = "app_123"
+        PRIVY_APP_SECRET = "secret_123"
+
+    async def _fake_fetch_jwks(app_id: str) -> dict:
+        assert app_id == "app_123"
+        return {"keys": [{"kid": "k1"}]}
+
+    used_relaxed_path = False
+
+    def _fake_decode(
+        token: str,
+        jwks: dict,
+        algorithms: list[str],
+        audience: str | None = None,
+        issuer: str | None = None,
+        options: dict | None = None,
+    ) -> dict:
+        del token, jwks, algorithms, audience, issuer
+        nonlocal used_relaxed_path
+        if options and options.get("verify_aud") is False:
+            used_relaxed_path = True
+            return {
+                "sub": "did:privy:user-1",
+                "aud": "wrong_audience",
+                "iss": "privy.io",
+            }
+        raise security.JWTError("audience mismatch")
+
+    monkeypatch.setattr(security, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(security, "_fetch_privy_jwks", _fake_fetch_jwks)
+    monkeypatch.setattr(security.jwt, "decode", _fake_decode)
+    monkeypatch.setattr(security.jwt, "get_unverified_header", lambda _token: {"alg": "ES256", "kid": "k1"})
+    monkeypatch.setattr(
+        security.jwt,
+        "get_unverified_claims",
+        lambda _token: {"iss": "privy.io", "aud": "wrong_audience"},
+    )
+
+    result = await security.verify_privy_token("dummy_token")
+
+    assert result is None
+    assert used_relaxed_path is False
