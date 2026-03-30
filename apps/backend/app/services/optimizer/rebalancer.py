@@ -3,6 +3,7 @@
 Transaction ordering: withdrawals FIRST, then deposits (ensure funds are available).
 """
 
+import asyncio
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,11 @@ ERC20_BALANCE_ABI = [
         "stateMutability": "view",
     }
 ]
+
+# Per-account execution lock to prevent concurrent rebalance submissions
+# (e.g. scheduler + manual trigger + onboarding initial deployment) from
+# racing and producing contradictory outcomes.
+_REBALANCE_EXECUTION_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _permission_blob_contains_address(serialized_permission: str, address: str) -> bool:
@@ -204,6 +210,28 @@ class Rebalancer:
             except Exception as exc:
                 logger.debug("On-chain balance check for %s/%s failed: %s", smart_account_address, pid, exc)
         return discovered
+
+    async def _execute_rebalance_once(
+        self,
+        account_id: str,
+        smart_account_address: str,
+        target_allocations: dict[str, Decimal],
+    ) -> str | None:
+        """Execute one rebalance per account at a time.
+
+        Prevents duplicate concurrent UserOps that can happen when multiple
+        triggers race (manual trigger and initial onboarding task).
+        """
+        execution_lock = _REBALANCE_EXECUTION_LOCKS.setdefault(account_id, asyncio.Lock())
+        if execution_lock.locked():
+            raise RuntimeError("REBALANCE_IN_FLIGHT")
+
+        async with execution_lock:
+            return await self.execute_rebalance(
+                account_id=account_id,
+                smart_account_address=smart_account_address,
+                target_allocations=target_allocations,
+            )
 
     # â”€â”€ Full pipeline (cron entry-point) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -996,11 +1024,25 @@ class Rebalancer:
             global_flag.name, is_initial_deployment,
         )
         try:
-            tx_hash = await self.execute_rebalance(
+            tx_hash = await self._execute_rebalance_once(
                 account_id=account_id,
                 smart_account_address=smart_account_address,
                 target_allocations=result_allocations,
             )
+        except RuntimeError as exc:
+            if str(exc) == "REBALANCE_IN_FLIGHT":
+                logger.info(
+                    "Rebalance for %s skipped — another attempt in flight",
+                    smart_account_address,
+                )
+                return await self._log(
+                    db,
+                    account_id,
+                    "skipped",
+                    reason="Another rebalance attempt in flight",
+                    proposed=result_allocations,
+                )
+            raise
         except ValueError as exc:
             # Non-retryable (e.g. invalid/revoked session key)
             logger.warning("Rebalance skipped for %s: %s", smart_account_address, exc)
@@ -1061,7 +1103,7 @@ class Rebalancer:
                         primary_protocol,
                     )
                     try:
-                        tx_hash = await self.execute_rebalance(
+                        tx_hash = await self._execute_rebalance_once(
                             account_id=account_id,
                             smart_account_address=smart_account_address,
                             target_allocations=fallback_target,

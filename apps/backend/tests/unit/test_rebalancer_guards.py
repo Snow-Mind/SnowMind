@@ -5,12 +5,14 @@ These tests verify the fixes for the production failure where:
 2. On-chain balance reads 0 while DB has a position → deposit-only rebalance
 3. Backend sent deposit-only rebalances with no USDC available
 """
+import asyncio
 import pytest
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from app.services.optimizer.rebalancer import Rebalancer
+import app.services.optimizer.rebalancer as rebalancer_module
 
 
 @pytest.fixture
@@ -150,3 +152,49 @@ class TestBalanceGuard:
 
             assert result == "0xtxhash456"
             mock_exec.assert_called_once()
+
+
+class TestExecutionLock:
+    """Tests for per-account execution lock in rebalance pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalance_once_runs_when_unlocked(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        target = {"benqi": Decimal("1.00")}
+
+        rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()
+
+        with patch.object(rebalancer, "execute_rebalance", new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = "0xtestlock"
+
+            result = await rebalancer._execute_rebalance_once(
+                account_id=account_id,
+                smart_account_address=smart_account,
+                target_allocations=target,
+            )
+
+            assert result == "0xtestlock"
+            mock_exec.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalance_once_raises_when_in_flight(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        target = {"benqi": Decimal("1.00")}
+
+        rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()
+        lock = asyncio.Lock()
+        await lock.acquire()
+        rebalancer_module._REBALANCE_EXECUTION_LOCKS[account_id] = lock
+
+        try:
+            with pytest.raises(RuntimeError, match="REBALANCE_IN_FLIGHT"):
+                await rebalancer._execute_rebalance_once(
+                    account_id=account_id,
+                    smart_account_address=smart_account,
+                    target_allocations=target,
+                )
+        finally:
+            lock.release()
+            rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()

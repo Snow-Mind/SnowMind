@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -9,24 +9,8 @@ import { navigation } from "@/lib/navigation";
 export function Sidebar() {
   const pathname = usePathname();
 
-  // Auto-open the group that contains the active page
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {};
-    for (const group of navigation) {
-      const hasActive = group.items.some((item) => pathname === item.href);
-      initial[group.title] = hasActive;
-    }
-    return initial;
-  });
-
-  // Keep group open when navigating within it
-  useEffect(() => {
-    for (const group of navigation) {
-      if (group.items.some((item) => pathname === item.href)) {
-        setOpenGroups((prev) => ({ ...prev, [group.title]: true }));
-      }
-    }
-  }, [pathname]);
+  // Explicit user toggles override the default behavior for active groups.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean | undefined>>({});
 
   function toggleGroup(title: string) {
     setOpenGroups((prev) => ({ ...prev, [title]: !prev[title] }));
@@ -36,8 +20,8 @@ export function Sidebar() {
     <nav className="w-64 shrink-0 border-r border-snow-border bg-snow-surface overflow-y-auto h-[calc(100vh-57px)] sticky top-[57px] hidden lg:block">
       <div className="p-4 space-y-1">
         {navigation.map((group) => {
-          const isOpen = openGroups[group.title] ?? false;
           const hasActive = group.items.some((item) => pathname === item.href);
+          const isOpen = openGroups[group.title] ?? hasActive;
 
           return (
             <div key={group.title}>

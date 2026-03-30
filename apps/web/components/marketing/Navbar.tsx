@@ -8,8 +8,6 @@ import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 
 const NAV_LINKS = [
   { href: "/#how-it-works", label: "How It Works" },
-  { href: "/demo", label: "Demo" },
-  { href: "/activity", label: "Activity" },
 ] as const;
 
 export default function Navbar() {

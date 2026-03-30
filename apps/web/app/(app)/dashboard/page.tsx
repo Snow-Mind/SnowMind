@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
@@ -131,6 +131,17 @@ export default function DashboardPage() {
     rebalanceHistoryError,
   ].some((err) => err instanceof APIError && (err.status === 401 || err.status === 429));
 
+  const refreshDashboardQueries = useCallback(async () => {
+    if (!address) return;
+
+    await Promise.allSettled([
+      refetchPortfolio(),
+      queryClient.refetchQueries({ queryKey: ["rebalance-status", address], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["account-detail", address], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["rebalance-history", address], type: "active" }),
+    ]);
+  }, [address, queryClient, refetchPortfolio]);
+
   useRealtimePortfolio(address);
 
   const { data: rates } = useProtocolRates();
@@ -167,10 +178,7 @@ export default function DashboardPage() {
     if (!address || hasAuthFault) return;
 
     const refresh = () => {
-      queryClient.invalidateQueries({ queryKey: ["portfolio", address] });
-      queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] });
-      queryClient.invalidateQueries({ queryKey: ["account-detail", address] });
-      queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] });
+      void refreshDashboardQueries();
     };
 
     const handleVisibilityChange = () => {
@@ -186,7 +194,7 @@ export default function DashboardPage() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [address, hasAuthFault, queryClient]);
+  }, [address, hasAuthFault, refreshDashboardQueries]);
 
   // If funds are idle and session key is active, kick a best-effort immediate
   // rebalance so users do not wait for the next scheduler tick.
@@ -197,9 +205,7 @@ export default function DashboardPage() {
 
     void api.triggerRebalance(address)
       .then(() => {
-        queryClient.invalidateQueries({ queryKey: ["portfolio", address] });
-        queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] });
-        queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] });
+        void refreshDashboardQueries();
       })
       .catch((err: unknown) => {
         if (process.env.NODE_ENV !== "production") {
@@ -207,7 +213,7 @@ export default function DashboardPage() {
           console.debug("[Dashboard] triggerRebalance bootstrap failed:", msg);
         }
       });
-  }, [address, isIdleOnlyDeployment, hasActiveSessionKey, hasAuthFault, queryClient]);
+  }, [address, isIdleOnlyDeployment, hasActiveSessionKey, hasAuthFault, refreshDashboardQueries]);
 
   // Aggressively poll for a short window so the "deploying" state clears
   // quickly without requiring a manual refresh (mobile and desktop).
@@ -215,16 +221,12 @@ export default function DashboardPage() {
     if (!address || !isIdleOnlyDeployment || hasAuthFault) return;
 
     let attempts = 0;
-    const maxAttempts = activatedFromOnboarding ? 24 : 36; // 2-3 minutes
+    const intervalMs = activatedFromOnboarding ? 2500 : 4000;
+    const maxAttempts = activatedFromOnboarding ? 48 : 45; // ~2-3 minutes
 
     const tick = async () => {
       attempts += 1;
-      await Promise.allSettled([
-        refetchPortfolio(),
-        queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] }),
-        queryClient.invalidateQueries({ queryKey: ["account-detail", address] }),
-        queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] }),
-      ]);
+      await refreshDashboardQueries();
     };
 
     void tick();
@@ -234,12 +236,36 @@ export default function DashboardPage() {
         return;
       }
       void tick();
-    }, 5000);
+    }, intervalMs);
 
     return () => {
       window.clearInterval(interval);
     };
-  }, [address, activatedFromOnboarding, isIdleOnlyDeployment, hasAuthFault, queryClient, refetchPortfolio]);
+  }, [address, activatedFromOnboarding, isIdleOnlyDeployment, hasAuthFault, refreshDashboardQueries]);
+
+  // When execution succeeds but allocations are still rendering as idle,
+  // briefly burst-refresh portfolio so the deployed market appears quickly.
+  useEffect(() => {
+    if (!address || !isIdleOnlyDeployment || hasAuthFault) return;
+    if (rebalanceStatus?.status !== "executed") return;
+
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    void refetchPortfolio();
+
+    const burst = window.setInterval(() => {
+      attempts += 1;
+      void refetchPortfolio();
+      if (attempts >= maxAttempts) {
+        window.clearInterval(burst);
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(burst);
+    };
+  }, [address, isIdleOnlyDeployment, hasAuthFault, rebalanceStatus?.status, refetchPortfolio]);
 
   const regrantReason = rebalanceStatus?.reasonDetail
     ?? "Your session key needs to be granted again before automated rebalancing can continue.";

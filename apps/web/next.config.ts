@@ -2,6 +2,25 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  async redirects() {
+    return [
+      {
+        source: "/demo",
+        destination: "/how-it-works",
+        permanent: true,
+      },
+      {
+        source: "/activity",
+        destination: "/how-it-works",
+        permanent: true,
+      },
+      {
+        source: "/docs",
+        destination: "https://docs.snowmind.xyz/",
+        permanent: true,
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "snowmind.xyz" },

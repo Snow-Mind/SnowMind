@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X, ChevronRight } from "lucide-react";
@@ -10,27 +10,8 @@ export function MobileNav() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
 
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {};
-    for (const group of navigation) {
-      const hasActive = group.items.some((item) => pathname === item.href);
-      initial[group.title] = hasActive;
-    }
-    return initial;
-  });
-
-  useEffect(() => {
-    for (const group of navigation) {
-      if (group.items.some((item) => pathname === item.href)) {
-        setOpenGroups((prev) => ({ ...prev, [group.title]: true }));
-      }
-    }
-  }, [pathname]);
-
-  // Close the mobile drawer after navigation completes.
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
+  // Explicit user toggles override the default behavior for active groups.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean | undefined>>({});
 
   function toggleGroup(title: string) {
     setOpenGroups((prev) => ({ ...prev, [title]: !prev[title] }));
@@ -50,8 +31,8 @@ export function MobileNav() {
         <div className="absolute left-0 right-0 top-[57px] z-50 h-[calc(100dvh-57px)] border-b border-snow-border bg-snow-surface overflow-y-auto">
           <div className="p-4 space-y-1">
             {navigation.map((group) => {
-              const isGroupOpen = openGroups[group.title] ?? false;
               const hasActive = group.items.some((item) => pathname === item.href);
+              const isGroupOpen = openGroups[group.title] ?? hasActive;
 
               return (
                 <div key={group.title}>

@@ -25,6 +25,7 @@ export default function SafeResponsiveContainer({
 }: SafeResponsiveContainerProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const [canRender, setCanRender] = useState(false);
+  const [size, setSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -32,8 +33,11 @@ export default function SafeResponsiveContainer({
 
     const update = () => {
       const rect = wrapper.getBoundingClientRect();
+      const nextWidth = Math.max(0, Math.floor(rect.width));
+      const nextHeight = Math.max(0, Math.floor(rect.height));
+      setSize({ width: nextWidth, height: nextHeight });
       setCanRender(
-        rect.width >= MIN_RENDER_SIZE && rect.height >= MIN_RENDER_SIZE,
+        nextWidth >= MIN_RENDER_SIZE && nextHeight >= MIN_RENDER_SIZE,
       );
     };
 
@@ -63,8 +67,8 @@ export default function SafeResponsiveContainer({
     >
       {canRender ? (
         <ResponsiveContainer
-          width="100%"
-          height="100%"
+          width={size.width}
+          height={size.height}
           minWidth={minWidth}
           minHeight={minHeight}
           {...rest}
