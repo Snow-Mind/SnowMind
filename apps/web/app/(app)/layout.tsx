@@ -184,6 +184,7 @@ export default function AppLayout({
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
+  const appQueryClient = useQueryClient();
 
   const handleDeactivateAgent = async () => {
     const addr = effectiveSmartAccountAddress;
@@ -198,6 +199,11 @@ export default function AppLayout({
       } catch {
         // Will retry on next visit
       }
+
+      await Promise.allSettled([
+        appQueryClient.invalidateQueries({ queryKey: ["account-detail", addr] }),
+        appQueryClient.invalidateQueries({ queryKey: ["portfolio", addr] }),
+      ]);
     }
     router.replace("/onboarding");
   };
@@ -210,26 +216,33 @@ export default function AppLayout({
   // Agent is "active" when it has an active session key (backend can auto-rebalance)
   // OR the store flag is set (immediate after activation, before query refetch)
   // OR funds exist (deployed to protocols OR idle USDC waiting for optimizer)
-  const hasFunds = portfolio?.allocations?.some(
-    (a) => Number(a.amountUsdc) > 0,
-  ) ?? false;
+  const depositedUsd = Number(portfolio?.totalDepositedUsd ?? "0");
+  const hasFunds = (
+    (Number.isFinite(depositedUsd) && depositedUsd > 0.01)
+    || (portfolio?.allocations?.some((a) => Number(a.amountUsdc) > 0) ?? false)
+  );
   const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
   const hasInactiveAccount = !!effectiveSmartAccountAddress && accountDetail?.isActive === false;
   // True only after Zustand persist has finished hydrating from localStorage.
   const clientReady = usePortfolioHydrated();
+  const accountDataReady = clientReady && !!effectiveSmartAccountAddress && !portfolioLoading && !accountDetailLoading;
+  // Use persisted activation only as a temporary optimistic signal before API data is ready.
+  // Once backend state is loaded, rely on authoritative session key + funds signals only.
+  const optimisticStoreActive = storeActivated && !accountDataReady;
 
   // Clear stale storeActivated flag ONLY when real data proves no activation
   // Keep flag if user has any funds (idle or deployed) — optimizer will deploy them
   // Require clientReady + real API data (both queries finished AND smartAccount resolved)
   // NEVER clear on query errors — transient 500s/CORS failures must not deactivate agent
-  const dataLoaded = clientReady && !portfolioLoading && !accountDetailLoading && !!effectiveSmartAccountAddress;
+  const dataLoaded = accountDataReady;
   useEffect(() => {
     if (dataLoaded && storeActivated && (hasInactiveAccount || (!hasActiveSessionKey && !hasFunds)) && !accountDetailError && !portfolioError) {
       setAgentActivated(false);
     }
   }, [dataLoaded, storeActivated, hasInactiveAccount, hasActiveSessionKey, hasFunds, setAgentActivated, accountDetailError, portfolioError]);
 
-  const isAgentActive = !!effectiveSmartAccountAddress && !hasInactiveAccount && (storeActivated || hasActiveSessionKey || hasFunds);
+  const isAgentActive = !!effectiveSmartAccountAddress && !hasInactiveAccount
+    && (optimisticStoreActive || hasActiveSessionKey || hasFunds);
   const isAuthFault = (err: unknown): boolean => {
     if (!err || typeof err !== "object") return false;
     const status = (err as { status?: unknown }).status;
@@ -261,8 +274,7 @@ export default function AppLayout({
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
   // Never redirect when queries errored — transient failures must not disrupt UX.
-  const dataReady = clientReady && (storeActivated || (!!effectiveSmartAccountAddress && !portfolioLoading && !accountDetailLoading));
-  const accountDataReady = clientReady && !!effectiveSmartAccountAddress && !portfolioLoading && !accountDetailLoading;
+  const dataReady = clientReady && (optimisticStoreActive || accountDataReady);
   useEffect(() => {
     if (!dataReady) return;
     if (accountDetailError || portfolioError) return;

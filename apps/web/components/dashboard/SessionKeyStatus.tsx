@@ -20,6 +20,7 @@ import { useSessionKey } from "@/hooks/useSessionKey";
 import { useWallets } from "@privy-io/react-auth";
 import { createSmartAccount, grantAndSerializeSessionKey } from "@/lib/zerodev";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface AuthorizedAction {
   protocol: string;
@@ -79,6 +80,8 @@ export default function SessionKeyStatus() {
   const [revoking, setRevoking] = useState(false);
   const [granting, setGranting] = useState(false);
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
+  const queryClient = useQueryClient();
   const { data: sk, isLoading, refetch } = useSessionKey(smartAccountAddress ?? undefined);
   const { wallets } = useWallets();
   const scopedProtocols = normalizeAllowedProtocols(sk?.allowedProtocols);
@@ -175,9 +178,14 @@ export default function SessionKeyStatus() {
     setRevoking(true);
     try {
       await api.revokeSessionKey(smartAccountAddress);
+      setAgentActivated(false);
       toast.success("Session key revoked");
       setShowRevokeConfirm(false);
-      refetch();
+      await Promise.allSettled([
+        queryClient.invalidateQueries({ queryKey: ["account-detail", smartAccountAddress] }),
+        queryClient.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] }),
+        refetch(),
+      ]);
     } catch {
       toast.error("Failed to revoke session key");
     } finally {
