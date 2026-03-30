@@ -197,8 +197,26 @@ async def verify_privy_token(token: str) -> dict | None:
                     parse_exc,
                 )
         return None
-    except (JWTError, httpx.HTTPError) as exc:
+    except JWTError as exc:
         logger.debug("Privy token verification failed: %s", exc)
+        return None
+    except httpx.HTTPError as exc:
+        token_aud = None
+        token_iss = None
+        try:
+            claims = jwt.get_unverified_claims(token)
+            token_aud = claims.get("aud")
+            token_iss = claims.get("iss")
+        except Exception:
+            pass
+
+        logger.warning(
+            "Privy JWKS/token HTTP failure (configured_app_id=%s token_aud=%s token_iss=%s): %s",
+            s.PRIVY_APP_ID,
+            token_aud,
+            token_iss,
+            exc,
+        )
         return None
     except Exception as exc:
         logger.warning("Unexpected error verifying Privy token: %s", exc)

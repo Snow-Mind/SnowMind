@@ -301,8 +301,10 @@ export default function OnboardingPage() {
   const [activationError, setActivationError] = useState<string | null>(null);
   const [regrantOnlyMode, setRegrantOnlyMode] = useState(false);
   const [isReauthenticating, setIsReauthenticating] = useState(false);
+  const [repairStage, setRepairStage] = useState<"idle" | "await-login">("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activateGuardRef = useRef(false);
+  const repairLoginAttemptedRef = useRef(false);
 
   const eoaBalanceNum = parseFloat(eoaBalance);
   const parsedAmount = parseFloat(depositAmount);
@@ -382,27 +384,52 @@ export default function OnboardingPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleReauthenticate = async () => {
+  const handleRegrantRecovery = async () => {
     if (isReauthenticating) return;
 
     setIsReauthenticating(true);
+    repairLoginAttemptedRef.current = false;
     try {
       if (typeof window !== "undefined") {
         window.sessionStorage.setItem("snowmind_auth_repair", "1");
       }
 
-      // Privy login() cannot be called while already authenticated.
+      // Avoid calling login() while still authenticated.
       if (authenticated) {
         await logout();
         await sleep(150);
       }
-      login();
+      setRepairStage("await-login");
     } catch {
+      setRepairStage("idle");
       toast.error("Could not reset your session. Please try again.");
     } finally {
       setIsReauthenticating(false);
     }
   };
+
+  useEffect(() => {
+    if (repairStage !== "await-login" || !ready) return;
+
+    if (authenticated) {
+      setRepairStage("idle");
+      repairLoginAttemptedRef.current = false;
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem("snowmind_auth_repair");
+      }
+
+      setRegrantOnlyMode(true);
+      setDepositAmount("0");
+      setFormStep("activate");
+      toast.success("Session refreshed. Continue to re-grant session key.");
+      return;
+    }
+
+    if (!repairLoginAttemptedRef.current) {
+      repairLoginAttemptedRef.current = true;
+      login();
+    }
+  }, [repairStage, ready, authenticated, login]);
 
   useEffect(() => {
     if (!ready || !authenticated) return;
@@ -522,8 +549,8 @@ export default function OnboardingPage() {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
     if (!ready || !authenticated || hasAuthError) {
       setActivationPhase("error");
-      setActivationError("Authentication expired. Please re-authenticate and retry activation.");
-      toast.error("Please re-authenticate first.");
+      setActivationError("Authentication expired. Reconnect and re-grant your session key, then retry activation.");
+      toast.error("Reconnect and re-grant your session key first.");
       return;
     }
     if (activateGuardRef.current) return;
@@ -849,10 +876,10 @@ export default function OnboardingPage() {
       if (err instanceof APIError && err.status === 401) {
         setActivationPhase("error");
         setActivationError(
-          "Authentication expired while activating. Re-authenticate and retry. "
+          "Authentication expired while activating. Reconnect and re-grant your session key, then retry. "
           + "Your funds remain safe in your smart account."
         );
-        toast.error("Session expired. Re-authenticate and retry activation.");
+        toast.error("Session expired. Reconnect and re-grant, then retry activation.");
         return;
       }
 
@@ -942,17 +969,17 @@ export default function OnboardingPage() {
               Session expired or authentication mismatch.
             </p>
             <p className="mt-1 text-xs text-[#5C5550]">
-              Re-authenticate with Privy to load your account state and continue re-grant.
+              Refresh your login, then re-grant the session key to restore dashboard access.
             </p>
             <div className="mt-3 flex gap-2">
               <button
                 onClick={() => {
-                  void handleReauthenticate();
+                  void handleRegrantRecovery();
                 }}
                 disabled={isReauthenticating}
                 className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
               >
-                {isReauthenticating ? "Re-authenticating..." : "Re-authenticate"}
+                {isReauthenticating ? "Preparing Re-grant..." : "Re-grant Session Key"}
               </button>
               <button
                 onClick={() => router.replace("/")}

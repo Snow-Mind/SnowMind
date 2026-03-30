@@ -171,7 +171,10 @@ export default function AppLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { authenticated, ready, logout, activeWallet, eoaAddress } = useAuth();
+  const { authenticated, ready, login, logout, activeWallet, eoaAddress } = useAuth();
+  const authRepairInProgress =
+    typeof window !== "undefined"
+    && window.sessionStorage.getItem("snowmind_auth_repair") === "1";
   const smartAccount = useSmartAccount(activeWallet);
   const storedSmartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const effectiveSmartAccountAddress = smartAccount.address ?? storedSmartAccountAddress;
@@ -231,17 +234,13 @@ export default function AppLayout({
   // Redirect to landing if not authenticated
   useEffect(() => {
     if (ready && !authenticated) {
-      const authRepairInProgress =
-        typeof window !== "undefined"
-        && window.sessionStorage.getItem("snowmind_auth_repair") === "1";
-
       // Keep the user on onboarding during explicit re-auth repair flow.
       if (pathname === "/onboarding" && authRepairInProgress) {
         return;
       }
       router.replace("/");
     }
-  }, [ready, authenticated, router, pathname]);
+  }, [ready, authenticated, router, pathname, authRepairInProgress]);
 
   // Redirect new users (no stored smart account) to onboarding.
   // Gated on clientReady to prevent false redirect during Zustand hydration.
@@ -295,7 +294,40 @@ export default function AppLayout({
     );
   }
 
-  if (!authenticated) return null;
+  if (!authenticated) {
+    if (pathname === "/onboarding" && authRepairInProgress) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB] px-6">
+          <div className="w-full max-w-md rounded-xl border border-[#E8E2DA] bg-white p-6 text-center shadow-sm">
+            <p className="text-sm font-semibold text-[#1A1715]">Reconnect To Continue Re-grant</p>
+            <p className="mt-2 text-xs text-[#5C5550]">
+              Your previous session was reset. Sign in again to restore authorization and return to onboarding.
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                onClick={login}
+                className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
+              >
+                Continue Sign-in
+              </button>
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.sessionStorage.removeItem("snowmind_auth_repair");
+                  }
+                  router.replace("/");
+                }}
+                className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+              >
+                Go to Landing
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
 
   // Dashboard-specific loading: wait for hydration to determine routing
   if (pathname === "/dashboard" && (!clientReady || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady))) {
