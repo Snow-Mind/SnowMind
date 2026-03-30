@@ -30,7 +30,16 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { useAuth } from "@/hooks/useAuth";
 import { api } from "@/lib/api-client";
-import { EXPLORER, CONTRACTS, AVALANCHE_RPC_URL, PROTOCOL_CONFIG, CHAIN, ACTIVE_PROTOCOLS, type ProtocolId } from "@/lib/constants";
+import {
+  EXPLORER,
+  CONTRACTS,
+  AVALANCHE_RPC_URL,
+  AVALANCHE_RPC_URLS,
+  PROTOCOL_CONFIG,
+  CHAIN,
+  ACTIVE_PROTOCOLS,
+  type ProtocolId,
+} from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import Image from "next/image";
 import {
@@ -114,6 +123,86 @@ const MARKET_PROTOCOL_IDS: ProtocolId[] = [
 const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
   .map((id) => PROTOCOL_CONFIG[id])
   .filter(Boolean);
+
+const RECEIPT_CONFIRMATION_TIMEOUT_MS = 120_000;
+const RECEIPT_POLL_INTERVAL_MS = 3_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errorToMessage(err: unknown): string {
+  if (!err) return "Unknown RPC error";
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function isLikelyPendingReceiptError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("transaction")
+    && normalized.includes("not found")
+  ) || normalized.includes("could not be found");
+}
+
+async function waitForTransferConfirmationWithFallback(params: {
+  transferHash: `0x${string}`;
+  recipient: `0x${string}`;
+  minRecipientBalance: bigint;
+}): Promise<void> {
+  const { transferHash, recipient, minRecipientBalance } = params;
+  const clients = AVALANCHE_RPC_URLS.map((rpcUrl) => ({
+    rpcUrl,
+    client: createPublicClient({ chain: CHAIN, transport: http(rpcUrl) }),
+  }));
+
+  const deadline = Date.now() + RECEIPT_CONFIRMATION_TIMEOUT_MS;
+  let lastRpcError = "";
+
+  while (Date.now() < deadline) {
+    for (const { rpcUrl, client } of clients) {
+      try {
+        const receipt = await client.getTransactionReceipt({ hash: transferHash });
+        if (receipt.status === "reverted") {
+          throw new Error("USDC transfer reverted on-chain.");
+        }
+        return;
+      } catch (receiptErr: unknown) {
+        const receiptMsg = errorToMessage(receiptErr);
+        if (isLikelyPendingReceiptError(receiptMsg)) {
+          continue;
+        }
+        lastRpcError = `${rpcUrl}: ${receiptMsg.slice(0, 180)}`;
+      }
+    }
+
+    for (const { client } of clients) {
+      try {
+        const recipientBalance = await client.readContract({
+          address: CONTRACTS.USDC,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [recipient],
+        }) as bigint;
+
+        if (recipientBalance >= minRecipientBalance) {
+          return;
+        }
+      } catch {
+        // Ignore fallback balance-read errors.
+      }
+    }
+
+    await sleep(RECEIPT_POLL_INTERVAL_MS);
+  }
+
+  const suffix = lastRpcError ? ` Last RPC error: ${lastRpcError}.` : "";
+  throw new Error(
+    "USDC transfer broadcasted but confirmation could not be verified due RPC instability."
+    + suffix
+    + " Please retry in a few seconds."
+  );
+}
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -587,7 +676,11 @@ export default function OnboardingPage() {
           throw new Error("USDC transfer failed: no transaction hash returned by wallet.");
         }
 
-        await publicClient.waitForTransactionReceipt({ hash: transferHash });
+        await waitForTransferConfirmationWithFallback({
+          transferHash,
+          recipient: derivedAddr as `0x${string}`,
+          minRecipientBalance: existingBalance + shortfall,
+        });
         toast.success("USDC transferred to smart account!");
       } else {
         toast.success("Smart account already funded — skipping transfer.");
@@ -697,6 +790,14 @@ export default function OnboardingPage() {
         setActivationPhase("error");
         setActivationError(msg);
         toast.error("Insufficient USDC balance.");
+      } else if (msg.includes("confirmation could not be verified due RPC instability")) {
+        setActivationPhase("error");
+        setActivationError(
+          "Transfer was submitted but confirmation RPCs were unstable. "
+          + "Please wait a few seconds and retry activation. "
+          + "The flow always re-checks your smart-account USDC balance before sending more."
+        );
+        toast.error("Transfer confirmation timed out. Retrying is safe.");
       } else if (msg.includes("USDC transfer failed") || msg.includes("invalid parameters")) {
         setActivationPhase("error");
         setActivationError(msg);

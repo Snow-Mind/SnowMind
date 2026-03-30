@@ -515,6 +515,18 @@ class Rebalancer:
             return await self._log(db, account_id, "skipped",
                                    reason="No deposited balance")
 
+        min_balance = Decimal(str(getattr(self.settings, "MIN_BALANCE_USD", 10)))
+        if total_usd < min_balance:
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason=(
+                    f"Total balance ${float(total_usd):.2f} below minimum "
+                    f"${float(min_balance):.2f}"
+                ),
+            )
+
         # ── 4c. Portfolio value circuit breaker ──────────────────────
         # Compare current on-chain value to last recorded value.
         # If portfolio dropped >10% between scheduler ticks, halt and alert.

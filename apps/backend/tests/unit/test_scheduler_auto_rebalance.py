@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from app.services.optimizer.rebalancer import Rebalancer
+from app.services.protocols.base import ProtocolRate
 from app.workers.scheduler import SnowMindScheduler
 
 
@@ -39,6 +40,7 @@ def mock_settings():
     settings.TVL_CAP_PCT = 0.01
     settings.MAX_SINGLE_REBALANCE_USD = 50000
     settings.MAX_TOTAL_PLATFORM_DEPOSIT_USD = 100000
+    settings.MIN_BALANCE_USD = 10.0
     settings.PORTFOLIO_VALUE_DROP_PCT = 0.10
     settings.PROFITABILITY_BREAKEVEN_DAYS = 7
     settings.REBALANCE_CHECK_INTERVAL = 360
@@ -235,6 +237,49 @@ class TestRebalancerPipeline:
 
             assert result["status"] == "skipped"
             assert "No active session key" in (result.get("skip_reason") or "")
+
+    @pytest.mark.asyncio
+    async def test_skips_when_total_balance_below_minimum(self, rebalancer):
+        """Dust balances below MIN_BALANCE_USD should skip before execution."""
+
+        account_id = str(uuid4())
+        address = "0xDustAccount"
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk, \
+             patch("app.services.optimizer.rebalancer.ALL_ADAPTERS", {}):
+
+            db = _make_db_mock()
+            gdb.return_value = db
+            gsk.return_value = {
+                "serialized_permission": "0xdeadbeef",
+                "session_private_key": "0xabc",
+                "allowed_protocols": ["benqi"],
+            }
+
+            rebalancer.rate_fetcher.fetch_all_rates = AsyncMock(return_value={
+                "benqi": ProtocolRate(
+                    protocol_id="benqi",
+                    apy=Decimal("0.03"),
+                    effective_apy=Decimal("0.03"),
+                    tvl_usd=Decimal("1000000"),
+                ),
+            })
+            rebalancer.rate_validator.validate_all = AsyncMock(return_value={
+                "benqi": Decimal("0.03"),
+            })
+            rebalancer._discover_onchain_balances = AsyncMock(return_value={
+                "benqi": Decimal("2.00"),
+            })
+            rebalancer._get_idle_usdc_balance = AsyncMock(return_value=Decimal("0"))
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=address,
+            )
+
+            assert result["status"] == "skipped"
+            assert "below minimum" in (result.get("skip_reason") or "")
 
     @pytest.mark.asyncio
     async def test_skips_when_apy_below_beat_margin(self, rebalancer):

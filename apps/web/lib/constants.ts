@@ -12,8 +12,28 @@ export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? "";
 export const ZERODEV_PROJECT_ID =
   process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID ?? "";
 
-export const AVALANCHE_RPC_URL =
-  process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL ?? "https://api.avax.network/ext/bc/C/rpc";
+const DEFAULT_AVALANCHE_RPC_URLS = [
+  "https://api.avax.network/ext/bc/C/rpc",
+  "https://avalanche.public-rpc.com",
+  "https://rpc.ankr.com/avalanche",
+] as const;
+
+function parseRpcUrlList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+const configuredAvalancheRpcUrls = [
+  ...parseRpcUrlList(process.env.NEXT_PUBLIC_AVALANCHE_RPC_URLS),
+  process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL,
+  ...DEFAULT_AVALANCHE_RPC_URLS,
+].filter((url): url is string => typeof url === "string" && url.length > 0);
+
+export const AVALANCHE_RPC_URLS = Array.from(new Set(configuredAvalancheRpcUrls));
+export const AVALANCHE_RPC_URL = AVALANCHE_RPC_URLS[0] ?? DEFAULT_AVALANCHE_RPC_URLS[0];
 
 // ── Mainnet contract addresses ──────────────────────────────────────────────
 export const CONTRACTS = {
