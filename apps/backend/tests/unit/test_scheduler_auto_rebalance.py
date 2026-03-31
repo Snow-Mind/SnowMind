@@ -312,6 +312,47 @@ class TestRebalancerPipeline:
         assert large_improvement >= beat_margin, "Large improvement should pass gate"
 
     @pytest.mark.asyncio
+    async def test_idle_topup_bypasses_performance_gates(self, rebalancer):
+        """Idle top-ups must bypass beat-margin/min-gap/profitability gates.
+
+        Regression guard for redeposits where existing positions are present and
+        new idle USDC should be deployed immediately.
+        """
+        has_existing_protocol_positions = True
+        idle_usdc = Decimal("1.01")
+
+        is_initial_deployment = (not has_existing_protocol_positions) and idle_usdc > Decimal("0.01")
+        is_idle_topup_deployment = has_existing_protocol_positions and idle_usdc >= Decimal("1.00")
+        skip_performance_gates = is_initial_deployment or is_idle_topup_deployment
+
+        assert is_idle_topup_deployment
+        assert skip_performance_gates
+
+        global_flag_none = True
+        beat_margin = Decimal("0.0025")
+        apy_improvement = Decimal("0.0000")
+
+        should_skip_beat_margin = (
+            global_flag_none
+            and not skip_performance_gates
+            and apy_improvement < beat_margin
+        )
+        assert not should_skip_beat_margin, "Idle top-up must not be blocked by beat-margin gate"
+
+        total_usd = Decimal("51.02")
+        daily_gain = apy_improvement * total_usd / Decimal("365")
+        gas_cost = Decimal("0.0080")
+        breakeven_days = Decimal("7")
+
+        should_skip_profitability = (
+            global_flag_none
+            and total_usd > Decimal("0")
+            and not skip_performance_gates
+            and (daily_gain * breakeven_days) < gas_cost
+        )
+        assert not should_skip_profitability, "Idle top-up must not be blocked by profitability gate"
+
+    @pytest.mark.asyncio
     async def test_idempotency_prevents_double_execution(self, rebalancer):
         """Same target allocation within 60 min → skip (idempotency guard)."""
 

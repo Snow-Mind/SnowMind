@@ -1,5 +1,6 @@
 """Authentication, authorisation, and rate-limiting primitives."""
 
+import asyncio
 import base64
 import hmac
 import logging
@@ -87,6 +88,7 @@ async def require_jwt(
 
 _privy_jwks_cache: dict | None = None
 _privy_jwks_last_fetch: float = 0.0
+_privy_jwks_refresh_lock = asyncio.Lock()
 _PRIVY_JWKS_CACHE_TTL = 3600  # 1 hour
 _PRIVY_JWKS_URLS = (
     "https://auth.privy.io/api/v1/apps/{app_id}/jwks.json",
@@ -121,31 +123,36 @@ async def _fetch_privy_jwks(app_id: str) -> dict:
     if _privy_jwks_cache and (now - _privy_jwks_last_fetch) < _PRIVY_JWKS_CACHE_TTL:
         return _privy_jwks_cache
 
-    last_http_error: httpx.HTTPError | None = None
-    async with httpx.AsyncClient() as client:
-        for template in _PRIVY_JWKS_URLS:
-            url = template.format(app_id=app_id)
-            try:
-                resp = await client.get(url, timeout=10)
-                resp.raise_for_status()
-                jwks = resp.json()
-                if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
-                    raise httpx.HTTPError(f"Invalid JWKS payload from {url}")
+    async with _privy_jwks_refresh_lock:
+        now = time.time()
+        if _privy_jwks_cache and (now - _privy_jwks_last_fetch) < _PRIVY_JWKS_CACHE_TTL:
+            return _privy_jwks_cache
 
-                _privy_jwks_cache = jwks
-                _privy_jwks_last_fetch = now
-                logger.info("Refreshed Privy JWKS cache from %s", url)
-                return _privy_jwks_cache
-            except httpx.HTTPStatusError as exc:
-                last_http_error = exc
-                # Try fallback endpoint on 404/410; surface all other status codes.
-                status_code = exc.response.status_code if exc.response is not None else None
-                if status_code in {404, 410}:
+        last_http_error: httpx.HTTPError | None = None
+        async with httpx.AsyncClient() as client:
+            for template in _PRIVY_JWKS_URLS:
+                url = template.format(app_id=app_id)
+                try:
+                    resp = await client.get(url, timeout=10)
+                    resp.raise_for_status()
+                    jwks = resp.json()
+                    if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
+                        raise httpx.HTTPError(f"Invalid JWKS payload from {url}")
+
+                    _privy_jwks_cache = jwks
+                    _privy_jwks_last_fetch = now
+                    logger.info("Refreshed Privy JWKS cache from %s", url)
+                    return _privy_jwks_cache
+                except httpx.HTTPStatusError as exc:
+                    last_http_error = exc
+                    # Try fallback endpoint on 404/410; surface all other status codes.
+                    status_code = exc.response.status_code if exc.response is not None else None
+                    if status_code in {404, 410}:
+                        continue
+                    raise
+                except httpx.HTTPError as exc:
+                    last_http_error = exc
                     continue
-                raise
-            except httpx.HTTPError as exc:
-                last_http_error = exc
-                continue
 
     if last_http_error is not None:
         raise last_http_error

@@ -1391,7 +1391,7 @@ export default function OnboardingPage() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
                             <p className="text-sm font-medium leading-tight text-[#1A1715]">
-                              <span className="sm:hidden">{protocol.shortName ?? protocol.name}</span>
+                              <span className="sm:hidden">{protocol.shortName}</span>
                               <span className="hidden sm:inline">{protocol.name}</span>
                             </p>
                             {!isEnabled && (
