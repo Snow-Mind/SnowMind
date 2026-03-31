@@ -573,36 +573,119 @@ class Rebalancer:
         # If portfolio dropped >10% between scheduler ticks, halt and alert.
         # This catches exploits, oracle failures, or protocol depegs in real-time.
         try:
-            prev_row = (
+            prev_rows = (
                 db.table("rebalance_logs")
-                .select("proposed_allocations")
+                .select("proposed_allocations, created_at")
                 .eq("account_id", account_id)
                 .eq("status", "executed")
                 .order("created_at", desc=True)
-                .limit(1)
+                .limit(20)
                 .execute()
             )
-            if prev_row.data and prev_row.data[0].get("proposed_allocations"):
-                prev_allocs = prev_row.data[0]["proposed_allocations"]
-                prev_total = sum(
-                    Decimal(str(v)) for v in prev_allocs.values()
-                )
-                if prev_total > Decimal("0.01"):
-                    drop_pct = (prev_total - total_usd) / prev_total
+
+            prev_snapshot = None
+            for row in prev_rows.data or []:
+                allocs = row.get("proposed_allocations")
+                if isinstance(allocs, dict) and allocs:
+                    prev_snapshot = row
+                    break
+
+            if prev_snapshot:
+                prev_allocs = prev_snapshot["proposed_allocations"]
+                prev_total = sum(Decimal(str(v)) for v in prev_allocs.values())
+                baseline_total = prev_total
+
+                # Adjust baseline by withdrawals that happened after the snapshot.
+                # This prevents false exploit-halts when users legitimately pull funds.
+                withdrawals_since_snapshot = Decimal("0")
+                baseline_ts = prev_snapshot.get("created_at")
+                if baseline_ts:
+                    withdrawal_rows = (
+                        db.table("rebalance_logs")
+                        .select("amount_moved")
+                        .eq("account_id", account_id)
+                        .eq("status", "executed")
+                        .eq("from_protocol", "withdrawal")
+                        .gte("created_at", baseline_ts)
+                        .execute()
+                    )
+                    for withdrawal_row in withdrawal_rows.data or []:
+                        raw_amount = withdrawal_row.get("amount_moved")
+                        if raw_amount is None:
+                            continue
+                        try:
+                            withdrawals_since_snapshot += Decimal(str(raw_amount))
+                        except Exception:
+                            logger.debug(
+                                "Skipping non-numeric withdrawal amount in circuit-breaker baseline: %s",
+                                raw_amount,
+                            )
+
+                adjusted_baseline = max(prev_total - withdrawals_since_snapshot, Decimal("0"))
+                if adjusted_baseline > Decimal("0.01"):
+                    baseline_total = adjusted_baseline
+
+                if withdrawals_since_snapshot > Decimal("0"):
+                    logger.info(
+                        "Circuit-breaker baseline adjusted for %s: previous=$%.2f, withdrawals=$%.2f, adjusted=$%.2f",
+                        account_id,
+                        float(prev_total),
+                        float(withdrawals_since_snapshot),
+                        float(baseline_total),
+                    )
+
+                principal_matches_balance = False
+                try:
+                    tracking_row = (
+                        db.table("account_yield_tracking")
+                        .select("cumulative_deposited, cumulative_net_withdrawn")
+                        .eq("account_id", account_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    if tracking_row.data:
+                        cumulative_deposited = Decimal(
+                            str(tracking_row.data[0].get("cumulative_deposited", "0"))
+                        )
+                        cumulative_withdrawn = Decimal(
+                            str(tracking_row.data[0].get("cumulative_net_withdrawn", "0"))
+                        )
+                        outstanding_principal = max(
+                            cumulative_deposited - cumulative_withdrawn,
+                            Decimal("0"),
+                        )
+                        principal_matches_balance = (
+                            abs(total_usd - outstanding_principal) <= Decimal("0.50")
+                        )
+                except Exception as tracking_exc:
+                    logger.debug(
+                        "Portfolio principal reconciliation unavailable for %s: %s",
+                        account_id,
+                        tracking_exc,
+                    )
+
+                if baseline_total > Decimal("0.01"):
+                    drop_pct = (baseline_total - total_usd) / baseline_total
                     drop_threshold = Decimal(str(self.settings.PORTFOLIO_VALUE_DROP_PCT))
                     if drop_pct > drop_threshold:
-                        from app.services.monitoring import send_telegram_alert, send_sentry_alert
-                        msg = (
-                            f"CIRCUIT BREAKER: Portfolio value dropped {float(drop_pct * 100):.1f}% "
-                            f"for account {account_id}. "
-                            f"Previous: ${float(prev_total):.2f}, Current: ${float(total_usd):.2f}. "
-                            f"Halting rebalance — manual investigation required."
-                        )
-                        logger.critical(msg)
-                        await send_telegram_alert(msg)
-                        send_sentry_alert(msg)
-                        return await self._log(db, account_id, "halted",
-                                               reason=msg)
+                        if principal_matches_balance:
+                            logger.info(
+                                "Portfolio-drop alert suppressed for %s: on-chain balance matches outstanding principal (current=$%.2f)",
+                                account_id,
+                                float(total_usd),
+                            )
+                        else:
+                            from app.services.monitoring import send_telegram_alert, send_sentry_alert
+                            msg = (
+                                f"CIRCUIT BREAKER: Portfolio value dropped {float(drop_pct * 100):.1f}% "
+                                f"for account {account_id}. "
+                                f"Baseline: ${float(baseline_total):.2f}, Current: ${float(total_usd):.2f}. "
+                                f"Halting rebalance — manual investigation required."
+                            )
+                            logger.critical(msg)
+                            await send_telegram_alert(msg)
+                            send_sentry_alert(msg)
+                            return await self._log(db, account_id, "halted", reason=msg)
         except Exception as exc:
             logger.warning("Portfolio circuit breaker check failed: %s — proceeding", exc)
 

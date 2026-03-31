@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from app.services.optimizer.rebalancer import Rebalancer
+from app.services.optimizer.health_checker import HealthCheckResult, RebalanceFlag
 from app.services.protocols.base import ProtocolRate
 from app.workers.scheduler import SnowMindScheduler
 
@@ -351,6 +352,173 @@ class TestRebalancerPipeline:
             and (daily_gain * breakeven_days) < gas_cost
         )
         assert not should_skip_profitability, "Idle top-up must not be blocked by profitability gate"
+
+    @pytest.mark.asyncio
+    async def test_portfolio_drop_circuit_breaker_ignores_legitimate_withdrawals(self, rebalancer):
+        """Large value drops explained by logged withdrawals must not halt automation."""
+
+        account_id = str(uuid4())
+        address = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        baseline_ts = datetime.now(timezone.utc).isoformat()
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk, \
+             patch("app.services.optimizer.rebalancer.get_adapter") as g_adapter, \
+             patch("app.services.optimizer.rebalancer.check_protocol_health", new_callable=AsyncMock) as health_check, \
+             patch("app.services.optimizer.rebalancer.compute_allocation") as compute_alloc, \
+             patch("app.services.optimizer.rebalancer.compute_alloc_weighted_apy") as compute_weighted, \
+             patch("app.services.monitoring.send_telegram_alert", new_callable=AsyncMock) as telegram_alert, \
+             patch("app.services.monitoring.send_sentry_alert") as sentry_alert, \
+             patch.object(rebalancer, "_log", new_callable=AsyncMock) as log_mock:
+
+            db = _make_db_mock()
+            gdb.return_value = db
+
+            gsk.return_value = {
+                "serialized_permission": "0xperm",
+                "session_private_key": "0xpriv",
+                "allowed_protocols": ["benqi"],
+            }
+
+            rebalancer.rate_fetcher.fetch_all_rates = AsyncMock(return_value={
+                "benqi": ProtocolRate(
+                    protocol_id="benqi",
+                    apy=Decimal("0.05"),
+                    effective_apy=Decimal("0.05"),
+                    tvl_usd=Decimal("1000000"),
+                ),
+            })
+            rebalancer.rate_validator.validate_all = AsyncMock(return_value={
+                "benqi": Decimal("0.05"),
+            })
+
+            adapter = MagicMock()
+            adapter.get_balance = AsyncMock(return_value=5_000_000)
+            g_adapter.return_value = adapter
+
+            db.table("allocations").execute.return_value = MagicMock(data=[
+                {"protocol_id": "benqi", "amount_usdc": "5"},
+            ])
+
+            db.table("rebalance_logs").execute.side_effect = [
+                MagicMock(data=[]),
+                MagicMock(data=[{
+                    "proposed_allocations": {"benqi": "50"},
+                    "created_at": baseline_ts,
+                }]),
+                MagicMock(data=[{"amount_moved": "45"}]),
+            ]
+
+            db.table("account_yield_tracking").execute.return_value = MagicMock(data=[{
+                "cumulative_deposited": "50",
+                "cumulative_net_withdrawn": "45",
+            }])
+
+            rebalancer._get_idle_usdc_balance = AsyncMock(return_value=Decimal("0"))
+            health_check.return_value = HealthCheckResult(
+                protocol_id="benqi",
+                is_healthy=True,
+                is_deposit_safe=True,
+                is_withdrawal_safe=True,
+                flag=RebalanceFlag.NONE,
+            )
+
+            compute_alloc.return_value = MagicMock(
+                allocations={"benqi": Decimal("5")},
+                weighted_apy=Decimal("0.05"),
+                details={"ranked_order": ["benqi"]},
+            )
+            compute_weighted.return_value = Decimal("0.05")
+            log_mock.return_value = {
+                "status": "skipped",
+                "skip_reason": "APY improvement below beat margin",
+            }
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=address,
+            )
+
+            assert result["status"] == "skipped"
+            logged_statuses = [c.args[2] for c in log_mock.await_args_list if len(c.args) >= 3]
+            assert "halted" not in logged_statuses
+            telegram_alert.assert_not_awaited()
+            sentry_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_portfolio_drop_circuit_breaker_halts_unexplained_drop(self, rebalancer):
+        """A large unexplained drop should still halt and alert."""
+
+        account_id = str(uuid4())
+        address = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        baseline_ts = datetime.now(timezone.utc).isoformat()
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk, \
+             patch("app.services.optimizer.rebalancer.get_adapter") as g_adapter, \
+             patch("app.services.monitoring.send_telegram_alert", new_callable=AsyncMock) as telegram_alert, \
+             patch("app.services.monitoring.send_sentry_alert") as sentry_alert, \
+             patch.object(rebalancer, "_log", new_callable=AsyncMock) as log_mock:
+
+            db = _make_db_mock()
+            gdb.return_value = db
+
+            gsk.return_value = {
+                "serialized_permission": "0xperm",
+                "session_private_key": "0xpriv",
+                "allowed_protocols": ["benqi"],
+            }
+
+            rebalancer.rate_fetcher.fetch_all_rates = AsyncMock(return_value={
+                "benqi": ProtocolRate(
+                    protocol_id="benqi",
+                    apy=Decimal("0.05"),
+                    effective_apy=Decimal("0.05"),
+                    tvl_usd=Decimal("1000000"),
+                ),
+            })
+            rebalancer.rate_validator.validate_all = AsyncMock(return_value={
+                "benqi": Decimal("0.05"),
+            })
+
+            adapter = MagicMock()
+            adapter.get_balance = AsyncMock(return_value=5_000_000)
+            g_adapter.return_value = adapter
+
+            db.table("allocations").execute.return_value = MagicMock(data=[
+                {"protocol_id": "benqi", "amount_usdc": "5"},
+            ])
+
+            db.table("rebalance_logs").execute.side_effect = [
+                MagicMock(data=[]),
+                MagicMock(data=[{
+                    "proposed_allocations": {"benqi": "50"},
+                    "created_at": baseline_ts,
+                }]),
+                MagicMock(data=[]),
+            ]
+
+            db.table("account_yield_tracking").execute.return_value = MagicMock(data=[{
+                "cumulative_deposited": "50",
+                "cumulative_net_withdrawn": "0",
+            }])
+
+            rebalancer._get_idle_usdc_balance = AsyncMock(return_value=Decimal("0"))
+            log_mock.return_value = {
+                "status": "halted",
+                "skip_reason": "CIRCUIT BREAKER",
+            }
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=address,
+            )
+
+            assert result["status"] == "halted"
+            logged_statuses = [c.args[2] for c in log_mock.await_args_list if len(c.args) >= 3]
+            assert "halted" in logged_statuses
+            telegram_alert.assert_awaited_once()
+            sentry_alert.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_idempotency_prevents_double_execution(self, rebalancer):

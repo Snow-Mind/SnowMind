@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.models.base import CamelModel
 
-RebalanceStatus = Literal["executed", "skipped", "failed"]
+RebalanceStatus = Literal["executed", "skipped", "failed", "halted", "pending"]
 
 
 class RebalanceLog(BaseModel):
@@ -16,6 +16,9 @@ class RebalanceLog(BaseModel):
     account_id: UUID
     status: RebalanceStatus
     skip_reason: str | None = None
+    from_protocol: str | None = None
+    to_protocol: str | None = None
+    amount_moved: Decimal | None = None
     proposed_allocations: dict[str, Any] | None = None
     executed_allocations: dict[str, Any] | None = None
     apr_improvement: Decimal | None = None
@@ -30,6 +33,9 @@ class RebalanceLogResponse(CamelModel):
     id: UUID
     status: RebalanceStatus
     skip_reason: str | None = None
+    from_protocol: str | None = None
+    to_protocol: str | None = None
+    amount_moved: str | None = None
     proposed_allocations: dict[str, Any] | None = None
     executed_allocations: dict[str, Any] | None = None
     apr_improvement: float | None = None

@@ -14,6 +14,8 @@ from app.core.config import get_settings
 
 logger = logging.getLogger("snowmind.monitoring")
 
+_SENTRY_IMPORT_FAILED = False
+
 
 async def send_telegram_alert(message: str) -> bool:
     """Send an alert message via Telegram bot. Returns True on success."""
@@ -41,12 +43,20 @@ async def send_telegram_alert(message: str) -> bool:
 
 def send_sentry_alert(message: str) -> None:
     """Capture an alert as a Sentry event if configured."""
+    global _SENTRY_IMPORT_FAILED
+
     settings = get_settings()
     if not settings.SENTRY_DSN:
         return
+    if _SENTRY_IMPORT_FAILED:
+        return
+
     try:
         import sentry_sdk
         sentry_sdk.capture_message(message, level="warning")
+    except ImportError as exc:
+        _SENTRY_IMPORT_FAILED = True
+        logger.warning("Sentry SDK not installed; disabling Sentry alerts: %s", exc)
     except Exception as exc:
         logger.warning("Sentry alert failed: %s", exc)
 

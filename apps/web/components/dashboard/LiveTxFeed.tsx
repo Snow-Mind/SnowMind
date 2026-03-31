@@ -1,14 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
   RefreshCw,
   ExternalLink,
   Activity,
+  AlertTriangle,
   Lightbulb,
   Eye,
+  FileText,
 } from "lucide-react";
 import { PROTOCOL_CONFIG, EXPLORER, type ProtocolId } from "@/lib/constants";
 import { formatUsd } from "@/lib/format";
@@ -26,30 +28,87 @@ function timeAgo(iso: string): string {
 
 type ActionType = "deposit" | "withdraw" | "rebalance" | "monitoring";
 
+type AgentSection = "transactions" | "log";
+
+type ExtendedLogEntry = RebalanceLogEntry & {
+  fromProtocol?: string | null;
+  toProtocol?: string | null;
+  amountMoved?: string | null;
+};
+
+interface TransactionItem {
+  entry: ExtendedLogEntry;
+  action: Exclude<ActionType, "monitoring">;
+  protocol: string;
+  amountValue: number;
+  amountLabel: string;
+  allocations: Record<string, number>;
+  reasoning: string;
+}
+
+function parseAllocations(entry: RebalanceLogEntry): Record<string, number> {
+  const source = entry.executedAllocations ?? entry.proposedAllocations;
+  if (!source || typeof source !== "object") return {};
+
+  const parsed: Record<string, number> = {};
+  for (const [protocol, value] of Object.entries(source)) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      parsed[protocol] = numeric;
+    }
+  }
+  return parsed;
+}
+
+function allocationTotal(allocations: Record<string, number>): number {
+  return Object.values(allocations).reduce((sum, value) => sum + value, 0);
+}
+
+function protocolLabel(protocolId: string | null | undefined): string {
+  if (!protocolId) return "Monitoring";
+  const key = protocolId as ProtocolId;
+  const cfg = PROTOCOL_CONFIG[key];
+  return cfg?.name ?? protocolId;
+}
+
+function topProtocol(allocations: Record<string, number>): string {
+  const allocs = Object.entries(allocations);
+  if (allocs.length === 0) return "Monitoring";
+
+  const [protocolId] = allocs.sort((a, b) => b[1] - a[1])[0];
+  return protocolLabel(protocolId);
+}
+
+function formatAmountLabel(amount: number): string {
+  if (Number.isFinite(amount) && amount > 0) {
+    return `${formatUsd(amount)} USDC`;
+  }
+  return "USDC";
+}
+
 function inferAction(entry: RebalanceLogEntry): ActionType {
-  // Skipped entries are monitoring checks, not actual transactions
   if (entry.status === "skipped") return "monitoring";
-  const hasProposed = entry.proposedAllocations && Object.keys(entry.proposedAllocations).length > 0;
-  const hasExecuted = entry.executedAllocations && Object.keys(entry.executedAllocations).length > 0;
-  if (!hasProposed && hasExecuted) return "deposit";
-  if (hasProposed && !hasExecuted) return "withdraw";
-  return "rebalance";
+  if ((entry as ExtendedLogEntry).fromProtocol === "withdrawal") return "withdraw";
+
+  const allocations = parseAllocations(entry);
+  if (allocationTotal(allocations) > 0) {
+    return "rebalance";
+  }
+  return "monitoring";
 }
 
 function primaryProtocol(entry: RebalanceLogEntry): string {
-  const allocs = entry.executedAllocations || entry.proposedAllocations || {};
+  const allocs = parseAllocations(entry);
   const entries = Object.entries(allocs);
   if (entries.length === 0) return "Monitoring";
-  const top = entries.sort((a, b) => Number(b[1]) - Number(a[1]))[0];
-  const cfg = PROTOCOL_CONFIG[top[0] as ProtocolId];
-  return cfg?.name ?? top[0];
+  const [protocol] = entries.sort((a, b) => b[1] - a[1])[0];
+  const cfg = PROTOCOL_CONFIG[protocol as ProtocolId];
+  return cfg?.name ?? protocol;
 }
 
 function estimateAmount(entry: RebalanceLogEntry): string {
-  const allocs = entry.executedAllocations || entry.proposedAllocations || {};
-  const total = Object.values(allocs).reduce<number>((s, v) => s + Number(v ?? 0), 0);
-  if (total > 0) return `${formatUsd(total)} USDC`;
-  return "USDC";
+  const allocs = parseAllocations(entry);
+  return formatAmountLabel(allocationTotal(allocs));
 }
 
 const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: string; iconClass: string }> = {
@@ -78,134 +137,329 @@ interface LiveTxFeedProps {
   history: RebalanceLogEntry[];
 }
 
+function statusLabel(status: string): string {
+  if (status === "executed") return "Confirmed";
+  if (status === "failed") return "Failed";
+  if (status === "halted") return "Halted";
+  if (status === "skipped") return "Skipped";
+  return "Pending";
+}
+
+function statusClasses(status: string): string {
+  if (status === "executed") return "text-mint";
+  if (status === "failed" || status === "halted") return "text-crimson";
+  if (status === "skipped") return "text-muted-foreground";
+  return "text-amber-400";
+}
+
+function statusDotClasses(status: string): string {
+  if (status === "executed") return "bg-mint";
+  if (status === "failed" || status === "halted") return "bg-crimson";
+  if (status === "skipped") return "bg-muted-foreground";
+  return "animate-pulse bg-amber-400";
+}
+
+function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
+  const orderedAscending = [...history]
+    .map((entry) => entry as ExtendedLogEntry)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  let previousPortfolioTotal = 0;
+  const transactions: TransactionItem[] = [];
+
+  for (const entry of orderedAscending) {
+    if (entry.status !== "executed") continue;
+
+    const allocations = parseAllocations(entry);
+    const allocationSum = allocationTotal(allocations);
+    const explicitWithdrawal = entry.fromProtocol === "withdrawal";
+
+    if (explicitWithdrawal) {
+      const withdrawnAmount = Number(entry.amountMoved ?? "0");
+      const normalizedAmount = Number.isFinite(withdrawnAmount) && withdrawnAmount > 0
+        ? withdrawnAmount
+        : 0;
+      const reasoning = deriveReasoning(entry) ?? "Funds moved back to your wallet.";
+      transactions.push({
+        entry,
+        action: "withdraw",
+        protocol: protocolLabel(entry.toProtocol || "user_eoa"),
+        amountValue: normalizedAmount,
+        amountLabel: formatAmountLabel(normalizedAmount),
+        allocations,
+        reasoning,
+      });
+      previousPortfolioTotal = Math.max(previousPortfolioTotal - normalizedAmount, 0);
+      continue;
+    }
+
+    if (!entry.txHash && allocationSum <= 0) {
+      continue;
+    }
+
+    const isDeposit = previousPortfolioTotal <= 0.01 && allocationSum > 0.01;
+    const action: Exclude<ActionType, "monitoring"> = isDeposit ? "deposit" : "rebalance";
+
+    const amountValue = isDeposit
+      ? allocationSum
+      : Math.max(Math.abs(allocationSum - previousPortfolioTotal), allocationSum);
+
+    transactions.push({
+      entry,
+      action,
+      protocol: topProtocol(allocations),
+      amountValue,
+      amountLabel: formatAmountLabel(amountValue),
+      allocations,
+      reasoning: deriveReasoning(entry) ?? "Rebalance executed on-chain.",
+    });
+
+    if (allocationSum > 0) {
+      previousPortfolioTotal = allocationSum;
+    }
+  }
+
+  return transactions.sort(
+    (a, b) => new Date(b.entry.createdAt).getTime() - new Date(a.entry.createdAt).getTime(),
+  );
+}
+
 export default function LiveTxFeed({ history }: LiveTxFeedProps) {
-  const entries = useMemo(() => {
-    // Show up to 3 recent monitoring entries + all executed/failed entries, max 8 total
-    const executed = history.filter((e) => e.status !== "skipped");
-    const monitoring = history.filter((e) => e.status === "skipped").slice(0, 3);
-    const merged = [...executed, ...monitoring]
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 8);
-    return merged;
+  const [section, setSection] = useState<AgentSection>("transactions");
+  const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+
+  const transactions = useMemo(() => {
+    return buildTransactions(history).slice(0, 20);
   }, [history]);
+
+  const logEntries = useMemo(() => {
+    const transactionIds = new Set(transactions.map((tx) => tx.entry.id));
+    return history
+      .filter((entry) => !transactionIds.has(entry.id))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 20);
+  }, [history, transactions]);
+
+  useEffect(() => {
+    if (transactions.length === 0) {
+      setSelectedTransactionId(null);
+      return;
+    }
+
+    const selectedStillExists = selectedTransactionId
+      ? transactions.some((tx) => tx.entry.id === selectedTransactionId)
+      : false;
+
+    if (!selectedStillExists) {
+      setSelectedTransactionId(transactions[0].entry.id);
+    }
+  }, [transactions, selectedTransactionId]);
+
+  const selectedTransaction = useMemo(
+    () => transactions.find((tx) => tx.entry.id === selectedTransactionId) ?? null,
+    [transactions, selectedTransactionId],
+  );
 
   return (
     <div className="crystal-card overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border/30 px-6 py-4">
+      <div className="flex flex-col gap-3 border-b border-border/30 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-glacier" />
-          <h2 className="text-sm font-medium text-arctic">Live Transactions</h2>
+          <h2 className="text-sm font-medium text-arctic">Agent Activity</h2>
         </div>
-        <span className="text-[10px] text-muted-foreground">Recent Activity</span>
+
+        <div className="inline-flex rounded-md bg-[#ECE8E3] p-1">
+          <button
+            type="button"
+            onClick={() => setSection("transactions")}
+            className={`rounded px-3 py-1 text-[11px] font-medium transition-colors ${
+              section === "transactions"
+                ? "bg-white text-arctic shadow-sm"
+                : "text-[#7B746E] hover:text-[#544E48]"
+            }`}
+          >
+            Transactions
+          </button>
+          <button
+            type="button"
+            onClick={() => setSection("log")}
+            className={`rounded px-3 py-1 text-[11px] font-medium transition-colors ${
+              section === "log"
+                ? "bg-white text-arctic shadow-sm"
+                : "text-[#7B746E] hover:text-[#544E48]"
+            }`}
+          >
+            Log
+          </button>
+        </div>
       </div>
 
-      {entries.length === 0 ? (
+      {section === "transactions" ? (
+        transactions.length === 0 ? (
+          <div className="px-6 py-10 text-center">
+            <Activity className="mx-auto h-6 w-6 text-muted-foreground" />
+            <p className="mt-2 text-xs text-muted-foreground">
+              No past transactions yet. Deposit to start tracking activity.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="divide-y divide-border/20">
+              {transactions.map((tx) => {
+                const cfg = ACTION_CONFIG[tx.action];
+                const Icon = cfg.icon;
+                const selected = tx.entry.id === selectedTransactionId;
+
+                return (
+                  <button
+                    key={tx.entry.id}
+                    type="button"
+                    onClick={() => setSelectedTransactionId(tx.entry.id)}
+                    className={`w-full px-4 py-3.5 text-left transition-colors sm:px-6 ${
+                      selected ? "bg-glacier/[0.06]" : "hover:bg-accent/20"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/40 bg-void-2/30 ${cfg.iconClass}`}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className="text-xs font-medium text-arctic">{cfg.label}</span>
+                          <span className="text-[10px] text-muted-foreground">{tx.protocol}</span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className="font-mono text-xs text-muted-foreground">{tx.amountLabel}</span>
+                          <span className="text-[10px] text-muted-foreground">{timeAgo(tx.entry.createdAt)}</span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 text-right">
+                        <span className={`inline-flex items-center gap-1 text-[10px] ${statusClasses(tx.entry.status)}`}>
+                          <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotClasses(tx.entry.status)}`} />
+                          {statusLabel(tx.entry.status)}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedTransaction && (
+              <div className="border-t border-border/20 bg-glacier/[0.03] px-4 py-4 sm:px-6">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-xs font-semibold text-arctic">Transaction Details</h3>
+                  <span className="text-[10px] text-muted-foreground">
+                    {new Date(selectedTransaction.entry.createdAt).toLocaleString()}
+                  </span>
+                </div>
+
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Action</p>
+                    <p className="mt-0.5 text-xs font-medium text-arctic">
+                      {ACTION_CONFIG[selectedTransaction.action].label}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Amount</p>
+                    <p className="mt-0.5 font-mono text-xs text-arctic">{selectedTransaction.amountLabel}</p>
+                  </div>
+                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Protocol</p>
+                    <p className="mt-0.5 text-xs text-arctic">{selectedTransaction.protocol}</p>
+                  </div>
+                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Status</p>
+                    <p className={`mt-0.5 text-xs font-medium ${statusClasses(selectedTransaction.entry.status)}`}>
+                      {statusLabel(selectedTransaction.entry.status)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-md border border-border/30 bg-white/40 px-3 py-2">
+                  <div className="flex items-start gap-1.5">
+                    <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-glacier/70" />
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      {selectedTransaction.reasoning}
+                    </p>
+                  </div>
+                </div>
+
+                {Object.keys(selectedTransaction.allocations).length > 0 && (
+                  <div className="mt-3 rounded-md border border-border/30 bg-white/40 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Target Allocations</p>
+                    <div className="mt-1.5 grid gap-1">
+                      {Object.entries(selectedTransaction.allocations)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([protocolId, amount]) => (
+                          <div key={protocolId} className="flex items-center justify-between text-[11px]">
+                            <span className="text-arctic">{protocolLabel(protocolId)}</span>
+                            <span className="font-mono text-muted-foreground">{formatAmountLabel(amount)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedTransaction.entry.txHash && (
+                  <a
+                    href={EXPLORER.tx(selectedTransaction.entry.txHash)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-flex items-center gap-1 text-[11px] font-medium text-glacier hover:underline"
+                  >
+                    View transaction on Snowtrace
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            )}
+          </>
+        )
+      ) : logEntries.length === 0 ? (
         <div className="px-6 py-10 text-center">
-          <Activity className="mx-auto h-6 w-6 text-muted-foreground" />
+          <FileText className="mx-auto h-6 w-6 text-muted-foreground" />
           <p className="mt-2 text-xs text-muted-foreground">
-            No transactions yet. Deposit to get started.
+            No monitoring logs yet.
           </p>
         </div>
       ) : (
         <div className="divide-y divide-border/20">
-          {entries.map((entry) => {
+          {logEntries.map((entry) => {
             const action = inferAction(entry);
             const cfg = ACTION_CONFIG[action];
-            const Icon = cfg.icon;
-            const isConfirmed = entry.status === "executed";
-            const reasoning = deriveReasoning(entry);
+            const Icon = entry.status === "failed" || entry.status === "halted"
+              ? AlertTriangle
+              : cfg.icon;
+            const reason = deriveReasoning(entry) ?? "Monitoring cycle completed.";
 
             return (
-              <div
-                key={entry.id}
-                className="px-6 py-3.5 transition-colors hover:bg-accent/20"
-              >
-                <div className="flex items-center gap-3">
-                  {/* Action icon */}
-                  <div
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/40 bg-void-2/30 ${cfg.iconClass}`}
-                  >
+              <div key={entry.id} className="px-4 py-3.5 sm:px-6">
+                <div className="flex items-start gap-3">
+                  <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
                     <Icon className="h-4 w-4" />
                   </div>
 
-                  {/* Details */}
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span className="text-xs font-medium text-arctic">
-                        {cfg.label}
+                        {entry.status === "skipped" ? "Monitoring" : "Agent Log"}
                       </span>
-                      <span className="text-[10px] text-muted-foreground">
-                        · {primaryProtocol(entry)}
-                      </span>
+                      <span className="text-[10px] text-muted-foreground">{timeAgo(entry.createdAt)}</span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {estimateAmount(entry)}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">
-                        · {timeAgo(entry.createdAt)}
-                      </span>
-                    </div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{reason}</p>
                   </div>
 
-                  {/* Status */}
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span
-                      className={`flex items-center gap-1 text-[10px] ${
-                        isConfirmed
-                          ? "text-mint"
-                          : entry.status === "skipped"
-                            ? "text-muted-foreground"
-                            : entry.status === "failed"
-                              ? "text-crimson"
-                              : "text-amber-400"
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-1.5 w-1.5 rounded-full ${
-                          isConfirmed
-                            ? "bg-mint"
-                            : entry.status === "skipped"
-                              ? "bg-muted-foreground"
-                              : entry.status === "failed"
-                                ? "bg-crimson"
-                                : "animate-pulse bg-amber-400"
-                        }`}
-                      />
-                      {isConfirmed
-                        ? "Confirmed"
-                        : entry.status === "skipped"
-                          ? "Skipped"
-                          : entry.status === "failed"
-                            ? "Failed"
-                            : "Pending"}
-                    </span>
-
-                    {/* Snowtrace link */}
-                    {entry.txHash && (
-                      <a
-                        href={EXPLORER.tx(entry.txHash)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-0.5 text-[10px] text-glacier hover:underline"
-                        title="View on Snowtrace"
-                      >
-                        Snowtrace
-                        <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    )}
-                  </div>
+                  <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] ${statusClasses(entry.status)}`}>
+                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotClasses(entry.status)}`} />
+                    {statusLabel(entry.status)}
+                  </span>
                 </div>
-
-                {/* Decision reasoning — verifiable by design */}
-                {reasoning && (
-                  <div className="ml-11 mt-1.5 flex items-start gap-1.5 rounded-md bg-glacier/[0.04] px-3 py-1.5">
-                    <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-glacier/60" />
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      {reasoning}
-                    </p>
-                  </div>
-                )}
               </div>
             );
           })}

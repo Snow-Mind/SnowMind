@@ -1736,7 +1736,7 @@ export default function OnboardingPage() {
                       className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                     >
                       <Zap className="h-4 w-4" />
-                      {regrantOnlyMode ? "Re-grant &amp; Reactivate" : "Deposit &amp; Activate"}
+                      {regrantOnlyMode ? "Re-grant & Reactivate" : "Deposit & Activate"}
                     </button>
                   </div>
                 </div>

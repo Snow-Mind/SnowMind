@@ -96,6 +96,9 @@ export interface RebalanceLogEntry {
   id: string;
   status: string;
   skipReason: string | null;
+  fromProtocol?: string | null;
+  toProtocol?: string | null;
+  amountMoved?: string | null;
   proposedAllocations: Record<string, unknown> | null;
   executedAllocations: Record<string, unknown> | null;
   aprImprovement: number | null;
@@ -107,7 +110,7 @@ export interface RebalanceLogEntry {
 export interface RebalanceStatusResponse {
   smartAccountAddress: string;
   lastRebalance: string | null;
-  status: "idle" | "pending" | "executing" | "completed" | "failed" | "executed" | "skipped";
+  status: "idle" | "pending" | "executing" | "completed" | "failed" | "executed" | "skipped" | "halted";
   lastLog: RebalanceLogEntry | null;
   reasonCode?:
     | "HEALTHY"
