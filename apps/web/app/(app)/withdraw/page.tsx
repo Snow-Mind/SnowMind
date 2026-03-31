@@ -80,6 +80,7 @@ export default function WithdrawPage() {
   const setAllocations = usePortfolioStore((s) => s.setAllocations)
   const setTotals = usePortfolioStore((s) => s.setTotals)
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated)
+  const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount)
   const balance = parseFloat(totalDepositedUsd || '0')
 
   const handlePreview = useCallback(async () => {
@@ -135,6 +136,7 @@ export default function WithdrawPage() {
         setAgentActivated(false)
         setAllocations([])
         setTotals('0', '0')
+        clearSmartAccount()
       }
 
       await Promise.all([
@@ -152,7 +154,7 @@ export default function WithdrawPage() {
       }
       setStep('error')
     }
-  }, [amount, balance, isFullWithdrawal, preview, queryClient, setAgentActivated, setAllocations, setTotals, smartAccountAddress])
+  }, [amount, balance, clearSmartAccount, isFullWithdrawal, preview, queryClient, setAgentActivated, setAllocations, setTotals, smartAccountAddress])
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">

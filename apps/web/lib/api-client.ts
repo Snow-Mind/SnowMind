@@ -4,6 +4,7 @@ import type {
   RunOptimizerResponse,
   RebalanceStatusResponse,
   RebalanceHistoryResponse,
+  RebalanceTriggerResponse,
   HealthResponse,
   RegisterAccountRequest,
   RegisterAccountResponse,
@@ -225,7 +226,7 @@ export const api = {
     ),
 
   triggerRebalance: (address: string) =>
-    request<{ success: boolean; message: string }>(
+    request<RebalanceTriggerResponse>(
       `/api/v1/rebalance/${encodeURIComponent(address)}/trigger`,
       { method: "POST" },
     ),

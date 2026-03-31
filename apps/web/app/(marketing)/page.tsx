@@ -71,6 +71,7 @@ export default function LandingPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
   const [featuresVisible, setFeaturesVisible] = useState(false);
+  const [pendingLaunch, setPendingLaunch] = useState(false);
   const router = useRouter();
   const { authenticated, login, ready } = useAuth();
 
@@ -157,6 +158,23 @@ export default function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (!pendingLaunch || !ready) return;
+    if (!authenticated) return;
+    setPendingLaunch(false);
+    router.push("/dashboard");
+  }, [pendingLaunch, ready, authenticated, router]);
+
+  const handleLaunchApp = () => {
+    if (authenticated) {
+      router.push("/dashboard");
+      return;
+    }
+    if (!ready) return;
+    setPendingLaunch(true);
+    login();
+  };
+
   return (
     <div>
       {/* Fixed header */}
@@ -183,13 +201,7 @@ export default function LandingPage() {
             How It Works
           </Link>
           <button
-            onClick={() => {
-              if (authenticated) {
-                router.push("/dashboard");
-              } else if (ready) {
-                login();
-              }
-            }}
+            onClick={handleLaunchApp}
             className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
           >
             Launch App
@@ -244,11 +256,7 @@ export default function LandingPage() {
         <button
           onClick={() => {
             setMenuOpen(false);
-            if (authenticated) {
-              router.push("/dashboard");
-            } else if (ready) {
-              login();
-            }
+            handleLaunchApp();
           }}
           className="w-full text-center py-3 mt-1 bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base rounded-lg hover:bg-[#D63031] transition-colors"
         >
@@ -279,13 +287,7 @@ export default function LandingPage() {
             <button
               className="hero-fadein-3 pointer-events-auto bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base px-10 py-4 rounded-[10px] mt-8 hover:bg-[#D63031] hover:scale-[1.02] transition-all duration-200 cursor-pointer"
               style={{ boxShadow: "0 4px 24px rgba(232, 65, 66, 0.3)" }}
-              onClick={() => {
-                if (authenticated) {
-                  router.push("/dashboard");
-                } else if (ready) {
-                  login();
-                }
-              }}
+              onClick={handleLaunchApp}
             >
               Create Agent
             </button>

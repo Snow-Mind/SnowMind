@@ -135,6 +135,12 @@ export interface RebalanceHistoryResponse {
   total: number;
 }
 
+export interface RebalanceTriggerResponse {
+  smartAccountAddress: string;
+  status: string;
+  detail: Record<string, unknown> | null;
+}
+
 export interface HealthResponse {
   status: string;
   timestamp: string;

@@ -91,6 +91,7 @@ export default function DashboardPage() {
   const activatedFromOnboarding = searchParams.get("activated") === "1";
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
   const deploymentKickRef = useRef<string | null>(null);
+  const deploymentLastTriggerAtRef = useRef(0);
 
   const {
     data: portfolio,
@@ -166,14 +167,59 @@ export default function DashboardPage() {
 
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+  const accountIsActive = accountDetail?.isActive ?? true;
   const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
   const idleAllocationAmount = Number(
     portfolio?.allocations.find((a) => a.protocolId === "idle")?.amountUsdc ?? "0",
   );
   const hasIdleAllocation = idleAllocationAmount > 0.01;
   const hasDeployableIdleBalance = idleAllocationAmount >= 1;
-  const shouldAutoDeployIdle = !isLoading && hasActiveSessionKey && !requiresRegrant && hasDeployableIdleBalance;
-  const isIdleOnlyDeployment = !isLoading && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
+  const shouldAutoDeployIdle = !isLoading && accountIsActive && hasActiveSessionKey && !requiresRegrant && hasDeployableIdleBalance;
+  const isIdleOnlyDeployment = !isLoading && accountIsActive && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
+  const deploySkipReason = rebalanceStatus?.reasonDetail
+    ?? rebalanceStatus?.lastLog?.skipReason
+    ?? null;
+  const deployStatus = String(rebalanceStatus?.status ?? "").toLowerCase();
+  const showDeployRetry = isIdleOnlyDeployment
+    && ["skipped", "failed", "halted"].includes(deployStatus);
+
+  const triggerIdleDeployment = useCallback(async (force = false) => {
+    if (!address || !shouldAutoDeployIdle || hasAuthFault) return;
+
+    const now = Date.now();
+    if (!force && now - deploymentLastTriggerAtRef.current < 30_000) {
+      return;
+    }
+    deploymentLastTriggerAtRef.current = now;
+
+    try {
+      const trigger = await api.triggerRebalance(address);
+      const triggerStatus = String(trigger.status ?? "").toLowerCase();
+      const detail = trigger.detail;
+      const detailObject = detail && typeof detail === "object"
+        ? detail as Record<string, unknown>
+        : null;
+      const skipReason = String(
+        detailObject?.skip_reason
+        ?? detailObject?.skipReason
+        ?? detailObject?.reason
+        ?? "",
+      );
+
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[Dashboard] triggerRebalance:", triggerStatus, skipReason);
+      }
+
+      if (triggerStatus === "executed" || triggerStatus === "executing" || triggerStatus === "pending") {
+        void refreshDashboardQueries();
+      }
+    } catch (err: unknown) {
+      if (process.env.NODE_ENV !== "production") {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.debug("[Dashboard] triggerRebalance bootstrap failed:", msg);
+      }
+    }
+  }, [address, shouldAutoDeployIdle, hasAuthFault, refreshDashboardQueries]);
 
   // Mobile wallets often background the page during confirmation. Force a refresh
   // when the app regains focus/visibility so dashboard state updates without manual reload.
@@ -208,17 +254,28 @@ export default function DashboardPage() {
     if (deploymentKickRef.current === idleKey) return;
     deploymentKickRef.current = idleKey;
 
-    void api.triggerRebalance(address)
-      .then(() => {
-        void refreshDashboardQueries();
-      })
-      .catch((err: unknown) => {
-        if (process.env.NODE_ENV !== "production") {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.debug("[Dashboard] triggerRebalance bootstrap failed:", msg);
-        }
-      });
-  }, [address, shouldAutoDeployIdle, idleAllocationAmount, stats?.activeProtocols, hasAuthFault, refreshDashboardQueries]);
+    void triggerIdleDeployment(true);
+  }, [address, shouldAutoDeployIdle, idleAllocationAmount, stats?.activeProtocols, hasAuthFault, triggerIdleDeployment]);
+
+  // Continue nudging deployment while idle funds remain so transient in-flight
+  // skips or session-key propagation delays do not leave funds stranded.
+  useEffect(() => {
+    if (!address || !shouldAutoDeployIdle || hasAuthFault) return;
+
+    const interval = window.setInterval(() => {
+      void triggerIdleDeployment();
+    }, 30_000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [address, shouldAutoDeployIdle, hasAuthFault, triggerIdleDeployment]);
+
+  useEffect(() => {
+    if (shouldAutoDeployIdle) return;
+    deploymentKickRef.current = null;
+    deploymentLastTriggerAtRef.current = 0;
+  }, [shouldAutoDeployIdle]);
 
   // Aggressively poll for a short window so the "deploying" state clears
   // quickly without requiring a manual refresh (mobile and desktop).
@@ -406,17 +463,36 @@ export default function DashboardPage() {
       {/* Deploying funds banner — shown when all funds are idle after activation */}
       {isIdleOnlyDeployment && (
         <motion.div
-          className="flex items-center gap-3 rounded-lg border border-glacier/20 bg-glacier/[0.06] px-4 py-3"
+          className="rounded-lg border border-glacier/20 bg-glacier/[0.06] px-4 py-3"
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
         >
-          <Loader2 className="h-4 w-4 animate-spin text-glacier" />
-          <div>
-            <p className="text-[13px] font-medium text-arctic">Agent is deploying your funds</p>
-            <p className="text-[11px] text-[#8A837C]">
-              The optimizer will allocate your USDC to the best-yielding protocol shortly. This usually takes a few minutes.
-            </p>
+          <div className="flex items-start gap-3">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-glacier" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-medium text-arctic">Agent is deploying your funds</p>
+              <p className="text-[11px] text-[#8A837C]">
+                The optimizer is moving your idle USDC on-chain. This usually finishes in 1-3 minutes.
+              </p>
+              {showDeployRetry && deploySkipReason && (
+                <p className="mt-1 text-[11px] text-[#7A736D]">
+                  Latest check: {deploySkipReason}
+                </p>
+              )}
+            </div>
+            {showDeployRetry && (
+              <button
+                type="button"
+                onClick={() => {
+                  void triggerIdleDeployment(true);
+                  void refreshDashboardQueries();
+                }}
+                className="shrink-0 rounded-md border border-glacier/30 bg-white px-3 py-1.5 text-[11px] font-medium text-glacier hover:bg-glacier/[0.08]"
+              >
+                Retry now
+              </button>
+            )}
           </div>
         </motion.div>
       )}

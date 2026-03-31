@@ -317,8 +317,9 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!smartAccountAddress || !accountDetail || onboardingPortfolioLoading) return;
 
+    const accountIsActive = Boolean(accountDetail.isActive);
     const hasActiveSessionKey = Boolean(accountDetail.sessionKey?.isActive);
-    const needsRegrant = hasRecoverableFunds && !hasActiveSessionKey;
+    const needsRegrant = accountIsActive && hasRecoverableFunds && !hasActiveSessionKey;
 
     if (!needsRegrant) {
       setRegrantOnlyMode(false);
@@ -556,7 +557,7 @@ export default function OnboardingPage() {
           if (derivedAccountDetail?.address && derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
             setAgentActivated(true);
           }
-          if (!derivedAccountDetail?.sessionKey?.isActive && hasDerivedFunds) {
+          if (derivedAccountDetail?.isActive && !derivedAccountDetail?.sessionKey?.isActive && hasDerivedFunds) {
             setRegrantOnlyMode(true);
             setDepositAmount("0");
           }

@@ -11,6 +11,7 @@ export type {
   RebalanceLogEntry,
   RebalanceStatusResponse,
   RebalanceHistoryResponse,
+  RebalanceTriggerResponse,
   HealthResponse,
   SessionKeyStatusResponse,
   AccountDetailResponse,

@@ -266,12 +266,48 @@ async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
                 from app.services.optimizer.rebalancer import Rebalancer
                 rebalancer = Rebalancer()
                 result = await rebalancer.check_and_rebalance(account_id, address)
-                res_status = result.get("status", "unknown")
-                logger.info(
-                    "Initial rebalance for %s attempt %d/%d: %s",
-                    address, attempt, max_retries, res_status,
+                res_status = str(result.get("status", "unknown")).lower()
+                skip_reason = str(
+                    result.get("skip_reason")
+                    or result.get("skipReason")
+                    or result.get("reason")
+                    or ""
                 )
-                # Success or "no action needed" (funds already deployed from frontend)
+                logger.info(
+                    "Initial rebalance for %s attempt %d/%d: status=%s skip_reason=%s",
+                    address,
+                    attempt,
+                    max_retries,
+                    res_status,
+                    skip_reason[:180] if skip_reason else "-",
+                )
+
+                if res_status in {"executed", "pending", "executing"}:
+                    return
+
+                if res_status == "skipped":
+                    skip_reason_lc = skip_reason.lower()
+                    transient_skip = (
+                        "another rebalance attempt in flight" in skip_reason_lc
+                        or "no active session key" in skip_reason_lc
+                    )
+                    if transient_skip and attempt < max_retries:
+                        delay = 5 * (3 ** (attempt - 1))
+                        logger.info(
+                            "Initial rebalance transient skip for %s (attempt %d/%d): %s — retrying in %ds",
+                            address,
+                            attempt,
+                            max_retries,
+                            skip_reason[:160],
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    # Non-transient skip (e.g. no deposited balance / no action needed)
+                    return
+
+                # Unknown states are treated as terminal here; scheduler will retry.
                 return
             except Exception as exc:
                 exc_msg = str(exc)
