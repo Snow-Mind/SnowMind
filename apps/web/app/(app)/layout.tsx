@@ -472,9 +472,24 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
 
-      toast.success("Deposited! The optimizer will deploy your funds shortly.");
+      if (smartAccountAddress) {
+        await api.triggerRebalance(smartAccountAddress).catch(() => undefined);
+      }
+
+      toast.success("Deposited! The optimizer is deploying your funds.");
       setStep("done");
-      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+
+      if (smartAccountAddress) {
+        await Promise.allSettled([
+          queryClient.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] }),
+          queryClient.invalidateQueries({ queryKey: ["rebalance-status", smartAccountAddress] }),
+          queryClient.invalidateQueries({ queryKey: ["rebalance-history", smartAccountAddress] }),
+          queryClient.invalidateQueries({ queryKey: ["account-detail", smartAccountAddress] }),
+        ]);
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      }
+
       setTimeout(onClose, 1500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

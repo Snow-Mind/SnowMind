@@ -164,6 +164,49 @@ function isLikelyPendingReceiptError(message: string): boolean {
   ) || normalized.includes("could not be found");
 }
 
+function isRpcTransportFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("http request failed")
+    || normalized.includes("failed to fetch")
+    || normalized.includes("network request failed")
+    || normalized.includes("socket hang up")
+    || normalized.includes("request body")
+    || normalized.includes("eth_gettransactionbyhash")
+    || normalized.includes("eth_gettransactionreceipt")
+  );
+}
+
+function sanitizeActivationErrorMessage(message: string): string {
+  if (isRpcTransportFailure(message)) {
+    return "Avalanche RPC providers are temporarily unstable while confirming your activation transaction. "
+      + "Your funds are safe in your smart account. Please retry activation in a few seconds.";
+  }
+  return message.length > 200 ? `${message.slice(0, 180)}...` : message;
+}
+
+async function withRpcFallback<T>(
+  label: string,
+  execute: (client: ReturnType<typeof createPublicClient>, rpcUrl: string) => Promise<T>,
+): Promise<T> {
+  let lastRpcError = "";
+
+  for (const rpcUrl of AVALANCHE_RPC_URLS) {
+    const client = createPublicClient({ chain: CHAIN, transport: http(rpcUrl) });
+    try {
+      return await execute(client, rpcUrl);
+    } catch (rpcErr: unknown) {
+      const rpcMsg = errorToMessage(rpcErr);
+      lastRpcError = isRpcTransportFailure(rpcMsg)
+        ? `${rpcUrl}: transport error`
+        : `${rpcUrl}: ${rpcMsg.slice(0, 140)}`;
+    }
+  }
+
+  const suffix = lastRpcError ? ` Last provider error: ${lastRpcError}.` : "";
+  throw new Error(`RPC request failed for ${label} across all providers.${suffix}`);
+}
+
 async function waitForTransferConfirmationWithFallback(params: {
   transferHash: `0x${string}`;
   recipient: `0x${string}`;
@@ -191,7 +234,9 @@ async function waitForTransferConfirmationWithFallback(params: {
         if (isLikelyPendingReceiptError(receiptMsg)) {
           continue;
         }
-        lastRpcError = `${rpcUrl}: ${receiptMsg.slice(0, 180)}`;
+        lastRpcError = isRpcTransportFailure(receiptMsg)
+          ? `${rpcUrl}: transport error`
+          : `${rpcUrl}: ${receiptMsg.slice(0, 140)}`;
       }
     }
 
@@ -215,7 +260,7 @@ async function waitForTransferConfirmationWithFallback(params: {
     await sleep(RECEIPT_POLL_INTERVAL_MS);
   }
 
-  const suffix = lastRpcError ? ` Last RPC error: ${lastRpcError}.` : "";
+  const suffix = lastRpcError ? ` Last provider error: ${lastRpcError}.` : "";
   throw new Error(
     "USDC transfer broadcasted but confirmation could not be verified due RPC instability."
     + suffix
@@ -233,6 +278,7 @@ export default function OnboardingPage() {
   const { data: accountDetail, error: accountDetailError } = useAccountDetail(smartAccountAddress ?? undefined);
   const { data: onboardingPortfolio, isLoading: onboardingPortfolioLoading } = usePortfolio(smartAccountAddress ?? undefined);
   const hasPortfolioFunds = portfolioHasFunds(onboardingPortfolio);
+  const hasRecoverableFunds = hasPortfolioFunds;
   const { wallets } = useWallets();
   const queryClient = useQueryClient();
   const wallet =
@@ -266,16 +312,13 @@ export default function OnboardingPage() {
     }
   }, [isAccountReady, deployPhase, formStep]);
 
-  // Returning account with no active session key should re-grant only.
-  // This avoids forcing an additional deposit when funds are already on-chain.
+  // If funds already exist in the smart account but the session key is not
+  // active, route to re-grant mode (no new EOA deposit required).
   useEffect(() => {
     if (!smartAccountAddress || !accountDetail || onboardingPortfolioLoading) return;
 
-    const isKnownAccount = Boolean(accountDetail.id);
-    const needsRegrant = isKnownAccount
-      && Boolean(accountDetail.isActive)
-      && !Boolean(accountDetail.sessionKey?.isActive)
-      && hasPortfolioFunds;
+    const hasActiveSessionKey = Boolean(accountDetail.sessionKey?.isActive);
+    const needsRegrant = hasRecoverableFunds && !hasActiveSessionKey;
 
     if (!needsRegrant) {
       setRegrantOnlyMode(false);
@@ -287,7 +330,7 @@ export default function OnboardingPage() {
     if (formStep === "strategy" || formStep === "deposit") {
       setFormStep("activate");
     }
-  }, [smartAccountAddress, accountDetail, formStep, onboardingPortfolioLoading, hasPortfolioFunds]);
+  }, [smartAccountAddress, accountDetail, formStep, onboardingPortfolioLoading, hasRecoverableFunds]);
 
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
@@ -371,20 +414,18 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!wallet) return;
 
-    const publicClient = createPublicClient({
-      chain: CHAIN,
-      transport: http(AVALANCHE_RPC_URL),
-    });
-
     const checkBalance = async () => {
       try {
-        const balance = await publicClient.readContract({
-          address: CONTRACTS.USDC,
-          abi: ERC20_ABI,
-          functionName: "balanceOf",
-          args: [wallet.address as `0x${string}`],
-        });
-        setEoaBalance(formatUnits(balance as bigint, 6));
+        const balance = await withRpcFallback(
+          "wallet USDC balance",
+          (client) => client.readContract({
+            address: CONTRACTS.USDC,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [wallet.address as `0x${string}`],
+          }) as Promise<bigint>,
+        );
+        setEoaBalance(formatUnits(balance, 6));
       } catch {
         /* ignore polling errors */
       }
@@ -515,7 +556,7 @@ export default function OnboardingPage() {
           if (derivedAccountDetail?.address && derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
             setAgentActivated(true);
           }
-          if (derivedAccountDetail?.id && derivedAccountDetail.isActive && !derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
+          if (!derivedAccountDetail?.sessionKey?.isActive && hasDerivedFunds) {
             setRegrantOnlyMode(true);
             setDepositAmount("0");
           }
@@ -601,7 +642,7 @@ export default function OnboardingPage() {
   // Giza-style activation: ERC-20 transfer + session key + register (Signature 2)
   const handleActivate = async () => {
     if (!wallet || !smartAccountAddress || !isValidAmount) return;
-    if (regrantOnlyMode && !onboardingPortfolioLoading && !hasPortfolioFunds) {
+    if (regrantOnlyMode && !onboardingPortfolioLoading && !hasRecoverableFunds) {
       setRegrantOnlyMode(false);
       setActivationPhase("idle");
       setFormStep("deposit");
@@ -651,18 +692,16 @@ export default function OnboardingPage() {
       // Check existing balance and only transfer the shortfall to prevent double-deposits.
       setActivationPhase("transferring-usdc");
 
-      const publicClient = createPublicClient({
-        chain: CHAIN,
-        transport: http(AVALANCHE_RPC_URL),
-      });
-
       const existingBalance = await withRetry(
-        () => publicClient.readContract({
-          address: CONTRACTS.USDC as `0x${string}`,
-          abi: ERC20_ABI,
-          functionName: "balanceOf",
-          args: [derivedAddr as `0x${string}`],
-        }) as Promise<bigint>,
+        () => withRpcFallback(
+          "smart-account USDC balance precheck",
+          (client) => client.readContract({
+            address: CONTRACTS.USDC as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [derivedAddr as `0x${string}`],
+          }) as Promise<bigint>,
+        ),
         { label: "USDC balanceOf" },
       );
 
@@ -704,12 +743,15 @@ export default function OnboardingPage() {
         const [eoaAddress] = await walletClient.getAddresses();
 
         // Pre-flight check: verify EOA has enough USDC
-        const eoaUsdcBalance = await publicClient.readContract({
-          address: CONTRACTS.USDC as `0x${string}`,
-          abi: ERC20_ABI,
-          functionName: "balanceOf",
-          args: [eoaAddress],
-        }) as bigint;
+        const eoaUsdcBalance = await withRpcFallback(
+          "EOA USDC balance precheck",
+          (client) => client.readContract({
+            address: CONTRACTS.USDC as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [eoaAddress],
+          }) as Promise<bigint>,
+        );
         if (eoaUsdcBalance < shortfall) {
           throw new Error(
             `Insufficient USDC balance. You need ${formatUnits(shortfall, 6)} USDC but only have ${formatUnits(eoaUsdcBalance, 6)} USDC in your wallet. ` +
@@ -750,18 +792,25 @@ export default function OnboardingPage() {
 
           if (isInvalidParams) {
             try {
-              const estimatedGas = await publicClient.estimateGas({
-                account: eoaAddress,
-                to: CONTRACTS.USDC,
-                data: transferData,
-                value: 0n,
-              }).catch(() => 120000n);
+              const estimatedGas = await withRpcFallback(
+                "USDC transfer gas estimate",
+                (client) => client.estimateGas({
+                  account: eoaAddress,
+                  to: CONTRACTS.USDC,
+                  data: transferData,
+                  value: 0n,
+                }),
+              ).catch(() => 120000n);
               const gasLimit = estimatedGas + (estimatedGas / 5n);
 
-              const fees = await publicClient.estimateFeesPerGas().catch(() => null);
-              const pendingNonce = await publicClient
-                .getTransactionCount({ address: eoaAddress, blockTag: "pending" })
-                .catch(() => null);
+              const fees = await withRpcFallback(
+                "USDC transfer fee estimate",
+                (client) => client.estimateFeesPerGas(),
+              ).catch(() => null);
+              const pendingNonce = await withRpcFallback(
+                "EOA pending nonce",
+                (client) => client.getTransactionCount({ address: eoaAddress, blockTag: "pending" }),
+              ).catch(() => null);
               const walletChainId = await provider
                 .request({ method: "eth_chainId" })
                 .catch(() => hexChainId) as string;
@@ -930,7 +979,7 @@ export default function OnboardingPage() {
       try {
         await api.saveDiversificationPreference(derivedAddr, diversificationPref);
       } catch { /* non-critical — default is balanced */ }
-      const expectedFundsAfterActivation = hasPortfolioFunds || amountWei > 0n;
+      const expectedFundsAfterActivation = hasRecoverableFunds || amountWei > 0n;
       await finalizeActivationSuccess(derivedAddr, false, expectedFundsAfterActivation);
     } catch (err) {
       activateGuardRef.current = false;
@@ -970,6 +1019,10 @@ export default function OnboardingPage() {
         setActivationPhase("error");
         setActivationError(msg);
         toast.error("Insufficient USDC balance.");
+      } else if (isRpcTransportFailure(msg)) {
+        setActivationPhase("error");
+        setActivationError(sanitizeActivationErrorMessage(msg));
+        toast.error("Avalanche RPC is unstable right now. Retry activation in a few seconds.");
       } else if (msg.includes("confirmation could not be verified due RPC instability")) {
         setActivationPhase("error");
         setActivationError(
@@ -980,7 +1033,7 @@ export default function OnboardingPage() {
         toast.error("Transfer confirmation timed out. Retrying is safe.");
       } else if (msg.includes("USDC transfer failed") || msg.includes("invalid parameters")) {
         setActivationPhase("error");
-        setActivationError(msg);
+        setActivationError(sanitizeActivationErrorMessage(msg));
         toast.error("Transfer failed in wallet — please retry.");
       } else if (msg.includes("Failed to switch")) {
         setActivationPhase("error");
@@ -988,7 +1041,7 @@ export default function OnboardingPage() {
         toast.error("Please switch to Avalanche network manually.");
       } else {
         setActivationPhase("error");
-        setActivationError(msg.length > 200 ? msg.slice(0, 180) + "…" : msg);
+        setActivationError(sanitizeActivationErrorMessage(msg));
         toast.error("Activation failed. You can retry — your funds are safe.");
       }
     } finally {
@@ -1007,7 +1060,7 @@ export default function OnboardingPage() {
   const stepIndex = steps.findIndex((s) => s.id === formStep);
 
   return (
-    <div className="mx-auto max-w-lg py-10">
+    <div className="mx-auto w-full max-w-lg px-3 py-8 sm:px-0 sm:py-10">
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
@@ -1055,44 +1108,46 @@ export default function OnboardingPage() {
         )}
 
         {/* Step progress bar */}
-        <div className="flex items-center justify-center">
-          {steps.map((step, i) => {
-            const isDone = i < stepIndex || activated;
-            const isCurrent = i === stepIndex && !activated;
-            return (
-              <div key={step.id} className="flex items-center">
-                <div className="flex flex-col items-center">
-                  <div
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-all",
-                      isDone
-                        ? "bg-[#059669] text-white"
-                        : isCurrent
-                          ? "bg-[#E84142] text-white"
-                          : "bg-[#E8E2DA] text-[#8A837C]",
-                    )}
-                  >
-                    {isDone ? (
-                      <CheckCircle2 className="h-4 w-4" />
-                    ) : (
-                      i + 1
-                    )}
+        <div className="overflow-x-auto pb-1">
+          <div className="mx-auto flex min-w-max items-center justify-center px-1">
+            {steps.map((step, i) => {
+              const isDone = i < stepIndex || activated;
+              const isCurrent = i === stepIndex && !activated;
+              return (
+                <div key={step.id} className="flex items-center">
+                  <div className="flex flex-col items-center">
+                    <div
+                      className={cn(
+                        "flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold transition-all sm:h-8 sm:w-8 sm:text-xs",
+                        isDone
+                          ? "bg-[#059669] text-white"
+                          : isCurrent
+                            ? "bg-[#E84142] text-white"
+                            : "bg-[#E8E2DA] text-[#8A837C]",
+                      )}
+                    >
+                      {isDone ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      ) : (
+                        i + 1
+                      )}
+                    </div>
+                    <span className="mt-1.5 text-[10px] font-medium text-[#5C5550]">
+                      {step.label}
+                    </span>
                   </div>
-                  <span className="mt-1.5 text-[10px] font-medium text-[#5C5550]">
-                    {step.label}
-                  </span>
+                  {i < steps.length - 1 && (
+                    <div
+                      className={cn(
+                        "mx-2 mb-5 h-px w-10 sm:mx-3 sm:w-16",
+                        isDone ? "bg-[#059669]" : "bg-[#E8E2DA]",
+                      )}
+                    />
+                  )}
                 </div>
-                {i < steps.length - 1 && (
-                  <div
-                    className={cn(
-                      "mx-3 mb-5 h-px w-16",
-                      isDone ? "bg-[#059669]" : "bg-[#E8E2DA]",
-                    )}
-                  />
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
         {/* ─── Step 1: Account ─── */}
@@ -1279,13 +1334,19 @@ export default function OnboardingPage() {
 
               {/* Protocol table */}
               <div className="overflow-hidden rounded-lg border border-[#E8E2DA]">
-                {/* Table header */}
-                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2">
+                {/* Mobile header */}
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2 md:hidden">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-14">Risk</span>
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-right w-16">APY</span>
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-right w-20">TVL</span>
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center w-12">Active</span>
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C] text-center">Active</span>
+                </div>
+
+                {/* Desktop table header */}
+                <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2 md:grid">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
+                  <span className="w-14 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Risk</span>
+                  <span className="w-16 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">APY</span>
+                  <span className="w-20 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">TVL</span>
+                  <span className="w-12 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
                 </div>
 
                 {/* Protocol rows */}
@@ -1295,21 +1356,31 @@ export default function OnboardingPage() {
                   const tvl = rateData?.tvlUsd;
                   const apy = rateData?.currentApy;
                   const isEnabled = protocol.isActive;
+                  const apyLabel = apy != null && apy > 0
+                    ? `${(apy * 100).toFixed(2)}%`
+                    : "-";
+                  const tvlLabel = tvl != null && tvl > 0
+                    ? `$${tvl >= 1e9 ? `${(tvl / 1e9).toFixed(1)}B` : tvl >= 1e6 ? `${(tvl / 1e6).toFixed(1)}M` : `${(tvl / 1e3).toFixed(0)}K`}`
+                    : "-";
+                  const riskToneClass = protocol.riskScore >= 9
+                    ? "bg-[#059669]/10 text-[#059669]"
+                    : protocol.riskScore >= 7
+                      ? "bg-[#D97706]/10 text-[#D97706]"
+                      : "bg-[#DC2626]/10 text-[#DC2626]";
+
                   return (
                     <div
                       key={protocol.id}
                       className={cn(
-                        "grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer",
+                        "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 px-3 py-3 transition-all cursor-pointer md:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] md:items-center",
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
-                        isSelected
-                          ? "bg-[#E84142]/[0.03]"
-                          : "bg-white opacity-60",
+                        isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
                       )}
                       onClick={() => toggleProtocol(protocol.id, isEnabled)}
                     >
                       {/* Protocol info */}
-                      <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex min-w-0 items-start gap-3">
                         <Image
                           src={protocol.logoPath}
                           alt={protocol.name}
@@ -1319,7 +1390,10 @@ export default function OnboardingPage() {
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <p className="text-sm font-medium text-[#1A1715] truncate">{protocol.name}</p>
+                            <p className="text-sm font-medium leading-tight text-[#1A1715]">
+                              <span className="sm:hidden">{protocol.shortName ?? protocol.name}</span>
+                              <span className="hidden sm:inline">{protocol.name}</span>
+                            </p>
                             {!isEnabled && (
                               <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
                                 Soon
@@ -1331,55 +1405,25 @@ export default function OnboardingPage() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()}
-                                className="text-[#8A837C] hover:text-[#E84142] transition-colors shrink-0"
+                                className="shrink-0 text-[#8A837C] transition-colors hover:text-[#E84142]"
                                 title={`View ${protocol.name} vault`}
                               >
                                 <ExternalLink className="h-3 w-3" />
                               </a>
                             )}
                           </div>
-                          <p className="text-[10px] text-[#8A837C] truncate">
+                          <p className="mt-0.5 hidden text-[10px] text-[#8A837C] sm:block">
                             {protocol.category}, {protocol.asset}
                           </p>
                         </div>
                       </div>
 
-                      {/* Risk Score */}
-                      <div className="flex justify-center w-14">
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
-                            protocol.riskScore >= 9
-                              ? "bg-[#059669]/10 text-[#059669]"
-                              : protocol.riskScore >= 7
-                                ? "bg-[#D97706]/10 text-[#D97706]"
-                                : "bg-[#DC2626]/10 text-[#DC2626]",
-                          )}
-                        >
-                          {protocol.riskScore}/10
-                        </span>
-                      </div>
-
-                      {/* APY */}
-                      <span className="font-mono text-[11px] font-semibold text-[#059669] text-right w-16">
-                        {apy != null && apy > 0
-                          ? `${(apy * 100).toFixed(2)}%`
-                          : "—"}
-                      </span>
-
-                      {/* TVL */}
-                      <span className="font-mono text-[11px] text-[#5C5550] text-right w-20">
-                        {tvl != null && tvl > 0
-                          ? `$${tvl >= 1e9 ? `${(tvl / 1e9).toFixed(1)}B` : tvl >= 1e6 ? `${(tvl / 1e6).toFixed(1)}M` : `${(tvl / 1e3).toFixed(0)}K`}`
-                          : "—"}
-                      </span>
-
                       {/* Toggle */}
-                      <div className="flex justify-center w-12">
+                      <div className="flex justify-center md:w-12">
                         <button
                           onClick={(e) => { e.stopPropagation(); toggleProtocol(protocol.id, isEnabled); }}
                           className={cn(
-                            "flex h-5 w-9 items-center rounded-full p-0.5 transition-colors shrink-0",
+                            "flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors",
                             !isEnabled && "opacity-40",
                             isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
                           )}
@@ -1393,22 +1437,63 @@ export default function OnboardingPage() {
                           />
                         </button>
                       </div>
+
+                      {/* Risk Score (desktop) */}
+                      <div className="hidden justify-center md:flex md:w-14">
+                        <span className={cn(
+                          "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                          riskToneClass,
+                        )}>
+                          {protocol.riskScore}/10
+                        </span>
+                      </div>
+
+                      {/* APY (desktop) */}
+                      <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:block">
+                        {apyLabel}
+                      </span>
+
+                      {/* TVL (desktop) */}
+                      <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:block">
+                        {tvlLabel}
+                      </span>
+
+                      {/* Compact mobile metrics */}
+                      <div className="col-span-2 grid grid-cols-3 gap-2 rounded-md bg-[#F8F4EF] px-2.5 py-2 md:hidden">
+                        <div>
+                          <p className="text-[9px] uppercase tracking-wide text-[#8A837C]">Risk</p>
+                          <span className={cn(
+                            "mt-1 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                            riskToneClass,
+                          )}>
+                            {protocol.riskScore}/10
+                          </span>
+                        </div>
+                        <div>
+                          <p className="text-[9px] uppercase tracking-wide text-[#8A837C]">APY</p>
+                          <p className="mt-1 font-mono text-[11px] font-semibold text-[#059669]">{apyLabel}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] uppercase tracking-wide text-[#8A837C]">TVL</p>
+                          <p className="mt-1 font-mono text-[11px] text-[#5C5550]">{tvlLabel}</p>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse gap-3 sm:flex-row">
                 <button
                   onClick={() => setFormStep("account")}
-                  className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
+                  className="flex items-center justify-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7] sm:justify-start"
                 >
                   Back
                 </button>
                 <button
                   onClick={() => setFormStep(regrantOnlyMode ? "activate" : "deposit")}
                   disabled={selectedCount === 0}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+                  className="flex w-full flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                 >
                   {regrantOnlyMode ? "Continue to Re-grant" : "Continue"}
                   <ArrowRight className="h-4 w-4" />
@@ -1417,79 +1502,79 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
-          {/* ─── Step 3: Deposit ─── */}
-          {formStep === "deposit" && !activated && (
-            <motion.div
-              key="step-deposit"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="rounded-xl border border-[#E8E2DA] bg-white p-6 space-y-5"
-            >
-              <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#E84142]/10">
-                  <Wallet className="h-3.5 w-3.5 text-[#E84142]" />
+            {/* ─── Step 3: Deposit ─── */}
+            {formStep === "deposit" && !activated && (
+              <motion.div
+                key="step-deposit"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="rounded-xl border border-[#E8E2DA] bg-white p-6 space-y-5"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#E84142]/10">
+                    <Wallet className="h-3.5 w-3.5 text-[#E84142]" />
+                  </div>
+                  <span className="text-sm font-medium text-[#1A1715]">
+                    Choose Deposit Amount
+                  </span>
                 </div>
-                <span className="text-sm font-medium text-[#1A1715]">
-                  Choose Deposit Amount
-                </span>
-              </div>
 
-              <p className="text-xs text-[#8A837C]">
-                Choose how much USDC to deposit. It will be transferred from your wallet
-                and deployed to earn yield automatically.
-              </p>
+                <p className="text-xs text-[#8A837C]">
+                  Choose how much USDC to deposit. It will be transferred from your wallet
+                  and deployed to earn yield automatically.
+                </p>
 
-              <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
-                <span className="text-sm font-medium text-[#5C5550]">$</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={eoaBalanceNum}
-                  step="0.01"
-                  placeholder="Enter amount"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)}
-                  className="flex-1 bg-transparent font-mono text-base text-[#1A1715] outline-none placeholder:text-[#C4BEB8] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                />
-                <span className="text-xs font-medium text-[#8A837C]">USDC</span>
-                {eoaBalanceNum > 0 && (
+                <div className="flex items-center gap-2 rounded-lg bg-[#F5F0EB] px-3 py-2.5">
+                  <span className="text-sm font-medium text-[#5C5550]">$</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={eoaBalanceNum}
+                    step="0.01"
+                    placeholder="Enter amount"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(e.target.value)}
+                    className="flex-1 bg-transparent font-mono text-base text-[#1A1715] outline-none placeholder:text-[#C4BEB8] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                  <span className="text-xs font-medium text-[#8A837C]">USDC</span>
+                  {eoaBalanceNum > 0 && (
+                    <button
+                      onClick={() => setDepositAmount(eoaBalanceNum.toFixed(2))}
+                      className="rounded-md bg-[#E84142]/10 px-2 py-0.5 text-[10px] font-semibold text-[#E84142] hover:bg-[#E84142]/20 transition-colors"
+                    >
+                      MAX
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-xs text-[#8A837C]">
+                  <span>Wallet balance: ${eoaBalanceNum.toFixed(2)} USDC</span>
+                  {parsedAmount > eoaBalanceNum && (
+                    <span className="text-[#DC2626]">Exceeds balance</span>
+                  )}
+                  {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 1 && (
+                    <span className="text-[#DC2626]">Min $1.00</span>
+                  )}
+                </div>
+
+                <div className="flex flex-col-reverse gap-3 sm:flex-row">
                   <button
-                    onClick={() => setDepositAmount(eoaBalanceNum.toFixed(2))}
-                    className="rounded-md bg-[#E84142]/10 px-2 py-0.5 text-[10px] font-semibold text-[#E84142] hover:bg-[#E84142]/20 transition-colors"
+                    onClick={() => setFormStep("strategy")}
+                    className="flex items-center justify-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7] sm:justify-start"
                   >
-                    MAX
+                    Back
                   </button>
-                )}
-              </div>
-              <div className="flex items-center justify-between text-xs text-[#8A837C]">
-                <span>Wallet balance: ${eoaBalanceNum.toFixed(2)} USDC</span>
-                {parsedAmount > eoaBalanceNum && (
-                  <span className="text-[#DC2626]">Exceeds balance</span>
-                )}
-                {!isNaN(parsedAmount) && parsedAmount > 0 && parsedAmount < 1 && (
-                  <span className="text-[#DC2626]">Min $1.00</span>
-                )}
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setFormStep("strategy")}
-                  className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={() => setFormStep("activate")}
-                  disabled={!isValidAmount}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
-                >
-                  Continue
-                  <ArrowRight className="h-4 w-4" />
-                </button>
-              </div>
-            </motion.div>
-          )}
+                  <button
+                    onClick={() => setFormStep("activate")}
+                    disabled={!isValidAmount}
+                    className="flex w-full flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
+                  >
+                    Continue
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
 
           {/* ─── Step 4: Activate ─── */}
           {formStep === "activate" && !activated && (
@@ -1573,10 +1658,10 @@ export default function OnboardingPage() {
                     </div>
                   )}
 
-                  <div className="flex gap-3">
+                  <div className="flex flex-col-reverse gap-3 sm:flex-row">
                     <button
                       onClick={() => { setActivationPhase("idle"); setActivationError(null); }}
-                      className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-2.5 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
+                      className="flex items-center justify-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-2.5 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7] sm:justify-start"
                     >
                       Back
                     </button>
@@ -1636,10 +1721,10 @@ export default function OnboardingPage() {
                     </p>
                   </div>
 
-                  <div className="flex gap-3">
+                  <div className="flex flex-col-reverse gap-3 sm:flex-row">
                     <button
                       onClick={() => setFormStep(regrantOnlyMode ? "strategy" : "deposit")}
-                      className="flex items-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7]"
+                      className="flex items-center justify-center gap-1 rounded-xl border border-[#E8E2DA] px-4 py-3 text-sm font-medium text-[#5C5550] transition-all hover:border-[#D4CEC7] sm:justify-start"
                     >
                       Back
                     </button>

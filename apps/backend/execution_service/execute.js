@@ -10,6 +10,7 @@ import {
   createPublicClient,
   decodeErrorResult,
   decodeFunctionResult,
+  fallback,
   http,
   encodeFunctionData,
   maxUint256,
@@ -44,6 +45,48 @@ const ZERODEV_FETCH_OPTIONS = {
 }
 
 const EXPLORER_BASE = "https://snowtrace.io"
+
+const DEFAULT_AVALANCHE_RPC_URLS = [
+  "https://api.avax.network/ext/bc/C/rpc",
+  "https://avalanche.public-rpc.com",
+  "https://rpc.ankr.com/avalanche",
+]
+
+function parseRpcUrlList(raw) {
+  if (!raw) return []
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+}
+
+function getAvalancheRpcUrls() {
+  const configured = [
+    ...parseRpcUrlList(process.env.AVALANCHE_RPC_URLS),
+    process.env.AVALANCHE_RPC_URL,
+    ...DEFAULT_AVALANCHE_RPC_URLS,
+  ].filter((value) => typeof value === "string" && value.length > 0)
+
+  return [...new Set(configured)]
+}
+
+const AVALANCHE_RPC_URLS = getAvalancheRpcUrls()
+
+function createAvalanchePublicClient() {
+  const transports = AVALANCHE_RPC_URLS.map((rpcUrl) =>
+    http(rpcUrl, {
+      retryCount: 1,
+      timeout: 15_000,
+    }),
+  )
+
+  return createPublicClient({
+    chain: CHAIN,
+    transport: transports.length === 1
+      ? transports[0]
+      : fallback(transports, { rank: false }),
+  })
+}
 
 const AAVE_ABI = [
   {
@@ -312,10 +355,7 @@ function extractBundlerErrorInfo(err) {
 }
 
 async function getKernelClient(serializedPermission, sessionPrivateKey, options = { withPaymaster: true, forceRegularMode: false }) {
-  const publicClient = createPublicClient({
-    chain: CHAIN,
-    transport: http(process.env.AVALANCHE_RPC_URL),
-  })
+  const publicClient = createAvalanchePublicClient()
 
   // Diagnostic: log whether the session private key was provided.
   // NEVER log the key itself — only its presence and length.
@@ -772,10 +812,7 @@ export async function executeRebalance({
     // deserialization. To avoid a full second deserialization later, we
     // only do this check if the blob has an enableSig (mode decision matters).
     if (blobHasEnableSig) {
-      const tempPublicClient = createPublicClient({
-        chain: CHAIN,
-        transport: http(process.env.AVALANCHE_RPC_URL),
-      })
+      const tempPublicClient = createAvalanchePublicClient()
       // Quick deserialization to extract the permissionId from the validator
       const tempSigner = await toECDSASigner({
         signer: privateKeyToAccount(sessionPrivateKey || ""),

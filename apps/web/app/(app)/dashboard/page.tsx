@@ -167,9 +167,12 @@ export default function DashboardPage() {
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
   const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
-  const hasIdleAllocation = portfolio?.allocations.some(
-    (a) => a.protocolId === "idle" && Number(a.amountUsdc) > 0,
-  ) ?? false;
+  const idleAllocationAmount = Number(
+    portfolio?.allocations.find((a) => a.protocolId === "idle")?.amountUsdc ?? "0",
+  );
+  const hasIdleAllocation = idleAllocationAmount > 0.01;
+  const hasDeployableIdleBalance = idleAllocationAmount >= 1;
+  const shouldAutoDeployIdle = !isLoading && hasActiveSessionKey && !requiresRegrant && hasDeployableIdleBalance;
   const isIdleOnlyDeployment = !isLoading && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
 
   // Mobile wallets often background the page during confirmation. Force a refresh
@@ -199,9 +202,11 @@ export default function DashboardPage() {
   // If funds are idle and session key is active, kick a best-effort immediate
   // rebalance so users do not wait for the next scheduler tick.
   useEffect(() => {
-    if (!address || !isIdleOnlyDeployment || !hasActiveSessionKey || hasAuthFault) return;
-    if (deploymentKickRef.current === address) return;
-    deploymentKickRef.current = address;
+    if (!address || !shouldAutoDeployIdle || hasAuthFault) return;
+
+    const idleKey = `${address}:${idleAllocationAmount.toFixed(2)}:${stats?.activeProtocols ?? 0}`;
+    if (deploymentKickRef.current === idleKey) return;
+    deploymentKickRef.current = idleKey;
 
     void api.triggerRebalance(address)
       .then(() => {
@@ -213,12 +218,12 @@ export default function DashboardPage() {
           console.debug("[Dashboard] triggerRebalance bootstrap failed:", msg);
         }
       });
-  }, [address, isIdleOnlyDeployment, hasActiveSessionKey, hasAuthFault, refreshDashboardQueries]);
+  }, [address, shouldAutoDeployIdle, idleAllocationAmount, stats?.activeProtocols, hasAuthFault, refreshDashboardQueries]);
 
   // Aggressively poll for a short window so the "deploying" state clears
   // quickly without requiring a manual refresh (mobile and desktop).
   useEffect(() => {
-    if (!address || !isIdleOnlyDeployment || hasAuthFault) return;
+    if (!address || !shouldAutoDeployIdle || hasAuthFault) return;
 
     let attempts = 0;
     const intervalMs = activatedFromOnboarding ? 2500 : 4000;
@@ -241,12 +246,12 @@ export default function DashboardPage() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [address, activatedFromOnboarding, isIdleOnlyDeployment, hasAuthFault, refreshDashboardQueries]);
+  }, [address, activatedFromOnboarding, shouldAutoDeployIdle, hasAuthFault, refreshDashboardQueries]);
 
   // When execution succeeds but allocations are still rendering as idle,
   // briefly burst-refresh portfolio so the deployed market appears quickly.
   useEffect(() => {
-    if (!address || !isIdleOnlyDeployment || hasAuthFault) return;
+    if (!address || !shouldAutoDeployIdle || hasAuthFault) return;
     if (rebalanceStatus?.status !== "executed") return;
 
     let attempts = 0;
@@ -265,7 +270,7 @@ export default function DashboardPage() {
     return () => {
       window.clearInterval(burst);
     };
-  }, [address, isIdleOnlyDeployment, hasAuthFault, rebalanceStatus?.status, refetchPortfolio]);
+  }, [address, shouldAutoDeployIdle, hasAuthFault, rebalanceStatus?.status, refetchPortfolio]);
 
   const regrantReason = rebalanceStatus?.reasonDetail
     ?? "Your session key needs to be granted again before automated rebalancing can continue.";

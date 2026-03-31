@@ -133,10 +133,22 @@ async def get_portfolio(
         .execute()
     )
     if not acct.data:
+        idle_usdc = await _get_idle_usdc(address)
+        allocations: list[AllocationResponse] = []
+        if idle_usdc > Decimal("0.01"):
+            allocations.append(
+                AllocationResponse(
+                    protocol_id="idle",
+                    name="Idle USDC (Wallet)",
+                    amount_usdc=idle_usdc,
+                    allocation_pct=Decimal("1"),
+                    current_apy=Decimal("0"),
+                )
+            )
         return PortfolioResponse(
-            total_deposited_usd=Decimal("0"),
+            total_deposited_usd=idle_usdc,
             total_yield_usd=Decimal("0"),
-            allocations=[],
+            allocations=allocations,
             last_rebalance_at=None,
         )
 

@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     MIN_BALANCE_USD: float = 0.0         # Skip rebalance only when total balance <= $0
     MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (Aave/Benqi only)
     VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)
-    UTILIZATION_THRESHOLD: float = 0.95  # 95% — exclude from new deposits
+    UTILIZATION_THRESHOLD: float = 0.90  # 90% — exclude from new deposits
     EXPLOIT_APY_MULTIPLIER: float = 2.0  # 2x yesterday avg + high utilization = exploit
     STABILITY_SWING_THRESHOLD: float = 0.50  # 50% relative swing in 7 days → skip
     MIN_PROTOCOL_TVL_USD: float = 100000.0   # $100K minimum TVL for Aave/Benqi

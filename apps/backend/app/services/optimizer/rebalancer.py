@@ -866,8 +866,17 @@ class Rebalancer:
         #    Initial deployment: idle USDC earning 0% → any protocol is better.
         has_existing_protocol_positions = any(v > Decimal("0.01") for v in current.values())
         is_initial_deployment = not has_existing_protocol_positions and idle_usdc > Decimal("0.01")
+        is_idle_topup_deployment = has_existing_protocol_positions and idle_usdc >= Decimal("1.00")
+        skip_performance_gates = is_initial_deployment or is_idle_topup_deployment
 
-        if global_flag == RebalanceFlag.NONE and not is_initial_deployment and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
+        if is_idle_topup_deployment:
+            logger.info(
+                "Idle top-up deployment for %s detected (idle=$%.2f) — bypassing beat/min-gap/profitability gates",
+                smart_account_address,
+                float(idle_usdc),
+            )
+
+        if global_flag == RebalanceFlag.NONE and not skip_performance_gates and apy_improvement < Decimal(str(self.settings.BEAT_MARGIN)):
             # Detailed diagnostics for beat-margin skip — the most common
             # skip reason; helps operators understand why rebalance didn't fire.
             logger.info(
@@ -902,7 +911,7 @@ class Rebalancer:
             .limit(1)
             .execute()
         )
-        if last.data and global_flag == RebalanceFlag.NONE and not is_initial_deployment:
+        if last.data and global_flag == RebalanceFlag.NONE and not skip_performance_gates:
             last_ts = datetime.fromisoformat(last.data[0]["created_at"])
             # Keep execution cadence consistent with the scheduler tick.
             # If checks run every 6 minutes, the minimum execution gap should
@@ -922,7 +931,7 @@ class Rebalancer:
             abs(result_allocations.get(pid, Decimal("0")) - current.get(pid, Decimal("0")))
             for pid in all_protocols
         ) / Decimal("2")
-        if global_flag == RebalanceFlag.NONE and not is_initial_deployment and total_movement < Decimal("0.01"):
+        if global_flag == RebalanceFlag.NONE and not skip_performance_gates and total_movement < Decimal("0.01"):
             return await self._log(
                 db,
                 account_id,
@@ -933,7 +942,7 @@ class Rebalancer:
 
         # 8b. Profitability gate — skip if expected gain does not cover gas.
         # Bypassed for initial deployments: idle USDC at 0% should be deployed.
-        if global_flag == RebalanceFlag.NONE and total_usd > 0 and not is_initial_deployment:
+        if global_flag == RebalanceFlag.NONE and total_usd > 0 and not skip_performance_gates:
             daily_gain = apy_improvement * total_usd / Decimal("365")
             gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
             breakeven_days = Decimal(str(self.settings.PROFITABILITY_BREAKEVEN_DAYS))
@@ -1015,13 +1024,13 @@ class Rebalancer:
         logger.info(
             "EXECUTING rebalance for %s: current=%s, target=%s, "
             "idle=$%.2f, total=$%.2f, movement=$%.2f, apy_gain=%.4f%%, "
-            "flag=%s, is_initial=%s",
+            "flag=%s, is_initial=%s, is_idle_topup=%s",
             smart_account_address,
             {p: f"${float(v):.2f}" for p, v in current.items()},
             {p: f"${float(v):.2f}" for p, v in result_allocations.items()},
             float(idle_usdc), float(total_usd), float(total_movement),
             float(apy_improvement * 100),
-            global_flag.name, is_initial_deployment,
+            global_flag.name, is_initial_deployment, is_idle_topup_deployment,
         )
         try:
             tx_hash = await self._execute_rebalance_once(
