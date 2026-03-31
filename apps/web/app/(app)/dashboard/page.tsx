@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
@@ -22,6 +22,7 @@ import { usePortfolio } from "@/hooks/usePortfolio";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
+import { useAccountDetail } from "@/hooks/useAccountDetail";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { api, APIError } from "@/lib/api-client";
 import { useAuth } from "@/hooks/useAuth";
@@ -92,6 +93,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
   const deploymentKickRef = useRef<string | null>(null);
   const deploymentLastTriggerAtRef = useRef(0);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
 
   const {
     data: portfolio,
@@ -115,19 +117,12 @@ export default function DashboardPage() {
   const {
     data: accountDetail,
     isLoading: accountLoading,
-  } = useQuery({
-    queryKey: ["account-detail", address],
-    queryFn: () => (address ? api.getAccountDetail(address) : Promise.reject("No address")),
-    enabled: !!address && ready && authenticated,
-    staleTime: 60000, // 1 minute
-    retry: (failureCount, error) => {
-      if (error instanceof APIError && (error.status === 401 || error.status === 429)) return false;
-      return failureCount < 2;
-    },
-  });
+    error: accountDetailError,
+  } = useAccountDetail(address);
 
   const hasAuthFault = [
     portfolioError,
+    accountDetailError,
     rebalanceStatusError,
     rebalanceHistoryError,
   ].some((err) => err instanceof APIError && (err.status === 401 || err.status === 429));
@@ -135,20 +130,39 @@ export default function DashboardPage() {
   const refreshDashboardQueries = useCallback(async () => {
     if (!address) return;
 
-    await Promise.allSettled([
+    if (refreshInFlightRef.current) {
+      await refreshInFlightRef.current;
+      return;
+    }
+
+    const refreshTask = Promise.allSettled([
       refetchPortfolio(),
       queryClient.refetchQueries({ queryKey: ["rebalance-status", address], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["account-detail", address], type: "active" }),
-      queryClient.refetchQueries({ queryKey: ["rebalance-history", address], type: "active" }),
-    ]);
+    ]).then(() => undefined)
+      .finally(() => {
+        refreshInFlightRef.current = null;
+      });
+
+    refreshInFlightRef.current = refreshTask;
+    await refreshTask;
   }, [address, queryClient, refetchPortfolio]);
 
   useRealtimePortfolio(address);
 
   const { data: rates } = useProtocolRates();
+  const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
+  const stats = portfolio ? deriveOverviewStats(portfolio) : null;
+  const accountIsActive = accountDetail?.isActive ?? true;
   const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
+  const idleAllocationAmount = Number(
+    portfolio?.allocations.find((a) => a.protocolId === "idle")?.amountUsdc ?? "0",
+  );
+  const hasIdleAllocation = idleAllocationAmount > 0.01;
+  const hasDeployableIdleBalance = idleAllocationAmount >= 1;
 
   const requiresRegrant = (() => {
+    if (!isLoading && accountIsActive && !hasActiveSessionKey) return true;
     if (hasActiveSessionKey) return false;
     if (!rebalanceStatus) return false;
     const code = rebalanceStatus.reasonCode;
@@ -168,14 +182,6 @@ export default function DashboardPage() {
     );
   })();
 
-  const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
-  const stats = portfolio ? deriveOverviewStats(portfolio) : null;
-  const accountIsActive = accountDetail?.isActive ?? true;
-  const idleAllocationAmount = Number(
-    portfolio?.allocations.find((a) => a.protocolId === "idle")?.amountUsdc ?? "0",
-  );
-  const hasIdleAllocation = idleAllocationAmount > 0.01;
-  const hasDeployableIdleBalance = idleAllocationAmount >= 1;
   const shouldAutoDeployIdle = !isLoading && accountIsActive && hasActiveSessionKey && !requiresRegrant && hasDeployableIdleBalance;
   const isIdleOnlyDeployment = !isLoading && accountIsActive && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
   const deploySkipReason = rebalanceStatus?.reasonDetail
@@ -183,10 +189,11 @@ export default function DashboardPage() {
     ?? null;
   const deployStatus = String(rebalanceStatus?.status ?? "").toLowerCase();
   const showDeployRetry = isIdleOnlyDeployment
+    && hasActiveSessionKey
     && ["skipped", "failed", "halted"].includes(deployStatus);
 
-  const triggerIdleDeployment = useCallback(async (force = false) => {
-    if (!address || !shouldAutoDeployIdle || hasAuthFault) return;
+  const triggerIdleDeployment = useCallback(async (force = false, allowWhenAuthFault = false) => {
+    if (!address || !shouldAutoDeployIdle || (hasAuthFault && !allowWhenAuthFault)) return;
 
     const now = Date.now();
     if (!force && now - deploymentLastTriggerAtRef.current < 30_000) {
@@ -213,6 +220,11 @@ export default function DashboardPage() {
       }
 
       if (triggerStatus === "executed" || triggerStatus === "executing" || triggerStatus === "pending") {
+        void refreshDashboardQueries();
+        return;
+      }
+
+      if (triggerStatus === "skipped" && skipReason.toLowerCase().includes("no active session key")) {
         void refreshDashboardQueries();
       }
     } catch (err: unknown) {
@@ -487,7 +499,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => {
-                  void triggerIdleDeployment(true);
+                  void triggerIdleDeployment(true, true);
                   void refreshDashboardQueries();
                 }}
                 className="shrink-0 rounded-md border border-glacier/30 bg-white px-3 py-1.5 text-[11px] font-medium text-glacier hover:bg-glacier/[0.08]"

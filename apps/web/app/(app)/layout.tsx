@@ -279,9 +279,13 @@ export default function AppLayout({
     if (!dataReady) return;
     if (accountDetailError || portfolioError) return;
     if (!isAgentActive && pathname === "/dashboard") {
+      const keepDashboardForFundedAccount = Boolean(effectiveSmartAccountAddress) && hasFunds && !hasInactiveAccount;
+      if (keepDashboardForFundedAccount) {
+        return;
+      }
       router.replace("/onboarding");
     }
-  }, [dataReady, isAgentActive, pathname, router, accountDetailError, portfolioError]);
+  }, [dataReady, effectiveSmartAccountAddress, hasFunds, hasInactiveAccount, isAgentActive, pathname, router, accountDetailError, portfolioError]);
 
   // Redirect portfolio to dashboard (removed page)
   useEffect(() => {

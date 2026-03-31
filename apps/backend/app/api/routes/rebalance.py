@@ -5,6 +5,7 @@ frontend can use the address it already has from ZeroDev.
 """
 
 import logging
+import asyncio
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -246,11 +247,17 @@ async def get_rebalance_status(
     has_session_key = bool(get_active_session_key(db, account_id))
 
     idle_usdc = Decimal("0")
-    try:
-        rebalancer = Rebalancer()
-        idle_usdc = await rebalancer._get_idle_usdc_balance(addr)
-    except Exception as exc:
-        logger.debug("Idle balance diagnostic failed for %s: %s", addr, exc)
+    if is_active and has_session_key:
+        try:
+            rebalancer = Rebalancer()
+            idle_usdc = await asyncio.wait_for(
+                rebalancer._get_idle_usdc_balance(addr),
+                timeout=3.0,
+            )
+        except TimeoutError:
+            logger.warning("Idle balance diagnostic timed out for %s", addr)
+        except Exception as exc:
+            logger.debug("Idle balance diagnostic failed for %s: %s", addr, exc)
 
     last = (
         db.table("rebalance_logs")
