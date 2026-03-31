@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -95,20 +95,6 @@ function inferAction(entry: RebalanceLogEntry): ActionType {
     return "rebalance";
   }
   return "monitoring";
-}
-
-function primaryProtocol(entry: RebalanceLogEntry): string {
-  const allocs = parseAllocations(entry);
-  const entries = Object.entries(allocs);
-  if (entries.length === 0) return "Monitoring";
-  const [protocol] = entries.sort((a, b) => b[1] - a[1])[0];
-  const cfg = PROTOCOL_CONFIG[protocol as ProtocolId];
-  return cfg?.name ?? protocol;
-}
-
-function estimateAmount(entry: RebalanceLogEntry): string {
-  const allocs = parseAllocations(entry);
-  return formatAmountLabel(allocationTotal(allocs));
 }
 
 const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: string; iconClass: string }> = {
@@ -240,23 +226,11 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
       .slice(0, 20);
   }, [history, transactions]);
 
-  useEffect(() => {
-    if (transactions.length === 0) {
-      setSelectedTransactionId(null);
-      return;
-    }
-
-    const selectedStillExists = selectedTransactionId
-      ? transactions.some((tx) => tx.entry.id === selectedTransactionId)
-      : false;
-
-    if (!selectedStillExists) {
-      setSelectedTransactionId(transactions[0].entry.id);
-    }
-  }, [transactions, selectedTransactionId]);
-
   const selectedTransaction = useMemo(
-    () => transactions.find((tx) => tx.entry.id === selectedTransactionId) ?? null,
+    () => {
+      if (transactions.length === 0) return null;
+      return transactions.find((tx) => tx.entry.id === selectedTransactionId) ?? transactions[0];
+    },
     [transactions, selectedTransactionId],
   );
 
