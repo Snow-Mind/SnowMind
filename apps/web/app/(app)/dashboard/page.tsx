@@ -146,8 +146,10 @@ export default function DashboardPage() {
   useRealtimePortfolio(address);
 
   const { data: rates } = useProtocolRates();
+  const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
 
   const requiresRegrant = (() => {
+    if (hasActiveSessionKey) return false;
     if (!rebalanceStatus) return false;
     const code = rebalanceStatus.reasonCode;
     const detail = (rebalanceStatus.reasonDetail ?? "").toLowerCase();
@@ -161,14 +163,14 @@ export default function DashboardPage() {
       detail.includes("permission_recovery_needed") ||
       detail.includes("user must re-grant") ||
       detail.includes("must regrant") ||
-      detail.includes("session key")
+      detail.includes("no active session key") ||
+      detail.includes("session key invalid")
     );
   })();
 
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
   const accountIsActive = accountDetail?.isActive ?? true;
-  const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
   const idleAllocationAmount = Number(
     portfolio?.allocations.find((a) => a.protocolId === "idle")?.amountUsdc ?? "0",
   );

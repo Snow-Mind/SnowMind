@@ -163,6 +163,16 @@ export default function SessionKeyStatus() {
       // Mark agent as active in the store so layout redirects work
       usePortfolioStore.getState().setAgentActivated(true);
 
+      await Promise.allSettled([
+        queryClient.invalidateQueries({ queryKey: ["account-detail", saAddress] }),
+        queryClient.invalidateQueries({ queryKey: ["portfolio", saAddress] }),
+        queryClient.invalidateQueries({ queryKey: ["rebalance-status", saAddress] }),
+        queryClient.invalidateQueries({ queryKey: ["rebalance-history", saAddress] }),
+      ]);
+
+      // Best-effort deploy kick so newly granted keys start acting immediately.
+      await api.triggerRebalance(saAddress).catch(() => undefined);
+
       toast.success("Session key granted — agent activated");
       refetch();
     } catch (err) {

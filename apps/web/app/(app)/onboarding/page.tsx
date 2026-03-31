@@ -961,19 +961,32 @@ export default function OnboardingPage() {
         },
       });
 
-      // Best-effort: explicitly store session key as a backup in case
-      // the inline storage during register failed (e.g. encryption key issue)
+      // Backup store only when register path did not leave an active key.
+      // Avoid unnecessary double key writes, which can race with the initial
+      // rebalance trigger and temporarily flip key activity mid-flight.
+      let registerPersistedSessionKey = false;
       try {
-        await api.storeSessionKey(derivedAddr, {
-          serializedPermission: sessionKeyResult.serializedPermission,
-          sessionPrivateKey: sessionKeyResult.sessionPrivateKey,
-          sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
-          expiresAt: sessionKeyResult.expiresAt,
-          allowedProtocols: Array.from(effectiveSelectedProtocols),
-          force: true,
-        });
+        const postRegisterDetail = await api.getAccountDetail(derivedAddr);
+        registerPersistedSessionKey = Boolean(
+          postRegisterDetail?.isActive && postRegisterDetail?.sessionKey?.isActive,
+        );
       } catch {
-        // Non-critical — the register endpoint also tries to store it
+        registerPersistedSessionKey = false;
+      }
+
+      if (!registerPersistedSessionKey) {
+        try {
+          await api.storeSessionKey(derivedAddr, {
+            serializedPermission: sessionKeyResult.serializedPermission,
+            sessionPrivateKey: sessionKeyResult.sessionPrivateKey,
+            sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
+            expiresAt: sessionKeyResult.expiresAt,
+            allowedProtocols: Array.from(effectiveSelectedProtocols),
+            force: true,
+          });
+        } catch {
+          // Non-critical — user can always re-grant from settings.
+        }
       }
 
       // Best-effort diversification preference save

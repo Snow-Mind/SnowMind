@@ -156,7 +156,11 @@ async def trigger_rebalance(
     account = await _lookup_account(db, address, _auth)
 
     if not account.get("is_active", True):
-        raise HTTPException(status_code=400, detail="Account is inactive")
+        return RebalanceTriggerResponse(
+            smart_account_address=account["address"],
+            status="skipped",
+            detail={"skip_reason": "Account is inactive"},
+        )
 
     from app.services.optimizer.rebalancer import Rebalancer
 
@@ -165,6 +169,38 @@ async def trigger_rebalance(
         result = await rebalancer.check_and_rebalance(
             account_id=account["id"],
             smart_account_address=account["address"],
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        detail_l = detail.lower()
+        # Treat transient/session-key gate failures as normal skipped states
+        # so frontend state machines do not enter false error branches.
+        if (
+            "no active session key" in detail_l
+            or "cannot be decrypted" in detail_l
+            or "must re-grant" in detail_l
+            or "must regrant" in detail_l
+        ):
+            logger.info(
+                "Manual rebalance trigger skipped for %s: %s",
+                account["address"],
+                detail,
+            )
+            return RebalanceTriggerResponse(
+                smart_account_address=account["address"],
+                status="skipped",
+                detail={"skip_reason": detail},
+            )
+
+        logger.warning(
+            "Manual rebalance trigger returned ValueError for %s: %s",
+            account["address"],
+            detail,
+        )
+        return RebalanceTriggerResponse(
+            smart_account_address=account["address"],
+            status="failed",
+            detail={"skip_reason": detail},
         )
     except Exception as exc:
         logger.exception("Manual rebalance trigger failed for %s: %s", account["address"], exc)
