@@ -14,11 +14,11 @@ export function useAccountDetail(smartAccountAddress: string | undefined) {
     queryKey: ["account-detail", safeAddress],
     queryFn: () => api.getAccountDetail(safeAddress!),
     enabled: !!safeAddress && ready && authenticated,
-    staleTime: 10_000,
+    staleTime: 30_000,
     refetchInterval: (query) => {
       const err = query.state.error;
       if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;
-      return 15_000;
+      return 30_000;
     },
     retry: (failureCount, error) => {
       if (error instanceof APIError && (error.status === 401 || error.status === 404 || error.status === 429)) return false;

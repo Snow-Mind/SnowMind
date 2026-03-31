@@ -7,6 +7,16 @@
     "lint": "turbo lint",
     "test": "turbo test"
   },
+  "pnpm": {
+    "overrides": {
+      "path-to-regexp@<0.1.13": "0.1.13",
+      "socket.io-parser@>=4.0.0 <4.2.6": "4.2.6",
+      "h3@<1.15.9": "1.15.9",
+      "hono@<4.12.7": "4.12.7",
+      "bn.js@<4.12.3": "4.12.3",
+      "picomatch@<2.3.2": "2.3.2"
+    }
+  },
   "devDependencies": {
     "turbo": "^2"
   },

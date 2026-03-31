@@ -168,7 +168,16 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
     SENTRY_DSN: str = ""
+    SENTRY_ENVIRONMENT: str = "production"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.05
+    SENTRY_PROFILES_SAMPLE_RATE: float = 0.0
+    SENTRY_SEND_PII: bool = False
     PAYMASTER_LOW_BALANCE_AVAX: float = 10.0  # Alert when < 10 AVAX remaining
+
+    # ── API caching (short TTL to reduce RPC fan-out under dashboard polling) ──
+    PORTFOLIO_CACHE_TTL_SECONDS: int = 8
+    OPTIMIZER_RATES_CACHE_TTL_SECONDS: int = 20
+    APY_TIMESERIES_CACHE_TTL_SECONDS: int = 60
 
 
     @property
@@ -194,6 +203,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",
     )
 
 

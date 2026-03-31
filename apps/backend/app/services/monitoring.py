@@ -11,6 +11,7 @@ from decimal import Decimal
 import httpx
 
 from app.core.config import get_settings
+from app.core.observability import init_sentry
 
 logger = logging.getLogger("snowmind.monitoring")
 
@@ -47,6 +48,8 @@ def send_sentry_alert(message: str) -> None:
 
     settings = get_settings()
     if not settings.SENTRY_DSN:
+        return
+    if not init_sentry():
         return
     if _SENTRY_IMPORT_FAILED:
         return

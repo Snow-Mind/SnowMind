@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.26,<0.29",
     "slowapi==0.1.9",
     "boto3>=1.35,<2",
+    "sentry-sdk[fastapi]>=2.27,<3",
 ]
 
 [dependency-groups]

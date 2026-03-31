@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import require_service_auth
+from app.services.monitoring import send_sentry_alert
 from app.services.protocols import ACTIVE_ADAPTERS
 from app.services.protocols.circuit_breaker import protocol_circuit_breaker
 
@@ -86,6 +87,20 @@ async def health_detailed(request: Request, _svc: dict = Depends(require_service
         "execution_service": exec_status,
         "scheduler": scheduler_info,
         "protocols": protocols_info,
+    }
+
+
+@router.post("/health/sentry-test")
+@limiter.limit("5/minute")
+async def health_sentry_test(request: Request, _svc: dict = Depends(require_service_auth)):
+    """Emit a controlled Sentry warning event to verify dashboard ingestion."""
+    configured = bool(get_settings().SENTRY_DSN)
+    if configured:
+        send_sentry_alert("Sentry connectivity test event from /health/sentry-test")
+    return {
+        "status": "ok",
+        "sentry_configured": configured,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

@@ -29,6 +29,8 @@ router = APIRouter()  # Auth applied per-endpoint
 
 _rate_fetcher = RateFetcher()
 _risk_scorer = RiskScorer()
+_rates_cache: tuple[float, list[dict]] | None = None
+_timeseries_cache: tuple[float, list[dict]] | None = None
 
 
 # ── Response schemas ─────────────────────────────────────────────────────────
@@ -257,6 +259,12 @@ async def get_all_rates(request: Request):
     Falls back to spot rate, then to last-known-good TWAP snapshot if
     live fetch failed (circuit breaker open, 429, RPC timeout, etc.).
     """
+    global _rates_cache
+    cache_ttl = max(0, int(get_settings().OPTIMIZER_RATES_CACHE_TTL_SECONDS))
+    now_mono = time.monotonic()
+    if cache_ttl > 0 and _rates_cache and _rates_cache[0] > now_mono:
+        return [ProtocolRateResponse.model_validate(item) for item in _rates_cache[1]]
+
     rates = await _rate_fetcher.fetch_all_rates()
 
     out: list[ProtocolRateResponse] = []
@@ -305,6 +313,11 @@ async def get_all_rates(request: Request):
                 utilization_rate=rate.utilization_rate if rate else None,
                 last_updated=rate.fetched_at if rate else time.time(),
             )
+        )
+    if cache_ttl > 0:
+        _rates_cache = (
+            time.monotonic() + cache_ttl,
+            [item.model_dump() for item in out],
         )
     return out
 
@@ -466,6 +479,12 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
     Used by the landing page growth chart. Public endpoint, no auth required.
     Returns up to 30 days of daily data points.
     """
+    global _timeseries_cache
+    cache_ttl = max(0, int(get_settings().APY_TIMESERIES_CACHE_TTL_SECONDS))
+    now_mono = time.monotonic()
+    if cache_ttl > 0 and _timeseries_cache and _timeseries_cache[0] > now_mono:
+        return [ApyTimeseriesPoint.model_validate(item) for item in _timeseries_cache[1]]
+
     from datetime import datetime, timedelta, timezone
 
     try:
@@ -526,6 +545,11 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
                 )
             )
 
+        if cache_ttl > 0:
+            _timeseries_cache = (
+                time.monotonic() + cache_ttl,
+                [item.model_dump() for item in out],
+            )
         return out
     except Exception as e:
         logger.error("Failed to build APY timeseries: %s", e)

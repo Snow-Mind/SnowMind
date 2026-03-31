@@ -1,0 +1,48 @@
+name: Security - FirePan
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  firepan-scan:
+    name: FirePan Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect FirePan API key
+        id: firepan-key
+        shell: bash
+        env:
+          FIREPAN_API_KEY: ${{ secrets.FIREPAN_API_KEY }}
+        run: |
+          if [ -n "$FIREPAN_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::FIREPAN_API_KEY is not configured. FirePan scan skipped."
+          fi
+
+      - name: Run FirePan scan
+        if: steps.firepan-key.outputs.enabled == 'true'
+        uses: firepan-labs/security-action@v1
+        with:
+          fail-on: high
+          path: contracts/
+          format: sarif
+          output: firepan-results.sarif
+        env:
+          FIREPAN_API_KEY: ${{ secrets.FIREPAN_API_KEY }}
+
+      - name: Upload SARIF to GitHub Security
+        if: steps.firepan-key.outputs.enabled == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: firepan-results.sarif

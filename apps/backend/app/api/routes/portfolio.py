@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -34,6 +35,29 @@ _ERC20_ABI = [
         "stateMutability": "view",
     }
 ]
+
+# Short-lived in-memory cache to dampen duplicate dashboard polling.
+_portfolio_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _portfolio_cache_get(cache_key: str) -> PortfolioResponse | None:
+    cached = _portfolio_cache.get(cache_key)
+    if not cached:
+        return None
+    expires_at, payload = cached
+    if expires_at <= time.monotonic():
+        _portfolio_cache.pop(cache_key, None)
+        return None
+    return PortfolioResponse.model_validate(payload)
+
+
+def _portfolio_cache_put(cache_key: str, response: PortfolioResponse, ttl_seconds: int) -> None:
+    if ttl_seconds <= 0:
+        return
+    _portfolio_cache[cache_key] = (
+        time.monotonic() + ttl_seconds,
+        response.model_dump(),
+    )
 
 
 async def _get_idle_usdc(address: str) -> Decimal:
@@ -154,6 +178,12 @@ async def get_portfolio(
 
     verify_account_ownership(_auth, acct.data[0], db=db)
     account_id = acct.data[0]["id"]
+
+    cache_ttl = max(0, int(get_settings().PORTFOLIO_CACHE_TTL_SECONDS))
+    cache_key = f"{str(account_id)}:{address.lower()}"
+    cached_response = _portfolio_cache_get(cache_key)
+    if cached_response is not None:
+        return cached_response
 
     # Fetch allocations
     allocs = (
@@ -276,12 +306,14 @@ async def get_portfolio(
     )
     total_yield = max(current_protocol_value - original_db_deposits, Decimal(0))
 
-    return PortfolioResponse(
+    response = PortfolioResponse(
         total_deposited_usd=total_deposited,
         total_yield_usd=total_yield,
         allocations=allocations,
         last_rebalance_at=last_ts,
     )
+    _portfolio_cache_put(cache_key, response, cache_ttl)
+    return response
 
 
 # ── GET /portfolio/{address}/history ─────────────────────

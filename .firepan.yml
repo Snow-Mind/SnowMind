@@ -1,0 +1,26 @@
+# FirePan scan configuration for SnowMind.
+# Docs: https://docs.firepan.com/features/ci-cd
+
+scan:
+  include:
+    - contracts/src/
+    - contracts/script/
+  exclude:
+    - contracts/lib/
+    - contracts/cache/
+    - contracts/broadcast/
+    - contracts/test/
+  ignore_patterns:
+    - "**/Mock*.sol"
+    - "**/Test*.sol"
+
+checks:
+  report_threshold: low
+  fail_threshold: high
+  required: true
+
+notifications:
+  # Optional: set this env var in CI to enable Slack alerts.
+  slack:
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    on: critical

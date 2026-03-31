@@ -16,6 +16,7 @@ from app.api.routes import accounts, health, optimizer, portfolio, rebalance, wi
 from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.core.limiter import limiter
+from app.core.observability import init_sentry
 from app.core.security import rate_limit_middleware
 
 logger = logging.getLogger("snowmind")
@@ -159,6 +160,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 async def on_startup() -> None:
     from app.core.logging import setup_logging
     setup_logging()
+    init_sentry()
     # ── Environment validation ────────────────────────────────────────
     _validate_environment()
 

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   lint-frontend:
@@ -67,3 +67,18 @@ jobs:
 
       - run: uv sync
       - run: uv run pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=15
+
+  test-contracts:
+    name: Test Contracts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run contract tests
+        run: forge test -vv

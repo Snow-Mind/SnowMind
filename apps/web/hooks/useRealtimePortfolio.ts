@@ -74,7 +74,6 @@ export function useRealtimePortfolio(
         qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
         qc.invalidateQueries({ queryKey: ["rebalance-history", smartAccountAddress] })
         qc.invalidateQueries({ queryKey: ["rebalance-status", smartAccountAddress] })
-        qc.invalidateQueries({ queryKey: ["account-detail", smartAccountAddress] })
 
         const status = payload.new.status
         if (status === "executed") {
