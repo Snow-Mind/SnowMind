@@ -1,9 +1,9 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -250,5 +250,68 @@ async def platform_stats(request: Request):
             "total_rebalances_executed": 0,
             "total_rebalances_failed": 0,
             "tracking_anomaly_accounts": 0,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+@router.get("/platform/stats/history")
+@limiter.limit("30/minute")
+async def platform_stats_history(
+    request: Request,
+    days: int = Query(30, ge=1, le=3650),
+    _svc: dict = Depends(require_service_auth),
+):
+    """Time-series platform KPI snapshots for admin/ops dashboards."""
+    try:
+        db = get_db()
+        start_date = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+        rows = (
+            db.table("platform_kpi_snapshots")
+            .select(
+                "snapshot_date, total_users, active_users, accounts_with_deposits, current_tvl_usd, "
+                "cumulative_deposited_usd, cumulative_net_withdrawn_usd, cumulative_fees_collected_usd, "
+                "total_rebalances_executed, total_rebalances_failed, total_activity_rows"
+            )
+            .gte("snapshot_date", start_date)
+            .order("snapshot_date", desc=False)
+            .execute()
+        )
+        return {
+            "days": days,
+            "start_date": start_date,
+            "rows": rows.data or [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.warning("Platform stats history query failed: %s", exc)
+        return {
+            "days": days,
+            "start_date": None,
+            "rows": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+@router.post("/platform/stats/snapshot")
+@limiter.limit("10/minute")
+async def platform_stats_snapshot(
+    request: Request,
+    _svc: dict = Depends(require_service_auth),
+):
+    """Force-refresh today's KPI snapshot (service auth only)."""
+    try:
+        db = get_db()
+        # snapshot_platform_kpi(date default current_date) is created by migration 014.
+        db.rpc("snapshot_platform_kpi").execute()
+        return {
+            "status": "ok",
+            "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.warning("Platform stats snapshot refresh failed: %s", exc)
+        return {
+            "status": "failed",
+            "snapshot_date": None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

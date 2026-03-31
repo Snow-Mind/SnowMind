@@ -10,6 +10,9 @@ export interface RegisterAccountRequest {
   ownerAddress: string;
   smartAccountAddress: string;
   diversificationPreference?: DiversificationPreference;
+  fundingTxHash?: string;
+  fundingAmountUsdc?: string;
+  fundingSource?: string;
   sessionKeyData?: {
     serializedPermission: string;
     sessionPrivateKey: string;

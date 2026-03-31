@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -23,6 +24,7 @@ from app.models.account import (
     SessionKeyStatusResponse,
 )
 from app.services.execution.session_key import (
+    get_active_session_key_metadata,
     revoke_session_key,
     store_session_key,
 )
@@ -99,6 +101,74 @@ def _resolve_allowed_protocols(
     return list(_DEFAULT_ALLOWED_PROTOCOLS)
 
 
+def _record_funding_transfer(
+    db: Client,
+    account_id: str,
+    address: str,
+    funding_tx_hash: str | None,
+    funding_amount_usdc: str | None,
+    funding_source: str | None,
+) -> None:
+    """Persist onboarding funding transfer as a durable activity row.
+
+    This ensures the dashboard can show the initial deposit transaction even
+    when subsequent monitoring cycles are all "skipped" entries.
+    """
+    if not funding_amount_usdc:
+        return
+
+    try:
+        amount = Decimal(str(funding_amount_usdc))
+    except (InvalidOperation, TypeError, ValueError):
+        logger.warning("Ignoring invalid fundingAmountUsdc for %s: %r", address, funding_amount_usdc)
+        return
+
+    if amount <= Decimal("0.000001"):
+        return
+
+    normalized_amount = amount.quantize(Decimal("0.000001"))
+    normalized_hash = funding_tx_hash.lower() if funding_tx_hash else None
+
+    # Idempotency: same funding tx for same account should not duplicate rows.
+    if normalized_hash:
+        existing = (
+            db.table("rebalance_logs")
+            .select("id")
+            .eq("account_id", account_id)
+            .eq("tx_hash", normalized_hash)
+            .eq("from_protocol", "user_wallet")
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return
+
+    row = {
+        "account_id": account_id,
+        "status": "executed",
+        "skip_reason": "Initial funding transfer",
+        "from_protocol": "user_wallet",
+        "to_protocol": "idle",
+        "amount_moved": str(normalized_amount),
+        "tx_hash": normalized_hash,
+        "executed_allocations": {"idle": str(normalized_amount)},
+        "correlation_id": f"funding:{funding_source or 'wallet_transfer'}",
+    }
+
+    try:
+        db.table("rebalance_logs").insert(row).execute()
+    except Exception as exc:
+        logger.warning("Failed to persist funding transfer activity for %s: %s", address, exc)
+        return
+
+    # Keep principal accounting in sync for platform analytics.
+    try:
+        from app.services.fee_calculator import record_deposit
+        record_deposit(db, account_id, normalized_amount)
+    except Exception as exc:
+        logger.warning("Failed to update deposit tracking for %s: %s", address, exc)
+
+
 # ── Request body ───────────────────────────────────────────
 
 class RegisterAccountRequest(BaseModel):
@@ -127,6 +197,24 @@ class RegisterAccountRequest(BaseModel):
         None,
         alias="initialAllocation",
         description="Optional {protocolId: amountUsdc} from frontend initial deployment",
+    )
+
+    funding_tx_hash: str | None = Field(
+        None,
+        alias="fundingTxHash",
+        description="Optional USDC funding transfer tx hash (EOA → smart account)",
+    )
+
+    funding_amount_usdc: str | None = Field(
+        None,
+        alias="fundingAmountUsdc",
+        description="Optional USDC amount transferred in funding tx",
+    )
+
+    funding_source: str | None = Field(
+        "wallet_transfer",
+        alias="fundingSource",
+        description="Optional source tag for funding tx tracking",
     )
 
 
@@ -184,6 +272,15 @@ async def _do_register(
     )
     account = result.data[0]
     logger.info("Account registered/updated: %s", address)
+
+    _record_funding_transfer(
+        db,
+        account["id"],
+        address,
+        req.funding_tx_hash,
+        req.funding_amount_usdc,
+        req.funding_source,
+    )
 
     # Record initial allocation FIRST (idempotent, must not be blocked by
     # a session-key storage failure).
@@ -392,28 +489,17 @@ async def get_account(
     row = acct.data[0]
     verify_account_ownership(_auth, row, db=db)
 
-    # Fetch latest active session key metadata (not the encrypted key itself)
-    now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    sk = (
-        db.table("session_keys")
-        .select("key_address, is_active, expires_at, allowed_protocols, max_amount_per_tx, created_at")
-        .eq("account_id", row["id"])
-        .eq("is_active", True)
-        .gte("expires_at", now_z)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
+    # Fetch latest active session key metadata with robust expiry handling.
+    sk_meta = get_active_session_key_metadata(db, row["id"])
     sk_resp = None
-    if sk.data:
-        s = sk.data[0]
+    if sk_meta:
         sk_resp = SessionKeyStatusResponse(
-            key_address=s["key_address"],
-            is_active=s["is_active"],
-            expires_at=s["expires_at"],
-            allowed_protocols=s["allowed_protocols"],
-            max_amount_per_tx=s["max_amount_per_tx"],
-            created_at=s["created_at"],
+            key_address=str(sk_meta.get("key_address") or ""),
+            is_active=True,
+            expires_at=str(sk_meta.get("expires_at") or ""),
+            allowed_protocols=sk_meta.get("allowed_protocols") or [],
+            max_amount_per_tx=str(sk_meta.get("max_amount_per_tx") or "0"),
+            created_at=str(sk_meta.get("created_at") or datetime.now(timezone.utc).isoformat()),
         )
 
     return AccountDetailResponse(

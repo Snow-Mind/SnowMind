@@ -314,6 +314,7 @@ async def get_rebalance_history(
     _auth: dict = Depends(require_privy_auth),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    transactions_only: bool = Query(default=False, alias="transactionsOnly"),
 ):
     """Return paginated rebalance history for one account."""
     try:
@@ -326,20 +327,29 @@ async def get_rebalance_history(
     addr = account["address"]
     account_id = account["id"]
 
-    # Fetch count
-    count_resp = (
+    count_query = (
         db.table("rebalance_logs")
         .select("id", count="exact")
         .eq("account_id", account_id)
-        .execute()
     )
+    if transactions_only:
+        count_query = count_query.neq("status", "skipped")
+
+    # Fetch count
+    count_resp = count_query.execute()
     total = count_resp.count or 0
 
-    # Fetch page
-    logs = (
+    logs_query = (
         db.table("rebalance_logs")
         .select("*")
         .eq("account_id", account_id)
+    )
+    if transactions_only:
+        logs_query = logs_query.neq("status", "skipped")
+
+    # Fetch page
+    logs = (
+        logs_query
         .order("created_at", desc=True)
         .range(offset, offset + limit - 1)
         .execute()

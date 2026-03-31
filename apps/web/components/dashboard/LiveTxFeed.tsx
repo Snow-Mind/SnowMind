@@ -115,6 +115,7 @@ function allocationSummary(allocations: Record<string, number>): string {
 
 function inferAction(entry: RebalanceLogEntry): ActionType {
   if (entry.status === "skipped") return "monitoring";
+  if ((entry as ExtendedLogEntry).fromProtocol === "user_wallet") return "deposit";
   if ((entry as ExtendedLogEntry).fromProtocol === "withdrawal") return "withdraw";
 
   const allocations = parseAllocations(entry);
@@ -137,6 +138,9 @@ function deriveReasoning(entry: RebalanceLogEntry): string | null {
     return entry.skipReason || "Monitoring complete — no action needed.";
   }
   if (entry.status === "failed") return "Transaction reverted. Funds remain safe — agent will retry next cycle.";
+  if ((entry as ExtendedLogEntry).fromProtocol === "user_wallet") {
+    return "USDC funded from your wallet into the smart account.";
+  }
   if (entry.aprImprovement != null && entry.aprImprovement > 0) {
     return `APR improved by ${(entry.aprImprovement * 100).toFixed(2)}%${entry.gasCostUsd ? ` · Gas: $${entry.gasCostUsd.toFixed(4)}` : ""} — net positive after costs.`;
   }
@@ -148,6 +152,53 @@ function deriveReasoning(entry: RebalanceLogEntry): string | null {
 
 interface LiveTxFeedProps {
   history: RebalanceLogEntry[];
+  historyTotal: number;
+  historyPage: number;
+  onHistoryPageChange: (page: number) => void;
+  transactionHistory: RebalanceLogEntry[];
+  transactionTotal: number;
+  transactionPage: number;
+  onTransactionPageChange: (page: number) => void;
+  pageSize: number;
+}
+
+interface PaginationControlsProps {
+  page: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}
+
+function PaginationControls({ page, total, pageSize, onPageChange }: PaginationControlsProps) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const canPrev = page > 0;
+  const canNext = page + 1 < totalPages;
+
+  return (
+    <div className="flex items-center justify-between border-t border-border/20 px-4 py-3 text-[11px] sm:px-6">
+      <span className="text-muted-foreground">
+        Page {Math.min(page + 1, totalPages)} of {totalPages}
+      </span>
+      <div className="inline-flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(0, page - 1))}
+          disabled={!canPrev}
+          className="rounded-md border border-border/40 px-2.5 py-1 text-arctic disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={() => onPageChange(page + 1)}
+          disabled={!canNext}
+          className="rounded-md border border-border/40 px-2.5 py-1 text-arctic disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function statusLabel(status: string): string {
@@ -194,7 +245,28 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
 
     const allocations = parseAllocations(entry);
     const allocationSum = allocationTotal(allocations);
+    const explicitDeposit = entry.fromProtocol === "user_wallet";
     const explicitWithdrawal = entry.fromProtocol === "withdrawal";
+
+    if (explicitDeposit) {
+      const depositedAmount = Number(entry.amountMoved ?? "0");
+      const normalizedAmount = Number.isFinite(depositedAmount) && depositedAmount > 0
+        ? depositedAmount
+        : allocationSum;
+      transactions.push({
+        entry,
+        action: "deposit",
+        protocol: protocolLabel(entry.toProtocol || "idle"),
+        amountValue: normalizedAmount,
+        amountLabel: formatAmountLabel(normalizedAmount),
+        allocations,
+        reasoning: deriveReasoning(entry) ?? "USDC funded to smart account.",
+      });
+      if (normalizedAmount > 0) {
+        previousPortfolioTotal += normalizedAmount;
+      }
+      continue;
+    }
 
     if (explicitWithdrawal) {
       const withdrawnAmount = Number(entry.amountMoved ?? "0");
@@ -246,21 +318,29 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
   );
 }
 
-export default function LiveTxFeed({ history }: LiveTxFeedProps) {
+export default function LiveTxFeed({
+  history,
+  historyTotal,
+  historyPage,
+  onHistoryPageChange,
+  transactionHistory,
+  transactionTotal,
+  transactionPage,
+  onTransactionPageChange,
+  pageSize,
+}: LiveTxFeedProps) {
   const [section, setSection] = useState<AgentSection>("transactions");
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
 
   const transactions = useMemo(() => {
-    return buildTransactions(history).slice(0, 20);
-  }, [history]);
+    return buildTransactions(transactionHistory);
+  }, [transactionHistory]);
 
   const logEntries = useMemo(() => {
-    const transactionIds = new Set(transactions.map((tx) => tx.entry.id));
-    return history
-      .filter((entry) => !transactionIds.has(entry.id))
+    return [...history]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 20);
-  }, [history, transactions]);
+      .slice(0, pageSize);
+  }, [history, pageSize]);
 
   const selectedTransaction = useMemo(
     () => {
@@ -462,6 +542,13 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
                 )}
               </div>
             )}
+
+            <PaginationControls
+              page={transactionPage}
+              total={transactionTotal}
+              pageSize={pageSize}
+              onPageChange={onTransactionPageChange}
+            />
           </>
         )
       ) : logEntries.length === 0 ? (
@@ -472,41 +559,49 @@ export default function LiveTxFeed({ history }: LiveTxFeedProps) {
           </p>
         </div>
       ) : (
-        <div className="divide-y divide-border/20">
-          {logEntries.map((entry) => {
-            const action = inferAction(entry);
-            const cfg = ACTION_CONFIG[action];
-            const Icon = entry.status === "failed" || entry.status === "halted"
-              ? AlertTriangle
-              : cfg.icon;
-            const reason = deriveReasoning(entry) ?? "Monitoring cycle completed.";
+        <>
+          <div className="divide-y divide-border/20">
+            {logEntries.map((entry) => {
+              const action = inferAction(entry);
+              const cfg = ACTION_CONFIG[action];
+              const Icon = entry.status === "failed" || entry.status === "halted"
+                ? AlertTriangle
+                : cfg.icon;
+              const reason = deriveReasoning(entry) ?? "Monitoring cycle completed.";
 
-            return (
-              <div key={entry.id} className="px-4 py-3.5 sm:px-6">
-                <div className="flex items-start gap-3">
-                  <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                      <span className="text-xs font-medium text-arctic">
-                        {entry.status === "skipped" ? "Monitoring" : "Agent Log"}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">{timeAgo(entry.createdAt)}</span>
+              return (
+                <div key={entry.id} className="px-4 py-3.5 sm:px-6">
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
+                      <Icon className="h-4 w-4" />
                     </div>
-                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{reason}</p>
-                  </div>
 
-                  <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] ${statusClasses(entry.status)}`}>
-                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotClasses(entry.status)}`} />
-                    {statusLabel(entry.status)}
-                  </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className="text-xs font-medium text-arctic">
+                          {entry.status === "skipped" ? "Monitoring" : "Agent Log"}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">{timeAgo(entry.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{reason}</p>
+                    </div>
+
+                    <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] ${statusClasses(entry.status)}`}>
+                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotClasses(entry.status)}`} />
+                      {statusLabel(entry.status)}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+          <PaginationControls
+            page={historyPage}
+            total={historyTotal}
+            pageSize={pageSize}
+            onPageChange={onHistoryPageChange}
+          />
+        </>
       )}
     </div>
   );

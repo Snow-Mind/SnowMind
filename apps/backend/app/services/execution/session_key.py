@@ -11,6 +11,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -31,9 +32,14 @@ _KMS_ENVELOPE_PREFIX = "kms:v1:"
 
 
 class ActiveSessionKey(TypedDict):
+    key_id: str
+    key_address: str | None
+    expires_at: str | None
+    created_at: str | None
     serialized_permission: str
     session_private_key: str
     allowed_protocols: list[str]
+    max_amount_per_tx: str
 
 
 def _kms_key_id_or_none() -> str | None:
@@ -42,6 +48,85 @@ def _kms_key_id_or_none() -> str | None:
     if isinstance(key_id, str):
         key_id = key_id.strip()
         return key_id or None
+    return None
+
+
+_NUMERIC_RE = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def _parse_session_key_expiry(expires_raw: object) -> datetime | None:
+    """Parse heterogeneous expiry formats into timezone-aware UTC datetimes."""
+    if expires_raw is None:
+        return None
+
+    try:
+        if isinstance(expires_raw, (int, float)):
+            ts = float(expires_raw)
+            # Treat millisecond unix timestamps defensively.
+            if ts > 1e11:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+        raw = str(expires_raw).strip()
+        if not raw:
+            return None
+
+        if _NUMERIC_RE.match(raw):
+            ts = float(raw)
+            if ts > 1e11:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def is_session_key_expiry_valid(expires_raw: object, now: datetime | None = None) -> bool:
+    """Return True when *expires_raw* parses and is not expired."""
+    expiry = _parse_session_key_expiry(expires_raw)
+    if expiry is None:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return expiry >= now
+
+
+def _select_latest_active_key_row(db: Client, account_id: UUID) -> dict | None:
+    """Return the newest non-expired active session-key row for an account."""
+    now = datetime.now(timezone.utc)
+    rows = (
+        db.table("session_keys")
+        .select(
+            "id, key_address, serialized_permission, expires_at, allowed_protocols, "
+            "max_amount_per_tx, created_at"
+        )
+        .eq("account_id", str(account_id))
+        .eq("is_active", True)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+
+    if not rows.data:
+        return None
+
+    for row in rows.data:
+        if is_session_key_expiry_valid(row.get("expires_at"), now):
+            return row
+
+    latest = rows.data[0]
+    logger.warning(
+        "No non-expired active session key for %s. Latest active key expires_at=%s",
+        account_id,
+        latest.get("expires_at"),
+    )
     return None
 
 
@@ -368,50 +453,41 @@ def get_active_session_key(db: Client, account_id: UUID) -> str | None:
     return record["serialized_permission"]
 
 
-def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSessionKey | None:
-    """Fetch active session key plus protocol scope metadata.
-
-    Returns ``None`` when no active (and non-expired) key exists.
-    """
-    now_z = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    result = (
-        db.table("session_keys")
-        .select("id, serialized_permission, expires_at, allowed_protocols")
-        .eq("account_id", str(account_id))
-        .eq("is_active", True)
-        .gte("expires_at", now_z)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    if not result.data:
-        # Diagnostic: check if there IS an active key that our filter missed
-        fallback = (
-            db.table("session_keys")
-            .select("id, expires_at, is_active")
-            .eq("account_id", str(account_id))
-            .eq("is_active", True)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if fallback.data:
-            logger.warning(
-                "Session key lookup miss for %s: active key exists with "
-                "expires_at=%s but now_z=%s — possible timestamp format issue",
-                account_id,
-                fallback.data[0]["expires_at"],
-                now_z,
-            )
+def get_active_session_key_metadata(db: Client, account_id: UUID) -> dict | None:
+    """Return latest non-expired active key metadata without decrypting secrets."""
+    row = _select_latest_active_key_row(db, account_id)
+    if not row:
         return None
 
-    row = result.data[0]
     raw_allowed = row.get("allowed_protocols")
     allowed_protocols = (
         [str(p) for p in raw_allowed]
         if isinstance(raw_allowed, list) and raw_allowed
         else ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"]
     )
+
+    return {
+        "id": row.get("id"),
+        "key_address": row.get("key_address"),
+        "expires_at": row.get("expires_at"),
+        "created_at": row.get("created_at"),
+        "allowed_protocols": allowed_protocols,
+        "max_amount_per_tx": str(row.get("max_amount_per_tx") or "0"),
+        "serialized_permission": row.get("serialized_permission"),
+    }
+
+
+def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSessionKey | None:
+    """Fetch active session key plus protocol scope metadata.
+
+    Returns ``None`` when no active (and non-expired) key exists.
+    """
+    metadata = get_active_session_key_metadata(db, account_id)
+    if not metadata:
+        return None
+
+    row = metadata
+    allowed_protocols = metadata["allowed_protocols"]
 
     try:
         decrypted = decrypt_session_key(row["serialized_permission"])
@@ -455,9 +531,14 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
         pass
 
     return {
+        "key_id": str(row.get("id") or ""),
+        "key_address": row.get("key_address"),
+        "expires_at": row.get("expires_at"),
+        "created_at": row.get("created_at"),
         "serialized_permission": serialized_permission,
         "session_private_key": session_private_key,
         "allowed_protocols": allowed_protocols,
+        "max_amount_per_tx": str(row.get("max_amount_per_tx") or "0"),
     }
 
 

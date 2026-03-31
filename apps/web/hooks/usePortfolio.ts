@@ -3,15 +3,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { APIError } from "@/lib/api-client";
+import { isValidEvmAddress } from "@/lib/address";
 import { useAuth } from "@/hooks/useAuth";
 
 export function usePortfolio(address: string | undefined) {
   const { authenticated, ready } = useAuth();
+  const safeAddress = isValidEvmAddress(address) ? address : undefined;
 
   return useQuery({
-    queryKey: ["portfolio", address],
-    queryFn: () => api.getPortfolio(address!),
-    enabled: !!address && ready && authenticated,
+    queryKey: ["portfolio", safeAddress],
+    queryFn: () => api.getPortfolio(safeAddress!),
+    enabled: !!safeAddress && ready && authenticated,
     refetchInterval: (query) => {
       const err = query.state.error;
       if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;

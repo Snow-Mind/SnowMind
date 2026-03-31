@@ -130,6 +130,14 @@ class TestAutoRebalanceExecution:
                 {"id": account_id, "address": address},
             ])
 
+            session_keys_table = db.table("session_keys")
+            session_keys_table.execute.return_value = MagicMock(data=[
+                {
+                    "account_id": account_id,
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                }
+            ])
+
             await scheduler._run_all_accounts()
 
             # Verify check_and_rebalance was called
@@ -740,6 +748,15 @@ class TestRebalancerPipeline:
 
             accounts_table = db.table("accounts")
             accounts_table.execute.return_value = MagicMock(data=accounts)
+
+            session_keys_table = db.table("session_keys")
+            session_keys_table.execute.return_value = MagicMock(data=[
+                {
+                    "account_id": account["id"],
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                }
+                for account in accounts
+            ])
 
             await scheduler._run_all_accounts()
 

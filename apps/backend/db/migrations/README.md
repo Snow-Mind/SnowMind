@@ -27,6 +27,7 @@ Expected tables (after all migrations):
 - `session_key_audit`
 - `session_keys`
 - `spark_convert_snapshots`
+- `platform_kpi_snapshots`
 - `twap_snapshots`
 
 ## Migration Log
@@ -46,6 +47,7 @@ Expected tables (after all migrations):
 | 011 | `011_add_privy_did.sql` | Add Privy DID ownership binding for endpoint authorization |
 | 012 | `012_enforce_single_active_session_key.sql` | Enforce single active session key per account to prevent race-induced divergence |
 | 013 | `013_add_internal_request_nonces.sql` | Add persistent nonce table for execution-service replay protection across restarts |
+| 014 | `014_add_activity_indexes_and_platform_kpis.sql` | Add activity feed indexes, backfill funding activity rows, and enterprise KPI snapshot storage |
 
 ## Creating a new migration
 

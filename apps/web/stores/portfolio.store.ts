@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
+import { normalizeEvmAddress } from "@/lib/address";
 
 interface PortfolioState {
   smartAccountAddress: string | null;
@@ -9,7 +10,7 @@ interface PortfolioState {
   totalYieldUsd: string;
   isAgentActivated: boolean;
   isOnboardingInProgress: boolean;
-  setSmartAccountAddress: (address: string) => void;
+  setSmartAccountAddress: (address: string | null | undefined) => void;
   setAllocations: (allocations: ProtocolAllocation[]) => void;
   setTotals: (deposited: string, yield_: string) => void;
   setAgentActivated: (activated: boolean) => void;
@@ -26,7 +27,14 @@ export const usePortfolioStore = create<PortfolioState>()(
       totalYieldUsd: "0",
       isAgentActivated: false,
       isOnboardingInProgress: false,
-      setSmartAccountAddress: (address) => set({ smartAccountAddress: address }),
+      setSmartAccountAddress: (address) =>
+        set((state) => {
+          const normalized = normalizeEvmAddress(address);
+          return {
+            smartAccountAddress: normalized,
+            isAgentActivated: normalized ? state.isAgentActivated : false,
+          };
+        }),
       setAllocations: (allocations) => set({ allocations }),
       setTotals: (deposited, yield_) =>
         set({ totalDepositedUsd: deposited, totalYieldUsd: yield_ }),
@@ -37,6 +45,16 @@ export const usePortfolioStore = create<PortfolioState>()(
     }),
     {
       name: "snowmind-portfolio",
+      version: 2,
+      migrate: (persistedState) => {
+        const state = (persistedState as Partial<PortfolioState> | undefined) ?? {};
+        const normalizedAddress = normalizeEvmAddress(state.smartAccountAddress ?? null);
+        return {
+          ...state,
+          smartAccountAddress: normalizedAddress,
+          isAgentActivated: normalizedAddress ? Boolean(state.isAgentActivated) : false,
+        } as PortfolioState;
+      },
       partialize: (state) => ({ smartAccountAddress: state.smartAccountAddress, isAgentActivated: state.isAgentActivated }),
     },
   ),

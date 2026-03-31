@@ -82,6 +82,8 @@ const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
   { id: "agent-log", label: "Agent Log", icon: ScrollText },
 ];
 
+const HISTORY_PAGE_SIZE = 10;
+
 export default function DashboardPage() {
   const queryClient = useQueryClient();
   const { authenticated, ready } = useAuth();
@@ -91,6 +93,8 @@ export default function DashboardPage() {
   const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
   const activatedFromOnboarding = searchParams.get("activated") === "1";
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
+  const [transactionPage, setTransactionPage] = useState(0);
+  const [logPage, setLogPage] = useState(0);
   const deploymentKickRef = useRef<string | null>(null);
   const deploymentLastTriggerAtRef = useRef(0);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
@@ -109,9 +113,14 @@ export default function DashboardPage() {
   } = useRebalanceStatus(address);
 
   const {
+    data: transactionHistoryData,
+    error: transactionHistoryError,
+  } = useRebalanceHistory(address, transactionPage, HISTORY_PAGE_SIZE, true);
+
+  const {
     data: historyData,
     error: rebalanceHistoryError,
-  } = useRebalanceHistory(address);
+  } = useRebalanceHistory(address, logPage, HISTORY_PAGE_SIZE, false);
 
   // Fetch account detail to get allowedProtocols (selected markets during onboarding)
   const {
@@ -124,8 +133,14 @@ export default function DashboardPage() {
     portfolioError,
     accountDetailError,
     rebalanceStatusError,
+    transactionHistoryError,
     rebalanceHistoryError,
   ].some((err) => err instanceof APIError && (err.status === 401 || err.status === 429));
+
+  useEffect(() => {
+    setTransactionPage(0);
+    setLogPage(0);
+  }, [address]);
 
   const refreshDashboardQueries = useCallback(async () => {
     if (!address) return;
@@ -148,7 +163,7 @@ export default function DashboardPage() {
     await refreshTask;
   }, [address, queryClient, refetchPortfolio]);
 
-  useRealtimePortfolio(address);
+  useRealtimePortfolio(address, accountDetail?.id || null);
 
   const { data: rates } = useProtocolRates();
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
@@ -555,7 +570,17 @@ export default function DashboardPage() {
               Every agent action is verifiable on-chain. View reasoning and transaction proofs below.
             </p>
           </div>
-          <LiveTxFeed history={historyData?.logs ?? []} />
+          <LiveTxFeed
+            history={historyData?.logs ?? []}
+            historyTotal={historyData?.total ?? 0}
+            historyPage={logPage}
+            onHistoryPageChange={setLogPage}
+            transactionHistory={transactionHistoryData?.logs ?? []}
+            transactionTotal={transactionHistoryData?.total ?? 0}
+            transactionPage={transactionPage}
+            onTransactionPageChange={setTransactionPage}
+            pageSize={HISTORY_PAGE_SIZE}
+          />
         </div>
       )}
     </div>

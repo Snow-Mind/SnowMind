@@ -51,12 +51,15 @@ function logRealtimeFallbackOnce(status: string, message: string): void {
  * Gracefully handles WebSocket connection failures (e.g. missing env vars,
  * network issues) instead of throwing uncaught errors.
  */
-export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
+export function useRealtimePortfolio(
+  smartAccountAddress: string | undefined,
+  accountId?: string | null,
+) {
   const qc = useQueryClient()
   const channelRef = useRef<ReturnType<SupabaseClient['channel']> | null>(null)
 
   useEffect(() => {
-    if (!smartAccountAddress || !supabase || isRealtimeTemporarilyDisabled()) return
+    if (!smartAccountAddress || !accountId || !supabase || isRealtimeTemporarilyDisabled()) return
 
     // Subscribe to changes on both rebalance_logs and allocations tables
     const channel = supabase
@@ -65,6 +68,7 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
         event:  "INSERT",
         schema: "public",
         table:  "rebalance_logs",
+        filter: `account_id=eq.${accountId}`,
       }, (payload: { new: Record<string, unknown> }) => {
         // Invalidate all portfolio-related queries for this account
         qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
@@ -89,8 +93,25 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
         event:  "UPDATE",
         schema: "public",
         table:  "allocations",
+        filter: `account_id=eq.${accountId}`,
       }, () => {
         // Allocation changed — refresh portfolio
+        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
+      })
+      .on("postgres_changes", {
+        event:  "INSERT",
+        schema: "public",
+        table:  "allocations",
+        filter: `account_id=eq.${accountId}`,
+      }, () => {
+        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
+      })
+      .on("postgres_changes", {
+        event:  "DELETE",
+        schema: "public",
+        table:  "allocations",
+        filter: `account_id=eq.${accountId}`,
+      }, () => {
         qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
       })
       .subscribe((status, err) => {
@@ -113,5 +134,5 @@ export function useRealtimePortfolio(smartAccountAddress: string | undefined) {
         channelRef.current = null
       }
     }
-  }, [smartAccountAddress, qc])
+  }, [smartAccountAddress, accountId, qc])
 }

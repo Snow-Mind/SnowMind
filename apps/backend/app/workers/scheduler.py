@@ -11,6 +11,7 @@ from supabase import Client
 
 from app.core.config import get_settings
 from app.core.database import get_supabase
+from app.services.execution.session_key import is_session_key_expiry_valid
 from app.services.optimizer.rebalancer import Rebalancer
 from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.protocols import ALL_ADAPTERS
@@ -63,6 +64,10 @@ class SnowMindScheduler:
         self._scheduler.add_job(
             self._snapshot_daily_apy, "cron",
             hour=2, minute=0, id="apy_snapshot",
+        )
+        self._scheduler.add_job(
+            self._snapshot_platform_kpi, "cron",
+            hour=1, minute=50, id="platform_kpi_snapshot",
         )
         # Seed Spark convertToAssets snapshot on startup if table is empty
         self._scheduler.add_job(
@@ -194,23 +199,69 @@ class SnowMindScheduler:
         )
         if not accounts.data:
             logger.info("No active accounts — nothing to do")
-            self.last_run_stats = {"checked": 0, "rebalanced": 0, "errors": 0}
+            self.last_run_stats = {
+                "checked": 0,
+                "rebalanced": 0,
+                "skipped": 0,
+                "errors": 0,
+                "no_session_key": 0,
+            }
             return
 
-        logger.info("Processing %d accounts", len(accounts.data))
+        active_keys = (
+            self.db.table("session_keys")
+            .select("account_id, expires_at")
+            .eq("is_active", True)
+            .execute()
+        )
+        now = datetime.now(timezone.utc)
+        active_account_ids = {
+            str(row.get("account_id"))
+            for row in (active_keys.data or [])
+            if row.get("account_id") and is_session_key_expiry_valid(row.get("expires_at"), now)
+        }
+
+        eligible_accounts = [
+            account for account in accounts.data
+            if str(account.get("id")) in active_account_ids
+        ]
+        skipped_no_key = len(accounts.data) - len(eligible_accounts)
+
+        if skipped_no_key > 0:
+            logger.info(
+                "Skipping %d active account(s) with no valid session key",
+                skipped_no_key,
+            )
+
+        if not eligible_accounts:
+            logger.info("No active accounts with valid session keys — nothing to do")
+            self.last_run_stats = {
+                "checked": 0,
+                "rebalanced": 0,
+                "skipped": 0,
+                "errors": 0,
+                "no_session_key": skipped_no_key,
+            }
+            return
+
+        logger.info(
+            "Processing %d eligible account(s) out of %d active",
+            len(eligible_accounts),
+            len(accounts.data),
+        )
 
         results: list[str] = []
 
         # Process accounts sequentially with a stagger delay between them
         # to reduce sustained RPC / execution-service load on Railway.
         STAGGER_DELAY_SECONDS = 2
-        for i, account in enumerate(accounts.data):
+        for i, account in enumerate(eligible_accounts):
             result = await self._rebalance_with_retry(
                 account["id"], account["address"],
             )
             results.append(result)
             # Stagger: small delay between accounts (skip after last)
-            if i < len(accounts.data) - 1:
+            if i < len(eligible_accounts) - 1:
                 await asyncio.sleep(STAGGER_DELAY_SECONDS)
 
         stats = {
@@ -218,6 +269,7 @@ class SnowMindScheduler:
             "rebalanced": results.count("ok"),
             "skipped": results.count("skip"),
             "errors": results.count("error"),
+            "no_session_key": skipped_no_key,
         }
         self.last_run_stats = stats
         logger.info("Scheduler tick done — %s", stats)
@@ -353,6 +405,14 @@ class SnowMindScheduler:
                 await fetcher_for_snapshots.save_vault_daily_snapshot(vault_pid)
             except Exception as e:
                 logger.error("%s daily snapshot failed: %s", vault_pid, e)
+
+    async def _snapshot_platform_kpi(self) -> None:
+        """Persist daily platform KPI snapshot if migration 014 is present."""
+        try:
+            self.db.rpc("snapshot_platform_kpi").execute()
+            logger.info("Platform KPI snapshot refreshed")
+        except Exception as e:
+            logger.warning("Platform KPI snapshot failed (migration may be missing): %s", e)
 
     # ── Vault snapshot seed ────────────────────────────────────────────────
 

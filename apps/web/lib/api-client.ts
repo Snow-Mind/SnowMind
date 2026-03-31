@@ -220,9 +220,14 @@ export const api = {
       `/api/v1/rebalance/${encodeURIComponent(address)}/status?limit=${limit}&offset=${page * limit}`,
     ),
 
-  getRebalanceHistory: (address: string, page = 0, limit = 20) =>
+  getRebalanceHistory: (
+    address: string,
+    page = 0,
+    limit = 20,
+    transactionsOnly = false,
+  ) =>
     request<RebalanceHistoryResponse>(
-      `/api/v1/rebalance/${encodeURIComponent(address)}/history?limit=${limit}&offset=${page * limit}`,
+      `/api/v1/rebalance/${encodeURIComponent(address)}/history?limit=${limit}&offset=${page * limit}&transactionsOnly=${transactionsOnly}`,
     ),
 
   triggerRebalance: (address: string) =>

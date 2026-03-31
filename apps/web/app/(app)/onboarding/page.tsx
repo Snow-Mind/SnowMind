@@ -666,6 +666,8 @@ export default function OnboardingPage() {
     const requestedAmount = regrantOnlyMode ? "0" : depositAmount;
     const amountWei = parseUnits(requestedAmount || "0", 6);
     let activationAddress = smartAccountAddress;
+    let fundingTransferHash: string | null = null;
+    let fundingTransferAmountUsdc: string | null = null;
 
     try {
       // Preflight auth check before any on-chain action.
@@ -890,6 +892,9 @@ export default function OnboardingPage() {
           throw new Error("USDC transfer failed: no transaction hash returned by wallet.");
         }
 
+        fundingTransferHash = transferHash;
+        fundingTransferAmountUsdc = formatUnits(shortfall, 6);
+
         await waitForTransferConfirmationWithFallback({
           transferHash,
           recipient: derivedAddr as `0x${string}`,
@@ -952,6 +957,9 @@ export default function OnboardingPage() {
         smartAccountAddress: derivedAddr,
         ownerAddress: wallet.address,
         diversificationPreference: diversificationPref,
+        fundingTxHash: fundingTransferHash ?? undefined,
+        fundingAmountUsdc: fundingTransferAmountUsdc ?? undefined,
+        fundingSource: fundingTransferHash ? "onboarding_wallet_transfer" : undefined,
         sessionKeyData: {
           serializedPermission: sessionKeyResult.serializedPermission,
           sessionPrivateKey: sessionKeyResult.sessionPrivateKey,

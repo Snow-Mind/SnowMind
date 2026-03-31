@@ -3,15 +3,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { APIError } from "@/lib/api-client";
+import { isValidEvmAddress } from "@/lib/address";
 import { useAuth } from "@/hooks/useAuth";
 
 export function useSessionKey(smartAccountAddress: string | undefined) {
   const { authenticated, ready } = useAuth();
+  const safeAddress = isValidEvmAddress(smartAccountAddress) ? smartAccountAddress : undefined;
 
   return useQuery({
-    queryKey: ["account-detail", smartAccountAddress],
-    queryFn: () => api.getAccountDetail(smartAccountAddress!),
-    enabled: !!smartAccountAddress && ready && authenticated,
+    queryKey: ["account-detail", safeAddress],
+    queryFn: () => api.getAccountDetail(safeAddress!),
+    enabled: !!safeAddress && ready && authenticated,
     staleTime: 10_000,
     refetchInterval: (query) => {
       const err = query.state.error;

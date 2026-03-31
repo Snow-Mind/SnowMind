@@ -6,7 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.execution.session_key import store_session_key
+from app.services.execution.session_key import (
+    is_session_key_expiry_valid,
+    store_session_key,
+)
 
 
 def _build_db(execute_results: list[MagicMock]):
@@ -75,3 +78,21 @@ def test_store_session_key_allows_explicit_regrant_when_key_changes() -> None:
     assert new_key_id == "new-key-id"
     assert query.update.called
     assert query.insert.called
+
+
+def test_session_key_expiry_validator_accepts_iso_and_epoch_seconds() -> None:
+    future_iso = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    future_epoch_seconds = int((datetime.now(timezone.utc) + timedelta(days=1)).timestamp())
+
+    assert is_session_key_expiry_valid(future_iso)
+    assert is_session_key_expiry_valid(future_epoch_seconds)
+
+
+def test_session_key_expiry_validator_accepts_epoch_milliseconds() -> None:
+    future_epoch_ms = int((datetime.now(timezone.utc) + timedelta(days=1)).timestamp() * 1000)
+    assert is_session_key_expiry_valid(future_epoch_ms)
+
+
+def test_session_key_expiry_validator_rejects_invalid_values() -> None:
+    assert not is_session_key_expiry_valid("not-a-date")
+    assert not is_session_key_expiry_valid(None)
