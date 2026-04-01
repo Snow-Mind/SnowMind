@@ -210,65 +210,65 @@ jobs:
               except Exception:
                   return default
 
-            def pick_findings(payload):
+          def pick_findings(payload):
               candidates = []
               if isinstance(payload, dict):
-                candidates.append(payload.get("findings"))
-                if isinstance(payload.get("result"), dict):
-                  candidates.append(payload["result"].get("findings"))
-                if isinstance(payload.get("report"), dict):
-                  candidates.append(payload["report"].get("findings"))
+                  candidates.append(payload.get("findings"))
+                  if isinstance(payload.get("result"), dict):
+                      candidates.append(payload["result"].get("findings"))
+                  if isinstance(payload.get("report"), dict):
+                      candidates.append(payload["report"].get("findings"))
               for candidate in candidates:
-                if isinstance(candidate, list):
-                  return candidate
+                  if isinstance(candidate, list):
+                      return candidate
               return None
 
-            def pick_summary(payload):
+          def pick_summary(payload):
               candidates = []
               if isinstance(payload, dict):
-                candidates.append(payload.get("summary"))
-                if isinstance(payload.get("result"), dict):
-                  candidates.append(payload["result"].get("summary"))
-                if isinstance(payload.get("report"), dict):
-                  candidates.append(payload["report"].get("summary"))
+                  candidates.append(payload.get("summary"))
+                  if isinstance(payload.get("result"), dict):
+                      candidates.append(payload["result"].get("summary"))
+                  if isinstance(payload.get("report"), dict):
+                      candidates.append(payload["report"].get("summary"))
               for candidate in candidates:
-                if isinstance(candidate, dict):
-                  return candidate
+                  if isinstance(candidate, dict):
+                      return candidate
               return None
 
-            findings = pick_findings(data)
-            if findings is not None:
+          findings = pick_findings(data)
+          if findings is not None:
               for finding in findings:
-                if not isinstance(finding, dict):
-                  continue
-                severity = str(finding.get("severity", "")).lower()
-                if severity in counts:
-                  counts[severity] += 1
-            else:
+                  if not isinstance(finding, dict):
+                      continue
+                  severity = str(finding.get("severity", "")).lower()
+                  if severity in counts:
+                      counts[severity] += 1
+          else:
               summary = pick_summary(data)
               if summary is not None:
-                for sev in counts:
-                  counts[sev] = as_int(
-                    summary.get(sev, summary.get(f"{sev}_count", 0)),
-                    0,
-                  )
+                  for sev in counts:
+                      counts[sev] = as_int(
+                          summary.get(sev, summary.get(f"{sev}_count", 0)),
+                          0,
+                      )
               else:
-                # Conservative fallback: count explicit severity markers if
-                # payload shape is not recognized.
-                def walk(obj):
-                  if isinstance(obj, dict):
-                    severity = obj.get("severity")
-                    if isinstance(severity, str):
-                      sev = severity.lower()
-                      if sev in counts:
-                        counts[sev] += as_int(obj.get("count"), 1)
-                    for value in obj.values():
-                      walk(value)
-                  elif isinstance(obj, list):
-                    for item in obj:
-                      walk(item)
+                  # Conservative fallback: count explicit severity markers if
+                  # payload shape is not recognized.
+                  def walk(obj):
+                      if isinstance(obj, dict):
+                          severity = obj.get("severity")
+                          if isinstance(severity, str):
+                              sev = severity.lower()
+                              if sev in counts:
+                                  counts[sev] += as_int(obj.get("count"), 1)
+                          for value in obj.values():
+                              walk(value)
+                      elif isinstance(obj, list):
+                          for item in obj:
+                              walk(item)
 
-                walk(data)
+                  walk(data)
 
           Path("firepan-severity-summary.json").write_text(json.dumps(counts, indent=2))
           print(f"FirePan summary: {counts}")
@@ -279,16 +279,32 @@ jobs:
           PY
 
       - name: Export SARIF from FirePan response
-        if: always()
+        if: ${{ always() && steps.firepan-poll.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
 
+          if [ ! -s firepan-results.json ]; then
+            echo "No FirePan results payload found; skipping SARIF export."
+            exit 0
+          fi
+
           python - <<'PY'
           import json
+          from json import JSONDecodeError
           from pathlib import Path
 
-          data = json.loads(Path("firepan-results.json").read_text())
+          raw = Path("firepan-results.json").read_text().strip()
+          if not raw:
+              print("FirePan results payload is empty; skipping SARIF export.")
+              raise SystemExit(0)
+
+          try:
+              data = json.loads(raw)
+          except JSONDecodeError:
+              print("FirePan results payload is not valid JSON; skipping SARIF export.")
+              print(raw[:1000])
+              raise SystemExit(0)
 
           sarif = None
           if isinstance(data.get("sarif"), dict):
@@ -306,7 +322,7 @@ jobs:
           PY
 
       - name: Upload SARIF to GitHub Security
-        if: ${{ always() && hashFiles('firepan-results.sarif') != '' }}
+        if: ${{ always() && steps.firepan-poll.outcome == 'success' && hashFiles('firepan-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: firepan-results.sarif
