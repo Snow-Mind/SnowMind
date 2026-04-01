@@ -71,9 +71,9 @@ export default function LandingPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
   const [featuresVisible, setFeaturesVisible] = useState(false);
-  const [pendingLaunch, setPendingLaunch] = useState(false);
   const router = useRouter();
   const { authenticated, login, ready } = useAuth();
+  const pendingLaunchRef = useRef(false);
 
   const scrollProgressRef = useRef(0);
   const heroRef = useRef<HTMLDivElement>(null);
@@ -159,11 +159,11 @@ export default function LandingPage() {
   }, []);
 
   useEffect(() => {
-    if (!pendingLaunch || !ready) return;
+    if (!pendingLaunchRef.current || !ready) return;
     if (!authenticated) return;
-    setPendingLaunch(false);
+    pendingLaunchRef.current = false;
     router.push("/dashboard");
-  }, [pendingLaunch, ready, authenticated, router]);
+  }, [ready, authenticated, router]);
 
   const handleLaunchApp = () => {
     if (authenticated) {
@@ -171,7 +171,7 @@ export default function LandingPage() {
       return;
     }
     if (!ready) return;
-    setPendingLaunch(true);
+    pendingLaunchRef.current = true;
     login();
   };
 

@@ -4,7 +4,7 @@ import logging
 import time
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from supabase import Client
 
@@ -469,6 +469,12 @@ class ApyTimeseriesPoint(CamelModel):
     date: str
     snowmind_apy: Decimal
     aave_apy: Decimal
+
+
+@router.options("/rates/timeseries")
+async def options_apy_timeseries() -> Response:
+    """Explicitly acknowledge preflight for chart polling clients."""
+    return Response(status_code=200)
 
 
 @router.get("/rates/timeseries", response_model=list[ApyTimeseriesPoint])

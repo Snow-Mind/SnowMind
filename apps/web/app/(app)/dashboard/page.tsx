@@ -93,11 +93,30 @@ export default function DashboardPage() {
   const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
   const activatedFromOnboarding = searchParams.get("activated") === "1";
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
-  const [transactionPage, setTransactionPage] = useState(0);
-  const [logPage, setLogPage] = useState(0);
+  const [transactionPageByAddress, setTransactionPageByAddress] = useState<Record<string, number>>({});
+  const [logPageByAddress, setLogPageByAddress] = useState<Record<string, number>>({});
   const deploymentKickRef = useRef<string | null>(null);
   const deploymentLastTriggerAtRef = useRef(0);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
+
+  const transactionPage = address ? (transactionPageByAddress[address] ?? 0) : 0;
+  const logPage = address ? (logPageByAddress[address] ?? 0) : 0;
+
+  const setTransactionPage = useCallback((page: number) => {
+    if (!address) return;
+    setTransactionPageByAddress((prev) => {
+      if (prev[address] === page) return prev;
+      return { ...prev, [address]: page };
+    });
+  }, [address]);
+
+  const setLogPage = useCallback((page: number) => {
+    if (!address) return;
+    setLogPageByAddress((prev) => {
+      if (prev[address] === page) return prev;
+      return { ...prev, [address]: page };
+    });
+  }, [address]);
 
   const {
     data: portfolio,
@@ -136,11 +155,6 @@ export default function DashboardPage() {
     transactionHistoryError,
     rebalanceHistoryError,
   ].some((err) => err instanceof APIError && (err.status === 401 || err.status === 429));
-
-  useEffect(() => {
-    setTransactionPage(0);
-    setLogPage(0);
-  }, [address]);
 
   const refreshDashboardQueries = useCallback(async () => {
     if (!address) return;

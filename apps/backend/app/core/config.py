@@ -6,8 +6,10 @@ Import `settings` from this module everywhere. Never hardcode addresses inline.
 """
 
 import json
+import logging
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_ORIGINS = "https://www.snowmind.xyz,https://snowmind.xyz"
@@ -20,6 +22,8 @@ _DEV_ORIGIN_REGEX = (
     + r"|^http://localhost(:\d+)?$"
     + r"|^http://127\.0\.0\.1(:\d+)?$"
 )
+
+logger = logging.getLogger("snowmind")
 
 
 class Settings(BaseSettings):
@@ -119,7 +123,7 @@ class Settings(BaseSettings):
     INTERNAL_SERVICE_KEY: str = ""  # Shared secret for backend ↔ executor auth
 
     # ── Scheduler ────────────────────────────────────────────
-    REBALANCE_CHECK_INTERVAL: int = 360  # 6 minutes (seconds)
+    REBALANCE_CHECK_INTERVAL: int = 14400  # 4 hours (seconds)
     # Legacy cooldown knob; accept fractional hours for backward compatibility
     # with existing envs that used 0.1 (6 minutes).
     MIN_REBALANCE_INTERVAL_HOURS: float = 6.0
@@ -178,6 +182,17 @@ class Settings(BaseSettings):
     PORTFOLIO_CACHE_TTL_SECONDS: int = 8
     OPTIMIZER_RATES_CACHE_TTL_SECONDS: int = 20
     APY_TIMESERIES_CACHE_TTL_SECONDS: int = 60
+
+    @model_validator(mode="after")
+    def enforce_production_rebalance_interval(self) -> "Settings":
+        """Fail-safe: never run production scheduler faster than every 4 hours."""
+        if not self.DEBUG and self.REBALANCE_CHECK_INTERVAL < 14_400:
+            logger.warning(
+                "REBALANCE_CHECK_INTERVAL=%s is below production minimum; forcing 14400 seconds",
+                self.REBALANCE_CHECK_INTERVAL,
+            )
+            self.REBALANCE_CHECK_INTERVAL = 14_400
+        return self
 
 
     @property

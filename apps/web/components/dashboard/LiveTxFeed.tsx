@@ -132,6 +132,73 @@ const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: s
   monitoring: { icon: Eye,             label: "Monitoring",  iconClass: "text-muted-foreground" },
 };
 
+function isIdleOnlyTransaction(tx: TransactionItem): boolean {
+  const topProtocol = tx.protocol.trim().toLowerCase();
+  const toProtocol = (tx.entry.toProtocol ?? "").trim().toLowerCase();
+  if (topProtocol === "idle" || toProtocol === "idle") {
+    return true;
+  }
+
+  const allocationKeys = Object.keys(tx.allocations);
+  return allocationKeys.length > 0
+    && allocationKeys.every((protocolId) => protocolId.trim().toLowerCase() === "idle");
+}
+
+function TransactionDetailsPanel({ tx, className = "" }: { tx: TransactionItem; className?: string }) {
+  return (
+    <div className={`border-t border-border/20 bg-glacier/[0.03] ${className}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-arctic">Transaction Details</h3>
+        <span className="text-[10px] text-muted-foreground">
+          {formatTransactionDate(tx.entry.createdAt)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Action</p>
+          <p className="mt-0.5 text-xs font-medium text-arctic">
+            {ACTION_CONFIG[tx.action].label}
+          </p>
+        </div>
+        <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Amount</p>
+          <p className="mt-0.5 font-mono text-xs text-arctic">{tx.amountLabel}</p>
+        </div>
+        <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Protocol</p>
+          <p className="mt-0.5 text-xs text-arctic">{tx.protocol}</p>
+        </div>
+        <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Date</p>
+          <p className="mt-0.5 text-xs text-arctic">{formatTransactionDate(tx.entry.createdAt)}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-md border border-border/30 bg-white/40 px-3 py-2">
+        <div className="flex items-start gap-1.5">
+          <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-glacier/70" />
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {tx.reasoning}
+          </p>
+        </div>
+      </div>
+
+      {tx.entry.txHash && (
+        <a
+          href={EXPLORER.tx(tx.entry.txHash)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-flex items-center gap-1 text-[11px] font-medium text-glacier hover:underline"
+        >
+          View transaction on Snowtrace
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
+    </div>
+  );
+}
+
 /** Derive verifiable reasoning for each agent action — Giza-style "Verifiable Decision-Making" */
 function deriveReasoning(entry: RebalanceLogEntry): string | null {
   if (entry.status === "skipped") {
@@ -313,9 +380,11 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
     }
   }
 
-  return transactions.sort(
+  return transactions
+    .filter((tx) => !isIdleOnlyTransaction(tx))
+    .sort(
     (a, b) => new Date(b.entry.createdAt).getTime() - new Date(a.entry.createdAt).getTime(),
-  );
+    );
 }
 
 export default function LiveTxFeed({
@@ -341,14 +410,6 @@ export default function LiveTxFeed({
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, pageSize);
   }, [history, pageSize]);
-
-  const selectedTransaction = useMemo(
-    () => {
-      if (transactions.length === 0) return null;
-      return transactions.find((tx) => tx.entry.id === selectedTransactionId) ?? transactions[0];
-    },
-    [transactions, selectedTransactionId],
-  );
 
   return (
     <div className="crystal-card overflow-hidden">
@@ -409,33 +470,37 @@ export default function LiveTxFeed({
                   const selected = tx.entry.id === selectedTransactionId;
 
                   return (
-                    <button
-                      key={tx.entry.id}
-                      type="button"
-                      onClick={() => setSelectedTransactionId(tx.entry.id)}
-                      className={`grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.2fr)_150px_70px] items-center gap-3 px-6 py-3 text-left transition-colors ${
-                        selected ? "bg-glacier/[0.06]" : "hover:bg-accent/20"
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
-                          <Icon className="h-3.5 w-3.5" />
+                    <div key={tx.entry.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTransactionId((prev) => (prev === tx.entry.id ? null : tx.entry.id))}
+                        className={`grid w-full grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.2fr)_150px_70px] items-center gap-3 px-6 py-3 text-left transition-colors ${
+                          selected ? "bg-glacier/[0.06]" : "hover:bg-accent/20"
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium text-arctic">
+                              {cfg.label} · {tx.protocol}
+                            </p>
+                            <p className="truncate text-[10px] text-muted-foreground">{tx.reasoning}</p>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-medium text-arctic">
-                            {cfg.label} · {tx.protocol}
-                          </p>
-                          <p className="truncate text-[10px] text-muted-foreground">{tx.reasoning}</p>
-                        </div>
-                      </div>
 
-                      <span className="font-mono text-xs text-arctic">{tx.amountLabel}</span>
-                      <span className="truncate text-[11px] text-muted-foreground">{allocationSummary(tx.allocations)}</span>
-                      <span className="text-[11px] text-muted-foreground">{formatTransactionDate(tx.entry.createdAt)}</span>
-                      <span className="text-right text-[11px] font-medium text-glacier">
-                        {selected ? "Open" : "View"}
-                      </span>
-                    </button>
+                        <span className="font-mono text-xs text-arctic">{tx.amountLabel}</span>
+                        <span className="truncate text-[11px] text-muted-foreground">{allocationSummary(tx.allocations)}</span>
+                        <span className="text-[11px] text-muted-foreground">{formatTransactionDate(tx.entry.createdAt)}</span>
+                        <span className="text-right text-[11px] font-medium text-glacier">
+                          {selected ? "Hide" : "View"}
+                        </span>
+                      </button>
+                      {selected && (
+                        <TransactionDetailsPanel tx={tx} className="px-6 py-4" />
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -448,100 +513,35 @@ export default function LiveTxFeed({
                 const selected = tx.entry.id === selectedTransactionId;
 
                 return (
-                  <button
-                    key={tx.entry.id}
-                    type="button"
-                    onClick={() => setSelectedTransactionId(tx.entry.id)}
-                    className={`w-full px-4 py-3 text-left transition-colors ${
-                      selected ? "bg-glacier/[0.06]" : "hover:bg-accent/20"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
-                          <Icon className="h-3.5 w-3.5" />
+                  <div key={tx.entry.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTransactionId((prev) => (prev === tx.entry.id ? null : tx.entry.id))}
+                      className={`w-full px-4 py-3 text-left transition-colors ${
+                        selected ? "bg-glacier/[0.06]" : "hover:bg-accent/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <p className="truncate text-xs font-medium text-arctic">{cfg.label} · {tx.protocol}</p>
                         </div>
-                        <p className="truncate text-xs font-medium text-arctic">{cfg.label} · {tx.protocol}</p>
+                        <span className="shrink-0 font-mono text-xs text-arctic">{tx.amountLabel}</span>
                       </div>
-                      <span className="shrink-0 font-mono text-xs text-arctic">{tx.amountLabel}</span>
-                    </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span>{formatTransactionDate(tx.entry.createdAt)}</span>
-                      <span className="truncate">{allocationSummary(tx.allocations)}</span>
-                    </div>
-                  </button>
+                      <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span>{formatTransactionDate(tx.entry.createdAt)}</span>
+                        <span className="truncate">{allocationSummary(tx.allocations)}</span>
+                      </div>
+                    </button>
+                    {selected && (
+                      <TransactionDetailsPanel tx={tx} className="px-4 py-4" />
+                    )}
+                  </div>
                 );
               })}
             </div>
-
-            {selectedTransaction && (
-              <div className="border-t border-border/20 bg-glacier/[0.03] px-4 py-4 sm:px-6">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold text-arctic">Transaction Details</h3>
-                  <span className="text-[10px] text-muted-foreground">
-                    {formatTransactionDate(selectedTransaction.entry.createdAt)}
-                  </span>
-                </div>
-
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Action</p>
-                    <p className="mt-0.5 text-xs font-medium text-arctic">
-                      {ACTION_CONFIG[selectedTransaction.action].label}
-                    </p>
-                  </div>
-                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Amount</p>
-                    <p className="mt-0.5 font-mono text-xs text-arctic">{selectedTransaction.amountLabel}</p>
-                  </div>
-                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Protocol</p>
-                    <p className="mt-0.5 text-xs text-arctic">{selectedTransaction.protocol}</p>
-                  </div>
-                  <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Date</p>
-                    <p className="mt-0.5 text-xs text-arctic">{formatTransactionDate(selectedTransaction.entry.createdAt)}</p>
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded-md border border-border/30 bg-white/40 px-3 py-2">
-                  <div className="flex items-start gap-1.5">
-                    <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-glacier/70" />
-                    <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      {selectedTransaction.reasoning}
-                    </p>
-                  </div>
-                </div>
-
-                {Object.keys(selectedTransaction.allocations).length > 0 && (
-                  <div className="mt-3 rounded-md border border-border/30 bg-white/40 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Target Allocations</p>
-                    <div className="mt-1.5 grid gap-1">
-                      {Object.entries(selectedTransaction.allocations)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([protocolId, amount]) => (
-                          <div key={protocolId} className="flex items-center justify-between text-[11px]">
-                            <span className="text-arctic">{protocolLabel(protocolId)}</span>
-                            <span className="font-mono text-muted-foreground">{formatAmountLabel(amount)}</span>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                )}
-
-                {selectedTransaction.entry.txHash && (
-                  <a
-                    href={EXPLORER.tx(selectedTransaction.entry.txHash)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-3 inline-flex items-center gap-1 text-[11px] font-medium text-glacier hover:underline"
-                  >
-                    View transaction on Snowtrace
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
-            )}
 
             <PaginationControls
               page={transactionPage}

@@ -39,7 +39,6 @@ import {
   AVALANCHE_RPC_URLS,
   PROTOCOL_CONFIG,
   CHAIN,
-  ACTIVE_PROTOCOLS,
   type ProtocolId,
 } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
@@ -105,12 +104,6 @@ type DeployPhase = "idle" | "deploying" | "deployed" | "error";
 
 // Multi-step form: 1) Account  2) Strategy  3) Deposit  4) Activate
 type FormStep = "account" | "strategy" | "deposit" | "activate";
-
-function normalizeProtocolId(protocolId: string): ProtocolId | null {
-  if (protocolId === "aave") return "aave_v3";
-  if (ACTIVE_PROTOCOLS.includes(protocolId as ProtocolId)) return protocolId as ProtocolId;
-  return null;
-}
 
 // Ordered markets shown in onboarding strategy step (risk desc, then alphabetical).
 const MARKET_PROTOCOL_IDS: ProtocolId[] = [
@@ -386,28 +379,6 @@ export default function OnboardingPage() {
 
   const selectedCount = selectedProtocols.size;
   const yearlyEarning = effectiveDepositAmount >= 1 ? effectiveDepositAmount * (bestApy / 100) : 0;
-
-  // Determine top protocol for deployment — used in activate and review
-  const normalizedRateRows = (protocolRates ?? [])
-    .map((row) => {
-      const normalizedProtocolId = normalizeProtocolId(row.protocolId);
-      if (!normalizedProtocolId) return null;
-      return {
-        ...row,
-        normalizedProtocolId,
-      };
-    })
-    .filter((row): row is NonNullable<typeof row> => row !== null)
-    .filter((row) => ACTIVE_PROTOCOLS.includes(row.normalizedProtocolId));
-
-  const activeRateRows = normalizedRateRows.filter((row) => row.isActive && !row.isComingSoon);
-  const topProtocolByApy = activeRateRows
-    .slice()
-    .sort((a, b) => b.currentApy - a.currentApy)[0]?.normalizedProtocolId;
-
-  const selectedMarketNames = MARKET_PROTOCOLS
-    .filter((p) => selectedProtocols.has(p.id))
-    .map((p) => p.name);
 
   const hasAuthError = accountDetailError instanceof APIError && accountDetailError.status === 401;
 
