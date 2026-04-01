@@ -36,6 +36,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ensure debug artifacts exist even if an early command fails.
+          : > firepan-trigger-response.json
+          : > firepan-results.json
+          : > firepan-severity-summary.json
+
           REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             REF="${{ github.event.pull_request.head.sha }}"
@@ -54,12 +59,28 @@ jobs:
           PY
           )
 
-          RESPONSE=$(curl --fail-with-body -sS -X POST "https://api.firepan.com/v1/scans" \
+          set +e
+          HTTP_CODE=$(curl -sS -o firepan-trigger-response.json -w "%{http_code}" -X POST "https://api.firepan.com/v1/scans" \
             -H "Authorization: Bearer ${FIREPAN_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "${REQUEST_BODY}")
+          CURL_EXIT=$?
+          set -e
 
-          printf '%s' "${RESPONSE}" > firepan-trigger-response.json
+          if [ "${CURL_EXIT}" -ne 0 ]; then
+            echo "::error::FirePan API request failed (network/transport error, curl exit=${CURL_EXIT})."
+            if [ -s firepan-trigger-response.json ]; then
+              cat firepan-trigger-response.json
+            fi
+            exit 1
+          fi
+
+          if [ "${HTTP_CODE}" -lt 200 ] || [ "${HTTP_CODE}" -ge 300 ]; then
+            echo "::error::FirePan scan trigger failed with HTTP ${HTTP_CODE}."
+            echo "Check FIREPAN_API_KEY validity, FirePan workspace access, and GitHub App installation for ${GITHUB_REPOSITORY}."
+            cat firepan-trigger-response.json
+            exit 1
+          fi
 
           SCAN_ID=$(python - <<'PY'
           import json
@@ -96,11 +117,26 @@ jobs:
           ELAPSED=0
 
           while [ "${ELAPSED}" -lt "${MAX_WAIT_SECONDS}" ]; do
-            RESPONSE=$(curl --fail-with-body -sS \
+            set +e
+            HTTP_CODE=$(curl -sS -o firepan-results.json -w "%{http_code}" \
               -H "Authorization: Bearer ${FIREPAN_API_KEY}" \
               "https://api.firepan.com/v1/scans/${SCAN_ID}")
+            CURL_EXIT=$?
+            set -e
 
-            printf '%s' "${RESPONSE}" > firepan-results.json
+            if [ "${CURL_EXIT}" -ne 0 ]; then
+              echo "::error::Failed polling FirePan scan ${SCAN_ID} (curl exit=${CURL_EXIT})."
+              if [ -s firepan-results.json ]; then
+                cat firepan-results.json
+              fi
+              exit 1
+            fi
+
+            if [ "${HTTP_CODE}" -lt 200 ] || [ "${HTTP_CODE}" -ge 300 ]; then
+              echo "::error::FirePan polling failed for scan ${SCAN_ID} with HTTP ${HTTP_CODE}."
+              cat firepan-results.json
+              exit 1
+            fi
 
             STATUS=$(python - <<'PY'
             import json
