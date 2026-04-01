@@ -785,16 +785,23 @@ async def update_allowed_protocols(
             detail="No active session key found. Re-grant session key first",
         )
 
-    db.table("session_keys").update(
-        {
-            "allowed_protocols": normalized,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("account_id", account_id).eq("is_active", True).execute()
-
-    db.table("accounts").update(
-        {"updated_at": datetime.now(timezone.utc).isoformat()}
-    ).eq("id", account_id).execute()
+    try:
+        db.table("session_keys").update(
+            {
+                "allowed_protocols": normalized,
+            }
+        ).eq("account_id", account_id).eq("is_active", True).execute()
+    except Exception as exc:
+        logger.exception(
+            "Failed to update allowed protocols for %s (account_id=%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update allowed protocols",
+        ) from exc
 
     # Best-effort: apply updated scope without waiting for next scheduler tick.
     asyncio.create_task(_trigger_initial_rebalance(account_id, address))
