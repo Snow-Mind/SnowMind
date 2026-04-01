@@ -94,3 +94,70 @@ async def test_get_rebalance_history_applies_transactions_only_filter(monkeypatc
     assert len(result.logs) == 1
     assert ("status", "skipped") in db._count_query.neq_calls
     assert ("status", "skipped") in db._rows_query.neq_calls
+
+
+@pytest.mark.asyncio
+async def test_get_rebalance_history_sanitizes_legacy_rows(monkeypatch) -> None:
+    """Malformed legacy rows should not fail the endpoint with a 400."""
+
+    class _LegacyRowsDB:
+        def __init__(self):
+            self._count_query = _FakeRebalanceLogsQuery(count=2)
+            self._rows_query = _FakeRebalanceLogsQuery(rows=[
+                {
+                    # Legacy shape with unknown status and JSON string payloads.
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "status": "completed_with_notes",
+                    "skip_reason": None,
+                    "from_protocol": "idle",
+                    "to_protocol": "benqi",
+                    "amount_moved": 50.0,
+                    "proposed_allocations": '{"benqi":"50.0"}',
+                    "executed_allocations": '{"benqi":"50.0"}',
+                    "apr_improvement": "0.001",
+                    "gas_cost_usd": "0.05",
+                    "tx_hash": None,
+                    "created_at": "2026-04-01T00:00:00Z",
+                },
+                {
+                    # Irrecoverable shape; endpoint should skip this row.
+                    "id": "not-a-uuid",
+                    "status": "executed",
+                    "created_at": "2026-04-01T00:00:00Z",
+                },
+            ])
+            self._table_calls = 0
+
+        def table(self, name: str):
+            assert name == "rebalance_logs"
+            self._table_calls += 1
+            return self._count_query if self._table_calls == 1 else self._rows_query
+
+    db = _LegacyRowsDB()
+
+    async def _fake_lookup_account(_db, _address, _auth):
+        return {"id": "acct-legacy", "address": "0xabc"}
+
+    monkeypatch.setattr(rebalance, "_lookup_account", _fake_lookup_account)
+
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/rebalance/0xabc/history",
+        "headers": [],
+    })
+
+    result = await rebalance.get_rebalance_history(
+        request=request,
+        address="0xabc",
+        db=db,
+        _auth={"sub": "did:privy:test"},
+        limit=10,
+        offset=0,
+        transactions_only=True,
+    )
+
+    assert result.total == 2
+    assert len(result.logs) == 1
+    assert result.logs[0].status == "failed"
+    assert "Legacy rebalance status" in (result.logs[0].skip_reason or "")

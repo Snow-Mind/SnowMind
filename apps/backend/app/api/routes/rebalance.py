@@ -6,6 +6,7 @@ frontend can use the address it already has from ZeroDev.
 
 import logging
 import asyncio
+import json
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -25,6 +26,8 @@ from app.services.optimizer.rebalancer import Rebalancer
 logger = logging.getLogger("snowmind")
 
 router = APIRouter()  # Auth applied per-endpoint
+
+_VALID_REBALANCE_STATUSES = {"executed", "skipped", "failed", "halted", "pending"}
 
 
 def _classify_reason(
@@ -355,8 +358,57 @@ async def get_rebalance_history(
         .execute()
     )
 
+    sanitized_logs: list[RebalanceLogResponse] = []
+    for row in logs.data or []:
+        if not isinstance(row, dict):
+            continue
+
+        normalized = dict(row)
+
+        raw_status = str(normalized.get("status") or "").strip().lower()
+        if raw_status not in _VALID_REBALANCE_STATUSES:
+            normalized["status"] = "failed"
+            if not normalized.get("skip_reason"):
+                normalized["skip_reason"] = (
+                    f"Legacy rebalance status '{raw_status or 'unknown'}'"
+                )
+
+        amount_moved = normalized.get("amount_moved")
+        if amount_moved is not None and not isinstance(amount_moved, str):
+            normalized["amount_moved"] = str(amount_moved)
+
+        for alloc_field in ("proposed_allocations", "executed_allocations"):
+            alloc_value = normalized.get(alloc_field)
+            if isinstance(alloc_value, str):
+                try:
+                    decoded = json.loads(alloc_value)
+                    normalized[alloc_field] = decoded if isinstance(decoded, dict) else None
+                except Exception:
+                    normalized[alloc_field] = None
+            elif alloc_value is not None and not isinstance(alloc_value, dict):
+                normalized[alloc_field] = None
+
+        for numeric_field in ("apr_improvement", "gas_cost_usd"):
+            numeric_value = normalized.get(numeric_field)
+            if numeric_value is None:
+                continue
+            try:
+                normalized[numeric_field] = float(numeric_value)
+            except (TypeError, ValueError):
+                normalized[numeric_field] = None
+
+        try:
+            sanitized_logs.append(RebalanceLogResponse(**normalized))
+        except Exception as exc:
+            logger.warning(
+                "Skipping malformed rebalance log row for account %s (id=%s): %s",
+                account_id,
+                row.get("id"),
+                exc,
+            )
+
     return RebalanceHistoryResponse(
-        logs=[RebalanceLogResponse(**row) for row in logs.data],
+        logs=sanitized_logs,
         total=total,
     )
 

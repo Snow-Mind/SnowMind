@@ -5,6 +5,10 @@ import { api, APIError } from "@/lib/api-client";
 import { isValidEvmAddress } from "@/lib/address";
 import { useAuth } from "@/hooks/useAuth";
 
+function isNonRetryableClientError(error: unknown): boolean {
+  return error instanceof APIError && error.status >= 400 && error.status < 500;
+}
+
 /** Latest status (single last log). */
 export function useRebalanceStatus(address: string | undefined) {
   const { authenticated, ready } = useAuth();
@@ -16,11 +20,11 @@ export function useRebalanceStatus(address: string | undefined) {
     enabled: !!safeAddress && ready && authenticated,
     refetchInterval: (query) => {
       const err = query.state.error;
-      if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;
+      if (isNonRetryableClientError(err)) return false;
       return 30_000;
     },
     retry: (failureCount, error) => {
-      if (error instanceof APIError && (error.status === 401 || error.status === 429)) return false;
+      if (isNonRetryableClientError(error)) return false;
       return failureCount < 2;
     },
   });
@@ -42,11 +46,11 @@ export function useRebalanceHistory(
     enabled: !!safeAddress && ready && authenticated,
     refetchInterval: (query) => {
       const err = query.state.error;
-      if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;
+      if (isNonRetryableClientError(err)) return false;
       return 30_000;
     },
     retry: (failureCount, error) => {
-      if (error instanceof APIError && (error.status === 401 || error.status === 429)) return false;
+      if (isNonRetryableClientError(error)) return false;
       return failureCount < 2;
     },
   });

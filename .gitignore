@@ -5,7 +5,7 @@ node_modules/
 .env
 .env.*
 !.env.example
-
+docs\OPS_SIMPLE_CHECKLIST.md
 # ── Next.js ──────────────────────────────────────────────────
 .next/
 out/

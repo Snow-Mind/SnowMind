@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import require_service_auth
+from app.services.execution.session_key import decrypt_session_key, encrypt_session_key
 from app.services.monitoring import send_sentry_alert
 from app.services.protocols import ACTIVE_ADAPTERS
 from app.services.protocols.circuit_breaker import protocol_circuit_breaker
@@ -101,6 +102,93 @@ async def health_sentry_test(request: Request, _svc: dict = Depends(require_serv
         "status": "ok",
         "sentry_configured": configured,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/health/session-key-encryption")
+@limiter.limit("10/minute")
+async def health_session_key_encryption(
+    request: Request,
+    _svc: dict = Depends(require_service_auth),
+    sample_rows: int = Query(200, ge=1, le=2000),
+):
+    """Runtime verification for session-key encryption mode (KMS vs local)."""
+    settings = get_settings()
+    kms_key_id = (settings.KMS_KEY_ID or "").strip()
+    kms_configured = bool(kms_key_id)
+    kms_enforced = kms_configured and not settings.DEBUG
+
+    probe_mode = "unknown"
+    probe_roundtrip_ok = False
+    probe_error = None
+    probe_plaintext = "snowmind-kms-probe"
+
+    try:
+        probe_ciphertext = encrypt_session_key(probe_plaintext)
+        probe_mode = "kms" if probe_ciphertext.startswith("kms:v1:") else "local"
+        probe_roundtrip_ok = decrypt_session_key(probe_ciphertext) == probe_plaintext
+    except Exception as exc:
+        probe_error = f"{type(exc).__name__}: {exc}"
+        logger.warning("Session-key encryption probe failed: %s", exc)
+
+    envelope_stats = {
+        "scanned": 0,
+        "kms_v1": 0,
+        "legacy_local": 0,
+        "unknown": 0,
+    }
+    db_error = None
+    try:
+        db = get_db()
+        rows = (
+            db.table("session_keys")
+            .select("serialized_permission")
+            .order("created_at", desc=True)
+            .limit(sample_rows)
+            .execute()
+            .data
+            or []
+        )
+
+        envelope_stats["scanned"] = len(rows)
+        for row in rows:
+            blob = row.get("serialized_permission")
+            if not isinstance(blob, str) or not blob:
+                envelope_stats["unknown"] += 1
+                continue
+            if blob.startswith("kms:v1:"):
+                envelope_stats["kms_v1"] += 1
+            elif blob.startswith("{"):
+                envelope_stats["unknown"] += 1
+            else:
+                envelope_stats["legacy_local"] += 1
+    except Exception as exc:
+        db_error = f"{type(exc).__name__}: {exc}"
+        logger.warning("Session-key envelope stats query failed: %s", exc)
+
+    expected_mode = "kms" if kms_configured else "local"
+    mode_ok = probe_mode == expected_mode if probe_error is None else False
+
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "kms": {
+            "configured": kms_configured,
+            "enforced_non_debug": kms_enforced,
+            "key_hint": (f"...{kms_key_id[-12:]}" if kms_key_id else None),
+        },
+        "probe": {
+            "expected_mode": expected_mode,
+            "actual_mode": probe_mode,
+            "mode_ok": mode_ok,
+            "roundtrip_ok": probe_roundtrip_ok,
+            "error": probe_error,
+        },
+        "session_key_rows": {
+            "sample_rows": sample_rows,
+            "stats": envelope_stats,
+            "query_error": db_error,
+        },
     }
 
 
