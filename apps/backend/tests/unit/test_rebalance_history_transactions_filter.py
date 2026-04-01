@@ -12,12 +12,14 @@ class _FakeRebalanceLogsQuery:
     def __init__(self, *, count: int | None = None, rows: list[dict] | None = None):
         self._count = count
         self._rows = rows or []
+        self.eq_calls: list[tuple[str, str]] = []
         self.neq_calls: list[tuple[str, str]] = []
 
     def select(self, *_args, **_kwargs):
         return self
 
-    def eq(self, *_args, **_kwargs):
+    def eq(self, field: str, value: str):
+        self.eq_calls.append((field, value))
         return self
 
     def neq(self, field: str, value: str):
@@ -65,7 +67,7 @@ class _FakeDB:
 
 @pytest.mark.asyncio
 async def test_get_rebalance_history_applies_transactions_only_filter(monkeypatch) -> None:
-    """transactionsOnly=true must exclude skipped logs at query layer."""
+    """transactionsOnly=true must fetch only executed transaction logs."""
     db = _FakeDB()
 
     async def _fake_lookup_account(_db, _address, _auth):
@@ -92,8 +94,8 @@ async def test_get_rebalance_history_applies_transactions_only_filter(monkeypatc
 
     assert result.total == 1
     assert len(result.logs) == 1
-    assert ("status", "skipped") in db._count_query.neq_calls
-    assert ("status", "skipped") in db._rows_query.neq_calls
+    assert ("status", "executed") in db._count_query.eq_calls
+    assert ("status", "executed") in db._rows_query.eq_calls
 
 
 @pytest.mark.asyncio

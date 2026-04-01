@@ -336,7 +336,8 @@ async def get_rebalance_history(
         .eq("account_id", account_id)
     )
     if transactions_only:
-        count_query = count_query.neq("status", "skipped")
+        # Transaction view should include only on-chain executed operations.
+        count_query = count_query.eq("status", "executed")
 
     # Fetch count
     count_resp = count_query.execute()
@@ -348,7 +349,7 @@ async def get_rebalance_history(
         .eq("account_id", account_id)
     )
     if transactions_only:
-        logs_query = logs_query.neq("status", "skipped")
+        logs_query = logs_query.eq("status", "executed")
 
     # Fetch page
     logs = (

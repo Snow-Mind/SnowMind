@@ -150,6 +150,7 @@ export default function AgentManager({
         <p className="text-xs text-[#8A837C]">
           Control which markets your optimizer is allowed to use after onboarding.
           Changes sync to your active session-key scope in backend.
+          To change on-chain signed permissions, re-grant session key from Settings.
         </p>
 
         {!hasActiveSessionKey && (

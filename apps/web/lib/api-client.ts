@@ -164,7 +164,14 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
         continue;
       }
       const text = await res.text().catch(() => "Unknown error");
-      throw new APIError(res.status, `HTTP_${res.status}`, text);
+      let message = text;
+      try {
+        const parsed = JSON.parse(text) as { detail?: string; message?: string };
+        message = parsed.detail || parsed.message || text;
+      } catch {
+        // Leave message as plain response text when body is not JSON.
+      }
+      throw new APIError(res.status, `HTTP_${res.status}`, message);
     }
 
     if (requiresAuth) {

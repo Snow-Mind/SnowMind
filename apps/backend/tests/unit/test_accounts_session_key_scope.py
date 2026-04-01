@@ -1,10 +1,14 @@
 """Unit tests for session-key protocol scope resolution in account routes."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 from app.api.routes.accounts import (
     _DEFAULT_ALLOWED_PROTOCOLS,
     _find_excluded_funded_protocols,
+    _find_excluded_funded_protocols_onchain,
     _normalize_allowed_protocols,
     _resolve_allowed_protocols,
 )
@@ -111,3 +115,56 @@ def test_find_excluded_funded_protocols_ignores_dust_and_invalid_amounts() -> No
     )
 
     assert excluded == []
+
+
+@pytest.mark.asyncio
+async def test_find_excluded_funded_protocols_onchain_detects_excluded_balance(monkeypatch) -> None:
+    class _Adapter:
+        def __init__(self, balance_wei: int):
+            self.balance_wei = balance_wei
+
+        async def get_user_balance(self, _address: str, _asset: str) -> int:
+            return self.balance_wei
+
+    balances = {
+        "euler_v2": int(1_500_000),  # 1.5 USDC
+        "silo_susdp_usdc": int(0),
+    }
+
+    monkeypatch.setattr(
+        "app.api.routes.accounts.get_settings",
+        lambda: SimpleNamespace(USDC_ADDRESS="0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.accounts.get_adapter",
+        lambda pid: _Adapter(balances.get(pid, 0)),
+    )
+
+    excluded = await _find_excluded_funded_protocols_onchain(
+        "0x0000000000000000000000000000000000000001",
+        ["aave_v3", "benqi", "spark", "silo_susdp_usdc"],
+    )
+
+    assert excluded == ["euler_v2"]
+
+
+@pytest.mark.asyncio
+async def test_find_excluded_funded_protocols_onchain_raises_on_read_failure(monkeypatch) -> None:
+    class _FailingAdapter:
+        async def get_user_balance(self, _address: str, _asset: str) -> int:
+            raise RuntimeError("rpc unavailable")
+
+    monkeypatch.setattr(
+        "app.api.routes.accounts.get_settings",
+        lambda: SimpleNamespace(USDC_ADDRESS="0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.accounts.get_adapter",
+        lambda _pid: _FailingAdapter(),
+    )
+
+    with pytest.raises(RuntimeError):
+        await _find_excluded_funded_protocols_onchain(
+            "0x0000000000000000000000000000000000000001",
+            ["aave_v3"],
+        )

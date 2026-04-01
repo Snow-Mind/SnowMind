@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from pydantic import BaseModel, Field
 from supabase import Client
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import (
@@ -28,6 +29,7 @@ from app.services.execution.session_key import (
     revoke_session_key,
     store_session_key,
 )
+from app.services.protocols import get_adapter
 
 
 logger = logging.getLogger("snowmind")
@@ -143,6 +145,50 @@ def _find_excluded_funded_protocols(
         if pid in excluded:
             continue
         excluded.append(pid)
+
+    return sorted(excluded)
+
+
+async def _find_excluded_funded_protocols_onchain(
+    address: str,
+    allowed_protocols: list[str],
+) -> list[str]:
+    """Return excluded protocols that still hold on-chain funds.
+
+    Source of truth is on-chain balance, not DB allocations. This prevents
+    stale DB rows from blocking valid updates and blocks risky updates when
+    live balances still exist in excluded protocols.
+    """
+    allowed_set = set(_normalize_allowed_protocols(allowed_protocols))
+    threshold = Decimal("0.000001")
+    settings = get_settings()
+
+    async def _read_protocol_balance(protocol_id: str) -> str | None:
+        adapter = get_adapter(protocol_id)
+        balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
+        balance_usdc = Decimal(str(balance_wei)) / Decimal("1000000")
+        return protocol_id if balance_usdc > threshold else None
+
+    candidates = [
+        pid for pid in _DEFAULT_ALLOWED_PROTOCOLS
+        if pid not in allowed_set
+    ]
+    if not candidates:
+        return []
+
+    checks = await asyncio.gather(
+        *(_read_protocol_balance(pid) for pid in candidates),
+        return_exceptions=True,
+    )
+
+    excluded: list[str] = []
+    for pid, result in zip(candidates, checks, strict=False):
+        if isinstance(result, Exception):
+            raise RuntimeError(
+                f"On-chain balance validation failed for {pid}: {result}"
+            ) from result
+        if result:
+            excluded.append(result)
 
     return sorted(excluded)
 
@@ -817,30 +863,6 @@ async def update_allowed_protocols(
             detail="At least one valid protocol must be selected",
         )
 
-    try:
-        excluded_funded = _find_excluded_funded_protocols(db, account_id, normalized)
-    except Exception as exc:
-        logger.exception(
-            "Failed to validate funded protocol exclusions for %s (account_id=%s): %s",
-            address,
-            account_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to validate current allocations. Please retry.",
-        ) from exc
-
-    if excluded_funded:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Cannot exclude protocols with existing funds: "
-                f"{', '.join(excluded_funded)}. "
-                "Keep them enabled or withdraw from those protocols first."
-            ),
-        )
-
     active_keys = (
         db.table("session_keys")
         .select("id")
@@ -853,6 +875,39 @@ async def update_allowed_protocols(
         raise HTTPException(
             status_code=409,
             detail="No active session key found. Re-grant session key first",
+        )
+
+    try:
+        excluded_funded_db = _find_excluded_funded_protocols(db, account_id, normalized)
+        excluded_funded_chain = await _find_excluded_funded_protocols_onchain(address, normalized)
+    except Exception as exc:
+        logger.exception(
+            "Failed to validate funded protocol exclusions for %s (account_id=%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to validate current allocations. Please retry.",
+        ) from exc
+
+    # On-chain balances are authoritative. Log DB drift but do not block on it.
+    if excluded_funded_db and not excluded_funded_chain:
+        logger.info(
+            "Ignoring stale DB-funded exclusions for %s: %s",
+            address,
+            ", ".join(excluded_funded_db),
+        )
+
+    if excluded_funded_chain:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot exclude protocols with existing funds: "
+                f"{', '.join(excluded_funded_chain)}. "
+                "Keep them enabled or withdraw from those protocols first."
+            ),
         )
 
     try:

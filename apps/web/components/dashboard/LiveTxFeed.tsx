@@ -233,13 +233,21 @@ interface PaginationControlsProps {
   page: number;
   total: number;
   pageSize: number;
+  currentItemCount?: number;
   onPageChange: (page: number) => void;
 }
 
-function PaginationControls({ page, total, pageSize, onPageChange }: PaginationControlsProps) {
+function PaginationControls({
+  page,
+  total,
+  pageSize,
+  currentItemCount,
+  onPageChange,
+}: PaginationControlsProps) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const canPrev = page > 0;
-  const canNext = page + 1 < totalPages;
+  const hasVisibleItemsForNext = currentItemCount == null || currentItemCount >= pageSize;
+  const canNext = page + 1 < totalPages && hasVisibleItemsForNext;
 
   return (
     <div className="flex items-center justify-between border-t border-border/20 px-4 py-3 text-[11px] sm:px-6">
@@ -547,6 +555,7 @@ export default function LiveTxFeed({
               page={transactionPage}
               total={transactionTotal}
               pageSize={pageSize}
+              currentItemCount={transactions.length}
               onPageChange={onTransactionPageChange}
             />
           </>
@@ -599,6 +608,7 @@ export default function LiveTxFeed({
             page={historyPage}
             total={historyTotal}
             pageSize={pageSize}
+            currentItemCount={logEntries.length}
             onPageChange={onHistoryPageChange}
           />
         </>
