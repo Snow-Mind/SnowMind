@@ -101,6 +101,52 @@ def _resolve_allowed_protocols(
     return list(_DEFAULT_ALLOWED_PROTOCOLS)
 
 
+def _find_excluded_funded_protocols(
+    db: Client,
+    account_id: str,
+    allowed_protocols: list[str],
+) -> list[str]:
+    """Return funded protocols that are missing from requested scope.
+
+    Safety guard: users should not be allowed to remove a protocol from
+    session-key scope while funds are still allocated there, otherwise funds
+    can become operationally stranded until re-grant.
+    """
+    allowed_set = set(_normalize_allowed_protocols(allowed_protocols))
+
+    allocations = (
+        db.table("allocations")
+        .select("protocol_id, amount_usdc")
+        .eq("account_id", account_id)
+        .execute()
+    )
+
+    excluded: list[str] = []
+    for row in allocations.data or []:
+        pid = str(row.get("protocol_id") or "").strip().lower()
+        if not pid:
+            continue
+        if pid == "aave":
+            pid = "aave_v3"
+        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+            continue
+
+        try:
+            amount = Decimal(str(row.get("amount_usdc") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+
+        if amount <= Decimal("0.000001"):
+            continue
+        if pid in allowed_set:
+            continue
+        if pid in excluded:
+            continue
+        excluded.append(pid)
+
+    return sorted(excluded)
+
+
 def _record_funding_transfer(
     db: Client,
     account_id: str,
@@ -769,6 +815,30 @@ async def update_allowed_protocols(
         raise HTTPException(
             status_code=400,
             detail="At least one valid protocol must be selected",
+        )
+
+    try:
+        excluded_funded = _find_excluded_funded_protocols(db, account_id, normalized)
+    except Exception as exc:
+        logger.exception(
+            "Failed to validate funded protocol exclusions for %s (account_id=%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to validate current allocations. Please retry.",
+        ) from exc
+
+    if excluded_funded:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot exclude protocols with existing funds: "
+                f"{', '.join(excluded_funded)}. "
+                "Keep them enabled or withdraw from those protocols first."
+            ),
         )
 
     active_keys = (

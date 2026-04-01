@@ -128,8 +128,6 @@ export default function AgentManager({
         queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] }),
       ]);
 
-      await api.triggerRebalance(address).catch(() => undefined);
-
       toast.success("Agent market scope updated.");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update market scope";
