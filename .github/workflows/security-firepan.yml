@@ -14,6 +14,7 @@ jobs:
   firepan-scan:
     name: FirePan Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -27,17 +28,259 @@ jobs:
             exit 1
           fi
 
-      - name: Run FirePan scan
-        uses: firepan-labs/security-action@v1
-        with:
-          fail-on: high
-          path: contracts/
-          format: sarif
-          output: firepan-results.sarif
+      - name: Trigger FirePan scan via API
+        id: firepan-trigger
+        shell: bash
         env:
           FIREPAN_API_KEY: ${{ secrets.FIREPAN_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            REF="${{ github.event.pull_request.head.sha }}"
+          else
+            REF="${GITHUB_SHA}"
+          fi
+          export REPO_URL REF
+
+          REQUEST_BODY=$(python - <<'PY'
+          import json
+          import os
+          print(json.dumps({
+              "repo_url": os.environ["REPO_URL"],
+              "ref": os.environ["REF"],
+          }))
+          PY
+          )
+
+          RESPONSE=$(curl --fail-with-body -sS -X POST "https://api.firepan.com/v1/scans" \
+            -H "Authorization: Bearer ${FIREPAN_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "${REQUEST_BODY}")
+
+          printf '%s' "${RESPONSE}" > firepan-trigger-response.json
+
+          SCAN_ID=$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("firepan-trigger-response.json").read_text())
+          scan_id = payload.get("scan_id") or payload.get("scanId") or payload.get("id")
+          if not scan_id and isinstance(payload.get("scan"), dict):
+              scan_id = payload["scan"].get("id") or payload["scan"].get("scan_id")
+          if not scan_id:
+              raise SystemExit(1)
+          print(scan_id)
+          PY
+          ) || {
+            echo "::error::Unable to parse FirePan scan id."
+            cat firepan-trigger-response.json
+            exit 1
+          }
+
+          echo "scan_id=${SCAN_ID}" >> "${GITHUB_OUTPUT}"
+          echo "Triggered FirePan scan id=${SCAN_ID}"
+
+      - name: Poll FirePan scan and enforce threshold
+        id: firepan-poll
+        shell: bash
+        env:
+          FIREPAN_API_KEY: ${{ secrets.FIREPAN_API_KEY }}
+          SCAN_ID: ${{ steps.firepan-trigger.outputs.scan_id }}
+        run: |
+          set -euo pipefail
+
+          MAX_WAIT_SECONDS=900
+          SLEEP_SECONDS=10
+          ELAPSED=0
+
+          while [ "${ELAPSED}" -lt "${MAX_WAIT_SECONDS}" ]; do
+            RESPONSE=$(curl --fail-with-body -sS \
+              -H "Authorization: Bearer ${FIREPAN_API_KEY}" \
+              "https://api.firepan.com/v1/scans/${SCAN_ID}")
+
+            printf '%s' "${RESPONSE}" > firepan-results.json
+
+            STATUS=$(python - <<'PY'
+            import json
+            from pathlib import Path
+
+            data = json.loads(Path("firepan-results.json").read_text())
+            status = data.get("status") or data.get("state")
+            if not status and isinstance(data.get("scan"), dict):
+                status = data["scan"].get("status") or data["scan"].get("state")
+            if not status and isinstance(data.get("result"), dict):
+                status = data["result"].get("status") or data["result"].get("state")
+            print((status or "unknown").lower())
+            PY
+            )
+
+            case "${STATUS}" in
+              queued|pending|running|processing|in_progress)
+                echo "FirePan scan ${SCAN_ID} status=${STATUS} (${ELAPSED}s elapsed)"
+                sleep "${SLEEP_SECONDS}"
+                ELAPSED=$((ELAPSED + SLEEP_SECONDS))
+                ;;
+              completed|complete|done|success|succeeded)
+                echo "FirePan scan ${SCAN_ID} completed"
+                break
+                ;;
+              failed|error|errored|cancelled|canceled)
+                echo "::error::FirePan scan ended with status=${STATUS}"
+                cat firepan-results.json
+                exit 1
+                ;;
+              *)
+                # Some FirePan responses do not expose status explicitly once complete.
+                # If findings payload exists, treat as terminal and continue.
+                if python - <<'PY'
+                import json
+                from pathlib import Path
+                data = json.loads(Path("firepan-results.json").read_text())
+                has_payload = any(
+                    key in data for key in ("findings", "summary", "sarif", "report", "result")
+                )
+                raise SystemExit(0 if has_payload else 1)
+                PY
+                then
+                  echo "FirePan scan ${SCAN_ID} returned terminal payload"
+                  break
+                fi
+
+                echo "FirePan scan ${SCAN_ID} status=${STATUS} (${ELAPSED}s elapsed)"
+                sleep "${SLEEP_SECONDS}"
+                ELAPSED=$((ELAPSED + SLEEP_SECONDS))
+                ;;
+            esac
+          done
+
+          if [ "${ELAPSED}" -ge "${MAX_WAIT_SECONDS}" ]; then
+            echo "::error::Timed out waiting for FirePan scan completion"
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("firepan-results.json").read_text())
+
+          counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+          def as_int(value, default=0):
+              try:
+                  return int(value)
+              except Exception:
+                  return default
+
+            def pick_findings(payload):
+              candidates = []
+              if isinstance(payload, dict):
+                candidates.append(payload.get("findings"))
+                if isinstance(payload.get("result"), dict):
+                  candidates.append(payload["result"].get("findings"))
+                if isinstance(payload.get("report"), dict):
+                  candidates.append(payload["report"].get("findings"))
+              for candidate in candidates:
+                if isinstance(candidate, list):
+                  return candidate
+              return None
+
+            def pick_summary(payload):
+              candidates = []
+              if isinstance(payload, dict):
+                candidates.append(payload.get("summary"))
+                if isinstance(payload.get("result"), dict):
+                  candidates.append(payload["result"].get("summary"))
+                if isinstance(payload.get("report"), dict):
+                  candidates.append(payload["report"].get("summary"))
+              for candidate in candidates:
+                if isinstance(candidate, dict):
+                  return candidate
+              return None
+
+            findings = pick_findings(data)
+            if findings is not None:
+              for finding in findings:
+                if not isinstance(finding, dict):
+                  continue
+                severity = str(finding.get("severity", "")).lower()
+                if severity in counts:
+                  counts[severity] += 1
+            else:
+              summary = pick_summary(data)
+              if summary is not None:
+                for sev in counts:
+                  counts[sev] = as_int(
+                    summary.get(sev, summary.get(f"{sev}_count", 0)),
+                    0,
+                  )
+              else:
+                # Conservative fallback: count explicit severity markers if
+                # payload shape is not recognized.
+                def walk(obj):
+                  if isinstance(obj, dict):
+                    severity = obj.get("severity")
+                    if isinstance(severity, str):
+                      sev = severity.lower()
+                      if sev in counts:
+                        counts[sev] += as_int(obj.get("count"), 1)
+                    for value in obj.values():
+                      walk(value)
+                  elif isinstance(obj, list):
+                    for item in obj:
+                      walk(item)
+
+                walk(data)
+
+          Path("firepan-severity-summary.json").write_text(json.dumps(counts, indent=2))
+          print(f"FirePan summary: {counts}")
+
+          fail_count = counts["critical"] + counts["high"]
+          if fail_count > 0:
+              raise SystemExit(2)
+          PY
+
+      - name: Export SARIF from FirePan response
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("firepan-results.json").read_text())
+
+          sarif = None
+          if isinstance(data.get("sarif"), dict):
+              sarif = data["sarif"]
+          elif isinstance(data.get("result"), dict) and isinstance(data["result"].get("sarif"), dict):
+              sarif = data["result"]["sarif"]
+          elif isinstance(data.get("report"), dict) and isinstance(data["report"].get("sarif"), dict):
+              sarif = data["report"]["sarif"]
+
+          if sarif is None:
+              raise SystemExit(0)
+
+          Path("firepan-results.sarif").write_text(json.dumps(sarif))
+          print("Wrote firepan-results.sarif")
+          PY
 
       - name: Upload SARIF to GitHub Security
+        if: ${{ always() && hashFiles('firepan-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: firepan-results.sarif
+
+      - name: Upload FirePan raw outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firepan-scan-raw
+          path: |
+            firepan-trigger-response.json
+            firepan-results.json
+            firepan-severity-summary.json

@@ -25,10 +25,10 @@ This repository is wired for FirePan CI scanning via:
 Workflow: .github/workflows/security-firepan.yml
 
 - Runs on push and pull_request for main and dev.
-- Executes firepan-labs/security-action@v1.
+- Triggers FirePan scan through the FirePan API (`POST /v1/scans`) and polls completion (`GET /v1/scans/{scan_id}`).
 - Fails build on high and critical findings.
-- Uploads SARIF to GitHub Security tab.
-- If FIREPAN_API_KEY is missing, workflow warns and skips scan.
+- Uploads SARIF to GitHub Security tab when SARIF payload is returned.
+- If FIREPAN_API_KEY is missing, workflow fails fast.
 
 ## 3) Scan scope and policy
 

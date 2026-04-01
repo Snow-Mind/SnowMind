@@ -119,9 +119,13 @@ const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
   .map((id) => PROTOCOL_CONFIG[id])
   .filter(Boolean);
 
-const RECEIPT_CONFIRMATION_TIMEOUT_MS = 120_000;
+const RECEIPT_CONFIRMATION_TIMEOUT_MS = 180_000;
 const RECEIPT_POLL_INTERVAL_MS = 3_000;
 const MIN_FUNDED_BALANCE_USDC = 0.01;
+
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+};
 
 function portfolioHasFunds(
   portfolio:
@@ -204,8 +208,9 @@ async function waitForTransferConfirmationWithFallback(params: {
   transferHash: `0x${string}`;
   recipient: `0x${string}`;
   minRecipientBalance: bigint;
+  walletProvider?: Eip1193Provider;
 }): Promise<void> {
-  const { transferHash, recipient, minRecipientBalance } = params;
+  const { transferHash, recipient, minRecipientBalance, walletProvider } = params;
   const clients = AVALANCHE_RPC_URLS.map((rpcUrl) => ({
     rpcUrl,
     client: createPublicClient({ chain: CHAIN, transport: http(rpcUrl) }),
@@ -215,6 +220,30 @@ async function waitForTransferConfirmationWithFallback(params: {
   let lastRpcError = "";
 
   while (Date.now() < deadline) {
+    if (walletProvider) {
+      try {
+        const providerReceipt = await walletProvider.request({
+          method: "eth_getTransactionReceipt",
+          params: [transferHash],
+        }) as { status?: string | null } | null;
+
+        if (providerReceipt) {
+          const statusHex = (providerReceipt.status ?? "").toLowerCase();
+          if (statusHex === "0x0" || statusHex === "0") {
+            throw new Error("USDC transfer reverted on-chain.");
+          }
+          if (statusHex === "0x1" || statusHex === "1" || statusHex === "") {
+            return;
+          }
+        }
+      } catch (providerErr: unknown) {
+        const providerMsg = errorToMessage(providerErr);
+        lastRpcError = isRpcTransportFailure(providerMsg)
+          ? "wallet_provider: transport error"
+          : `wallet_provider: ${providerMsg.slice(0, 140)}`;
+      }
+    }
+
     for (const { rpcUrl, client } of clients) {
       try {
         const receipt = await client.getTransactionReceipt({ hash: transferHash });
@@ -870,6 +899,7 @@ export default function OnboardingPage() {
           transferHash,
           recipient: derivedAddr as `0x${string}`,
           minRecipientBalance: existingBalance + shortfall,
+          walletProvider: provider as Eip1193Provider,
         });
         toast.success("USDC transferred to smart account!");
       } else {
@@ -1012,18 +1042,17 @@ export default function OnboardingPage() {
         setActivationPhase("error");
         setActivationError(msg);
         toast.error("Insufficient USDC balance.");
+      } else if (msg.includes("confirmation could not be verified due RPC instability")) {
+        // Do not show hard-failure UI for transient confirmation instability.
+        // Retry starts from a smart-account balance precheck, so duplicate
+        // transfer is prevented even if the first transfer confirmed late.
+        setActivationPhase("idle");
+        setActivationError(null);
+        toast.error("Transfer submitted. Retry Activation in a few seconds; duplicate transfer is prevented.");
       } else if (isRpcTransportFailure(msg)) {
         setActivationPhase("error");
         setActivationError(sanitizeActivationErrorMessage(msg));
         toast.error("Avalanche RPC is unstable right now. Retry activation in a few seconds.");
-      } else if (msg.includes("confirmation could not be verified due RPC instability")) {
-        setActivationPhase("error");
-        setActivationError(
-          "Transfer was submitted but confirmation RPCs were unstable. "
-          + "Please wait a few seconds and retry activation. "
-          + "The flow always re-checks your smart-account USDC balance before sending more."
-        );
-        toast.error("Transfer confirmation timed out. Retrying is safe.");
       } else if (msg.includes("USDC transfer failed") || msg.includes("invalid parameters")) {
         setActivationPhase("error");
         setActivationError(sanitizeActivationErrorMessage(msg));
