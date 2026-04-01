@@ -8,6 +8,7 @@ import {
   AlertCircle,
   RefreshCw,
   BarChart3,
+  SlidersHorizontal,
   ScrollText,
   Sparkles,
   Loader2,
@@ -16,6 +17,7 @@ import { motion } from "framer-motion";
 import LiveRates from "@/components/dashboard/LiveRates";
 import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import PortfolioChart from "@/components/dashboard/PortfolioChart";
+import AgentManager from "@/components/dashboard/AgentManager";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -75,10 +77,11 @@ function StatsSkeleton() {
   );
 }
 
-type DashboardTab = "markets" | "agent-log";
+type DashboardTab = "markets" | "agent-manager" | "agent-log";
 
 const TABS: { id: DashboardTab; label: string; icon: typeof BarChart3 }[] = [
   { id: "markets", label: "Markets", icon: BarChart3 },
+  { id: "agent-manager", label: "Agent Manager", icon: SlidersHorizontal },
   { id: "agent-log", label: "Agent Log", icon: ScrollText },
 ];
 
@@ -90,7 +93,12 @@ export default function DashboardPage() {
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
   const address = ready && authenticated ? (smartAccountAddress || undefined) : undefined;
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") === "agent-log" ? "agent-log" : "markets";
+  const tabParam = searchParams.get("tab");
+  const initialTab: DashboardTab = tabParam === "agent-log"
+    ? "agent-log"
+    : tabParam === "agent-manager"
+      ? "agent-manager"
+      : "markets";
   const activatedFromOnboarding = searchParams.get("activated") === "1";
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
   const [transactionPageByAddress, setTransactionPageByAddress] = useState<Record<string, number>>({});
@@ -573,6 +581,16 @@ export default function DashboardPage() {
             />
           </ErrorBoundary>
         </div>
+      )}
+
+      {activeTab === "agent-manager" && (
+        <ErrorBoundary name="agent-manager">
+          <AgentManager
+            address={address}
+            hasActiveSessionKey={hasActiveSessionKey}
+            allowedProtocols={activeProtocolIds}
+          />
+        </ErrorBoundary>
       )}
 
       {activeTab === "agent-log" && (

@@ -698,6 +698,11 @@ class DiversificationPreferenceRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class AllowedProtocolsUpdateRequest(BaseModel):
+    allowed_protocols: list[str] = Field(..., alias="allowedProtocols")
+    model_config = {"populate_by_name": True}
+
+
 @router.put("/{address}/diversification-preference")
 @limiter.limit("20/minute")
 async def update_diversification_preference(
@@ -729,5 +734,73 @@ async def update_diversification_preference(
 
     return {
         "diversificationPreference": req.diversification_preference.value,
+    }
+
+
+@router.put("/{address}/allowed-protocols")
+@limiter.limit("20/minute")
+async def update_allowed_protocols(
+    request: Request,
+    address: str,
+    req: AllowedProtocolsUpdateRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Update active session-key protocol scope for an account.
+
+    This lets users adjust market exposure after onboarding without changing
+    account ownership or other permissions.
+    """
+    address = validate_eth_address(address)
+    acct = (
+        db.table("accounts")
+        .select("id, owner_address, privy_did")
+        .eq("address", address)
+        .limit(1)
+        .execute()
+    )
+    if not acct.data:
+        raise HTTPException(status_code=404, detail="Account not found")
+    verify_account_ownership(_auth, acct.data[0], db=db)
+
+    account_id = acct.data[0]["id"]
+    normalized = _normalize_allowed_protocols(req.allowed_protocols)
+    if not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one valid protocol must be selected",
+        )
+
+    active_keys = (
+        db.table("session_keys")
+        .select("id")
+        .eq("account_id", account_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    active_count = len(active_keys.data or [])
+    if active_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="No active session key found. Re-grant session key first",
+        )
+
+    db.table("session_keys").update(
+        {
+            "allowed_protocols": normalized,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("account_id", account_id).eq("is_active", True).execute()
+
+    db.table("accounts").update(
+        {"updated_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("id", account_id).execute()
+
+    # Best-effort: apply updated scope without waiting for next scheduler tick.
+    asyncio.create_task(_trigger_initial_rebalance(account_id, address))
+
+    return {
+        "allowedProtocols": normalized,
+        "updatedRows": active_count,
     }
 

@@ -119,6 +119,18 @@ class SchedulerWatchdog:
         self._last_healthy_tick: float = time.time()
         self._alerted = False
 
+    def _max_gap_seconds(self) -> int:
+        """Compute stale threshold from scheduler cadence + lock grace.
+
+        A fixed 35-minute threshold works for short intervals, but once
+        REBALANCE_CHECK_INTERVAL is moved to 4 hours it causes false stall
+        alerts between normal ticks.
+        """
+        settings = get_settings()
+        interval_seconds = max(1, int(getattr(settings, "REBALANCE_CHECK_INTERVAL", 0) or 0))
+        lock_grace_seconds = max(60, int(settings.SCHEDULER_LOCK_TTL_MINUTES * 60))
+        return interval_seconds + lock_grace_seconds
+
     def record_tick(self) -> None:
         """Called after each successful scheduler run."""
         self._last_healthy_tick = time.time()
@@ -129,16 +141,16 @@ class SchedulerWatchdog:
 
         Returns True if healthy, False if stale.
         """
-        settings = get_settings()
-        max_gap_seconds = settings.SCHEDULER_LOCK_TTL_MINUTES * 60
+        max_gap_seconds = self._max_gap_seconds()
         elapsed = time.time() - self._last_healthy_tick
 
         if elapsed > max_gap_seconds:
             if not self._alerted:
+                settings = get_settings()
                 msg = (
                     f"Scheduler watchdog: no successful tick in "
                     f"{elapsed / 60:.1f} minutes "
-                    f"(threshold: {settings.SCHEDULER_LOCK_TTL_MINUTES} min). "
+                    f"(threshold: {max_gap_seconds / 60:.1f} min). "
                     f"Rebalancing may be stalled."
                 )
                 logger.critical(msg)

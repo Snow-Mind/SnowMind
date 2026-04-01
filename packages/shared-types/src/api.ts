@@ -172,3 +172,8 @@ export interface AccountDetailResponse {
 export interface DiversificationPreferenceResponse {
   diversificationPreference: DiversificationPreference;
 }
+
+export interface AllowedProtocolsUpdateResponse {
+  allowedProtocols: string[];
+  updatedRows: number;
+}

@@ -14,6 +14,7 @@ import type {
   AccountDetailResponse,
   DiversificationPreference,
   DiversificationPreferenceResponse,
+  AllowedProtocolsUpdateResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
 } from "@snowmind/shared-types";
@@ -287,6 +288,18 @@ export const api = {
       {
         method: "PUT",
         body: JSON.stringify({ diversificationPreference: preference }),
+      },
+    ),
+
+  updateAllowedProtocols: (
+    address: string,
+    allowedProtocols: string[],
+  ) =>
+    request<AllowedProtocolsUpdateResponse>(
+      `/api/v1/accounts/${encodeURIComponent(address)}/allowed-protocols`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ allowedProtocols }),
       },
     ),
 
