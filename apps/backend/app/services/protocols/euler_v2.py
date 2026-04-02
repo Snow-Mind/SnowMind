@@ -56,6 +56,34 @@ EULER_V2_ABI = [
         "stateMutability": "view",
     },
     {
+        "name": "totalBorrows",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "cash",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "interestRate",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "interestFee",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
         "name": "balanceOf",
         "type": "function",
         "inputs": [{"name": "account", "type": "address"}],
@@ -74,17 +102,8 @@ SECONDS_PER_YEAR = Decimal("31536000")  # 365 × 86400
 # precision per minute, enough to detect any meaningful APY.
 SHARE_PRICE_QUERY_AMOUNT = 10**18
 SHARE_PRICE_QUERY_DECIMAL = Decimal("1e18")
-
-# Minimal ERC-20 ABI for reading vault cash (USDC.balanceOf(vault))
-_ERC20_BALANCE_ABI = [
-    {
-        "name": "balanceOf",
-        "type": "function",
-        "inputs": [{"name": "account", "type": "address"}],
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-    }
-]
+BPS_SCALE = Decimal("10000")
+EULER_RATE_SCALE = Decimal("1e27")
 
 
 class EulerV2Adapter(BaseProtocolAdapter):
@@ -124,16 +143,14 @@ class EulerV2Adapter(BaseProtocolAdapter):
         yesterday_snapshot: Decimal | None = None,
         snapshot_at: str | None = None,
     ) -> ProtocolRate:
-        """Compute APY using convertToAssets snapshot delta with ACTUAL elapsed
-        time (not hardcoded 24h).
+        """Compute APY using protocol-native Euler metrics when available.
 
-        Primary: When yesterday_snapshot is provided (1e18-scale convertToAssets
-        value from ~24h ago), APY = (1 + growth)^(365/elapsed_days) - 1.
-        Using actual elapsed time prevents APY inflation when snapshot is
-        older than 24h.
+        Primary: derive supplier APY from Euler's native on-chain rate model:
+          supply_apy = borrow_apy * utilization * (1 - interest_fee)
+        where borrow_apy is derived from `interestRate()` (1e27-scaled per-second).
 
-        Fallback: When no snapshot exists, observes share-price change over ≥60s
-        and compounds to annualized APY.
+        Fallback: use convertToAssets snapshot delta with actual elapsed time;
+        if no snapshot exists, fall back to short-window share-price growth.
         """
         import datetime as _dt
         vault = self._get_vault()
@@ -154,34 +171,54 @@ class EulerV2Adapter(BaseProtocolAdapter):
         current_price = Decimal(str(current_assets)) / SHARE_PRICE_QUERY_DECIMAL
 
         total_assets_raw = await vault.functions.totalAssets().call()
-        tvl = Decimal(str(total_assets_raw)) / ONE_USDC
+        total_assets_decimal = Decimal(str(total_assets_raw))
+        tvl = total_assets_decimal / ONE_USDC
+        now = time.time()
+        today_value = Decimal(str(current_assets))  # raw 1e18-scale value
 
-        # Compute utilization: cash = USDC sitting idle in vault, borrowed = totalAssets - cash
         utilization_rate: Decimal | None = None
-        if total_assets_raw > 0:
-            try:
-                settings = get_settings()
-                w3 = self._get_w3()
-                usdc_contract = w3.eth.contract(
-                    address=w3.to_checksum_address(settings.USDC_ADDRESS),
-                    abi=_ERC20_BALANCE_ABI,
+        protocol_native_apy: Decimal | None = None
+
+        # Primary APY source: Euler native on-chain rate model.
+        try:
+            total_borrows_raw = await vault.functions.totalBorrows().call()
+            total_borrows_decimal = Decimal(str(total_borrows_raw))
+            if total_assets_decimal > 0:
+                utilization_rate = total_borrows_decimal / total_assets_decimal
+                utilization_rate = max(Decimal("0"), min(utilization_rate, Decimal("1")))
+
+            interest_rate_raw = await vault.functions.interestRate().call()
+            interest_fee_raw = await vault.functions.interestFee().call()
+            if interest_rate_raw > 0 and utilization_rate is not None:
+                borrow_rate_per_second = Decimal(str(interest_rate_raw)) / EULER_RATE_SCALE
+                borrow_apy = (borrow_rate_per_second * SECONDS_PER_YEAR).exp() - Decimal("1")
+
+                fee_cut = Decimal(str(interest_fee_raw)) / BPS_SCALE
+                fee_cut = max(Decimal("0"), min(fee_cut, Decimal("1")))
+                fee_factor = Decimal("1") - fee_cut
+
+                protocol_native_apy = max(
+                    Decimal("0"),
+                    borrow_apy * utilization_rate * fee_factor,
                 )
-                cash_raw = await usdc_contract.functions.balanceOf(
-                    w3.to_checksum_address(self.vault_address)
-                ).call()
+                self._cached_apy = protocol_native_apy
+        except Exception as exc:
+            logger.warning("Euler native APY read failed: %s", exc)
+
+        # Utilization fallback (older vault interface): utilization = 1 - cash / totalAssets.
+        if utilization_rate is None and total_assets_raw > 0:
+            try:
+                cash_raw = await vault.functions.cash().call()
                 cash = Decimal(str(cash_raw))
                 total = Decimal(str(total_assets_raw))
                 utilization_rate = (total - cash) / total
                 utilization_rate = max(Decimal("0"), min(utilization_rate, Decimal("1")))
             except Exception as exc:
-                logger.warning("Euler utilization calculation failed: %s", exc)
-
-        now = time.time()
-        today_value = Decimal(str(current_assets))  # raw 1e18-scale value
+                logger.warning("Euler utilization fallback calculation failed: %s", exc)
 
         # ── Primary: 24h snapshot delta ──────────────────────────────────
         use_snapshot = False
-        if yesterday_snapshot is not None and yesterday_snapshot > 0:
+        if protocol_native_apy is None and yesterday_snapshot is not None and yesterday_snapshot > 0:
             # Guard against scale mismatch: old snapshots may use 1e6 scale
             if yesterday_snapshot < Decimal("1000000000000"):
                 logger.info(
@@ -301,22 +338,19 @@ class EulerV2Adapter(BaseProtocolAdapter):
         status = ProtocolStatus.HEALTHY
         is_deposit_safe = True
         try:
-            settings = get_settings()
-            w3 = self._get_w3()
-            usdc_contract = w3.eth.contract(
-                address=w3.to_checksum_address(settings.USDC_ADDRESS),
-                abi=_ERC20_BALANCE_ABI,
-            )
-            cash_raw = await usdc_contract.functions.balanceOf(
-                w3.to_checksum_address(self.vault_address)
-            ).call()
-            cash = Decimal(str(cash_raw))
             total = Decimal(str(total_assets))
-            utilization = (total - cash) / total
-            utilization = max(Decimal("0"), min(utilization, Decimal("1")))
+            if total > 0:
+                try:
+                    total_borrows_raw = await vault.functions.totalBorrows().call()
+                    utilization = Decimal(str(total_borrows_raw)) / total
+                except Exception:
+                    cash_raw = await vault.functions.cash().call()
+                    cash = Decimal(str(cash_raw))
+                    utilization = (total - cash) / total
+                utilization = max(Decimal("0"), min(utilization, Decimal("1")))
 
-            utilization_threshold = Decimal(str(settings.UTILIZATION_THRESHOLD))
-            if utilization > utilization_threshold:
+            utilization_threshold = Decimal(str(get_settings().UTILIZATION_THRESHOLD))
+            if utilization is not None and utilization > utilization_threshold:
                 status = ProtocolStatus.HIGH_UTILIZATION
                 is_deposit_safe = False
                 logger.info(

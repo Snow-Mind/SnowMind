@@ -24,7 +24,6 @@ import {
   encodeFunctionData,
   formatUnits,
 } from "viem";
-import { useWallets } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
@@ -301,10 +300,8 @@ export default function OnboardingPage() {
   const { data: onboardingPortfolio, isLoading: onboardingPortfolioLoading } = usePortfolio(smartAccountAddress ?? undefined);
   const hasPortfolioFunds = portfolioHasFunds(onboardingPortfolio);
   const hasRecoverableFunds = hasPortfolioFunds;
-  const { wallets } = useWallets();
   const queryClient = useQueryClient();
-  const wallet =
-    wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
+  const wallet = activeWallet;
 
   // Multi-step form state
   const isAccountReady = smartAccount.setupStep === "ready" && !!smartAccountAddress;
@@ -354,6 +351,26 @@ export default function OnboardingPage() {
       setFormStep("activate");
     }
   }, [smartAccountAddress, accountDetail, formStep, onboardingPortfolioLoading, hasRecoverableFunds]);
+
+  // Returning activated users should not be forced through onboarding.
+  useEffect(() => {
+    if (!smartAccountAddress || onboardingPortfolioLoading || !accountDetail) return;
+    if (accountDetailError instanceof APIError && accountDetailError.status === 401) return;
+
+    const isFullyActive = Boolean(accountDetail.isActive && accountDetail.sessionKey?.isActive && hasPortfolioFunds);
+    if (isFullyActive) {
+      setAgentActivated(true);
+      router.replace("/dashboard");
+    }
+  }, [
+    smartAccountAddress,
+    onboardingPortfolioLoading,
+    accountDetail,
+    accountDetailError,
+    hasPortfolioFunds,
+    router,
+    setAgentActivated,
+  ]);
 
   // Protocol selection for Strategy step — all selected by default
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(

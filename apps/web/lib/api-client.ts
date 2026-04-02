@@ -82,6 +82,70 @@ export function markAuthRateLimited(cooldownMs = AUTH_PROVIDER_RATE_LIMIT_COOLDO
   setAuthCooldown(cooldownMs);
 }
 
+function parseApiErrorMessage(rawBody: string): string {
+  const text = rawBody.trim();
+  if (!text) {
+    return "Unknown error";
+  }
+
+  const extractFromObject = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed || null;
+    }
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const obj = value as Record<string, unknown>;
+    const detail = obj.detail;
+    const message = obj.message;
+    const error = obj.error;
+
+    for (const candidate of [detail, message, error]) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+      if (candidate && typeof candidate === "object") {
+        const nested = candidate as Record<string, unknown>;
+        if (typeof nested.message === "string" && nested.message.trim()) {
+          return nested.message.trim();
+        }
+        if (typeof nested.detail === "string" && nested.detail.trim()) {
+          return nested.detail.trim();
+        }
+      }
+    }
+    return null;
+  };
+
+  // Handle normal JSON, and double-encoded JSON strings.
+  let parsed: unknown = text;
+  for (let i = 0; i < 2; i++) {
+    if (typeof parsed !== "string") {
+      break;
+    }
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      break;
+    }
+  }
+
+  const structured = extractFromObject(parsed);
+  if (structured) {
+    return structured;
+  }
+
+  // Handle non-JSON Python-dict style bodies: {'detail': '...'}
+  const detailMatch = text.match(/["']detail["']\s*:\s*["'](.+?)["']/i);
+  if (detailMatch?.[1]) {
+    return detailMatch[1];
+  }
+
+  return text;
+}
+
 async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
   const requiresAuth = !isPublicPath(path);
 
@@ -164,13 +228,7 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
         continue;
       }
       const text = await res.text().catch(() => "Unknown error");
-      let message = text;
-      try {
-        const parsed = JSON.parse(text) as { detail?: string; message?: string };
-        message = parsed.detail || parsed.message || text;
-      } catch {
-        // Leave message as plain response text when body is not JSON.
-      }
+      const message = parseApiErrorMessage(text);
       throw new APIError(res.status, `HTTP_${res.status}`, message);
     }
 

@@ -4,9 +4,9 @@ import logging
 import os
 import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
@@ -277,6 +277,16 @@ def _validate_environment() -> None:
 @app.get("/")
 async def root():
     return {"status": "ok", "service": settings.APP_NAME}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(status_code=204)
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots() -> PlainTextResponse:
+    return PlainTextResponse("User-agent: *\nAllow: /\n")
 
 
 # ── Routers ──────────────────────────────────────────────────

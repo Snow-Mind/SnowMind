@@ -904,9 +904,9 @@ async def update_allowed_protocols(
         raise HTTPException(
             status_code=409,
             detail=(
-                "Cannot exclude protocols with existing funds: "
+                "Some selected markets still hold funds: "
                 f"{', '.join(excluded_funded_chain)}. "
-                "Keep them enabled or withdraw from those protocols first."
+                "Keep them enabled or withdraw first."
             ),
         )
 

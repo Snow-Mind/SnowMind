@@ -7,9 +7,17 @@ export function useAuth() {
   const { wallets } = useWallets();
   const { logout } = useLogout();
 
+  const primaryUserWalletAddress = (
+    (user as { wallet?: { address?: string | null } } | null)?.wallet?.address ?? ""
+  ).toLowerCase();
+
+  const walletFromUserProfile = primaryUserWalletAddress
+    ? wallets.find((w) => w.address.toLowerCase() === primaryUserWalletAddress)
+    : undefined;
+
   const embeddedWallet = wallets.find((w) => w.walletClientType === "privy");
   const externalWallet = wallets.find((w) => w.walletClientType !== "privy");
-  const activeWallet = externalWallet ?? embeddedWallet ?? wallets[0] ?? null;
+  const activeWallet = walletFromUserProfile ?? externalWallet ?? embeddedWallet ?? wallets[0] ?? null;
 
   const eoaAddress = activeWallet?.address ?? null;
 

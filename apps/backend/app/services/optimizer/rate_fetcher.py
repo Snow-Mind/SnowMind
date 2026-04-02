@@ -421,22 +421,47 @@ class RateFetcher:
         try:
             db = get_supabase()
             import datetime
-            yesterday = (
-                datetime.datetime.now(datetime.timezone.utc)
-                - datetime.timedelta(days=1)
-            ).isoformat()
             result = (
                 db.table("spark_convert_snapshots")
                 .select("convert_to_assets_value, snapshot_at")
                 .eq("protocol_id", protocol_id)
-                .lte("snapshot_at", yesterday)
                 .order("snapshot_at", desc=True)
-                .limit(1)
+                .limit(6)
                 .execute()
             )
-            if result.data:
-                value = Decimal(str(result.data[0]["convert_to_assets_value"]))
-                snapshot_at = result.data[0]["snapshot_at"]
+
+            rows = result.data or []
+            if rows:
+                now_dt = datetime.datetime.now(datetime.timezone.utc)
+                target_age_seconds = Decimal("86400")
+                min_age_seconds = Decimal("21600")  # ignore very fresh snapshots (< 6h)
+
+                best_row: dict[str, Any] | None = None
+                best_diff: Decimal | None = None
+
+                for row in rows:
+                    snapshot_at_raw = row.get("snapshot_at")
+                    if not snapshot_at_raw:
+                        continue
+                    try:
+                        snap_dt = datetime.datetime.fromisoformat(
+                            str(snapshot_at_raw).replace("Z", "+00:00")
+                        )
+                    except (TypeError, ValueError):
+                        continue
+
+                    age_seconds = Decimal(str((now_dt - snap_dt).total_seconds()))
+                    if age_seconds < min_age_seconds:
+                        continue
+
+                    diff = abs(age_seconds - target_age_seconds)
+                    if best_row is None or best_diff is None or diff < best_diff:
+                        best_row = row
+                        best_diff = diff
+
+                chosen = best_row or rows[0]
+                value = Decimal(str(chosen["convert_to_assets_value"]))
+                snapshot_at = str(chosen["snapshot_at"])
                 return (value, snapshot_at)
             return None
         except Exception as exc:

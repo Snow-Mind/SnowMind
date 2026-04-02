@@ -107,7 +107,6 @@ async def test_stability_gate_applies_for_benqi():
 async def test_euler_health_uses_configured_utilization_threshold():
     settings = SimpleNamespace(
         EULER_VAULT="0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e",
-        USDC_ADDRESS="0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
         UTILIZATION_THRESHOLD=0.90,
     )
 
@@ -117,16 +116,9 @@ async def test_euler_health_uses_configured_utilization_threshold():
         vault = MagicMock()
         vault.functions.totalAssets.return_value = _make_async_call(1_000_000)
         vault.functions.convertToAssets.return_value = _make_async_call(1_000_000)
+        # borrows=905_000 on totalAssets=1_000_000 => utilization=90.5% (>90%)
+        vault.functions.totalBorrows.return_value = _make_async_call(905_000)
         adapter._get_vault = MagicMock(return_value=vault)
-
-        usdc_contract = MagicMock()
-        # cash=95_000 on totalAssets=1_000_000 => utilization=90.5% (>90%)
-        usdc_contract.functions.balanceOf.return_value = _make_async_call(95_000)
-
-        w3 = MagicMock()
-        w3.to_checksum_address.side_effect = lambda addr: addr
-        w3.eth.contract.return_value = usdc_contract
-        adapter._get_w3 = MagicMock(return_value=w3)
 
         health = await adapter.get_health()
 

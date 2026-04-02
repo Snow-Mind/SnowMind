@@ -188,7 +188,7 @@ class RPCManager:
         """
         next_provider = self._get_next_available_provider()
         if next_provider is None:
-            logger.error("All RPC providers exhausted — no rotation possible")
+            logger.warning("All RPC providers exhausted — no rotation possible")
             return False
 
         old_tier = self._get_active_provider().tier.value
