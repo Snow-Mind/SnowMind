@@ -229,7 +229,7 @@ export default function FundTransparency({
                 </span>
                 {totalYield > 0 && (
                   <span className="ml-2 text-[10px] font-medium text-[#059669]">
-                    +{formatUsd(totalYield)} earned
+                    +{formatUsd(totalYield, { maxFractionDigits: 6 })} earned
                   </span>
                 )}
               </div>

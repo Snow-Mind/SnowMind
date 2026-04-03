@@ -479,7 +479,9 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <p className="text-[10px] text-[#8A837C]">Net earned</p>
-                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">{formatUsd(stats.totalYield)}</p>
+                  <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
+                    {formatUsd(stats.totalYield, { maxFractionDigits: 6 })}
+                  </p>
                 </div>
                 <div>
                   <p className="text-[10px] text-[#8A837C]">APR</p>

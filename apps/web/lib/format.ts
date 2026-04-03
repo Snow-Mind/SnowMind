@@ -2,11 +2,20 @@
  * Formatting utilities for currency and percentages.
  */
 
-export function formatUsd(value: number): string {
+interface FormatUsdOptions {
+  minFractionDigits?: number;
+  maxFractionDigits?: number;
+}
+
+export function formatUsd(value: number, options: FormatUsdOptions = {}): string {
+  const maxFractionDigits = options.maxFractionDigits ?? 2;
+  const minFractionDigits = options.minFractionDigits ?? Math.min(2, maxFractionDigits);
+
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 2,
+    minimumFractionDigits: minFractionDigits,
+    maximumFractionDigits: maxFractionDigits,
   }).format(value);
 }
 

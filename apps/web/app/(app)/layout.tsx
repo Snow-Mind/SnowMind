@@ -512,19 +512,41 @@ function DepositModal({ onClose }: { onClose: () => void }) {
       const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
 
-      await api.registerAccount({
-        ownerAddress: account,
-        smartAccountAddress,
-        fundingTxHash: transferHash,
-        fundingAmountUsdc: parsedAmount.toFixed(6),
-        fundingSource: "dashboard_wallet_transfer",
-      }).catch(() => undefined);
-
-      if (smartAccountAddress) {
-        await api.triggerRebalance(smartAccountAddress).catch(() => undefined);
+      let registerOk = false;
+      try {
+        await api.registerAccount({
+          ownerAddress: account,
+          smartAccountAddress,
+          fundingTxHash: transferHash,
+          fundingAmountUsdc: parsedAmount.toFixed(6),
+          fundingSource: "dashboard_wallet_transfer",
+        });
+        registerOk = true;
+      } catch (registerErr) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[DepositModal] registerAccount failed:", registerErr);
+        }
       }
 
-      toast.success("Deposited! The optimizer is deploying your funds.");
+      let triggerOk = false;
+      if (registerOk && smartAccountAddress) {
+        try {
+          await api.triggerRebalance(smartAccountAddress);
+          triggerOk = true;
+        } catch (triggerErr) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[DepositModal] triggerRebalance failed:", triggerErr);
+          }
+        }
+      }
+
+      if (registerOk && triggerOk) {
+        toast.success("Deposited! The optimizer is deploying your funds.");
+      } else if (registerOk) {
+        toast.success("Deposit confirmed on-chain. Deployment retry is queued automatically.");
+      } else {
+        toast.warning("Deposit confirmed on-chain, but backend sync is delayed. Funds are safe; refresh in a few seconds.");
+      }
       setStep("done");
 
       if (smartAccountAddress) {

@@ -153,6 +153,40 @@ class TestBalanceGuard:
             assert result == "0xtxhash456"
             mock_exec.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_known_idle_balance_bypasses_transient_idle_read_failures(self, rebalancer):
+        """Known idle balance from preflight should prevent false deposit guard skips."""
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+
+        with patch.object(rebalancer, "_get_current_allocations", new_callable=AsyncMock) as mock_current, \
+             patch.object(rebalancer, "_get_idle_usdc_balance", new_callable=AsyncMock) as mock_idle, \
+             patch.object(rebalancer, "_call_execution_service", new_callable=AsyncMock) as mock_exec, \
+             patch.object(rebalancer, "_update_allocations_db", new_callable=AsyncMock), \
+             patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as mock_sk:
+
+            mock_current.return_value = {}
+            mock_idle.return_value = Decimal("0")  # would fail guard if consulted
+            mock_exec.return_value = "0xtxhash789"
+            mock_db_fn.return_value = MagicMock()
+            mock_sk.return_value = {
+                "serialized_permission": "test",
+                "session_private_key": "0xabc",
+                "allowed_protocols": ["benqi"],
+            }
+
+            result = await rebalancer.execute_rebalance(
+                account_id=account_id,
+                smart_account_address=smart_account,
+                target_allocations={"benqi": Decimal("1.00")},
+                known_idle_usdc=Decimal("1.00"),
+            )
+
+            assert result == "0xtxhash789"
+            mock_exec.assert_called_once()
+            mock_idle.assert_not_called()
+
 
 class TestExecutionLock:
     """Tests for per-account execution lock in rebalance pipeline."""
@@ -195,6 +229,44 @@ class TestExecutionLock:
                     smart_account_address=smart_account,
                     target_allocations=target,
                 )
+        finally:
+            lock.release()
+            rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()
+
+    @pytest.mark.asyncio
+    async def test_check_and_rebalance_short_circuits_when_lock_is_in_flight(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+
+        rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()
+        lock = asyncio.Lock()
+        await lock.acquire()
+        rebalancer_module._REBALANCE_EXECUTION_LOCKS[account_id] = lock
+
+        try:
+            with patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+                 patch("app.services.optimizer.rebalancer.get_active_session_key_record") as mock_key, \
+                 patch.object(rebalancer.rate_fetcher, "fetch_all_rates", new_callable=AsyncMock) as mock_rates, \
+                 patch.object(rebalancer, "_log", new_callable=AsyncMock) as mock_log:
+
+                mock_db_fn.return_value = MagicMock()
+                mock_key.return_value = {
+                    "serialized_permission": "test",
+                    "session_private_key": "0xabc",
+                    "allowed_protocols": ["benqi"],
+                }
+                mock_log.return_value = {
+                    "status": "skipped",
+                    "skip_reason": "Another rebalance attempt in flight",
+                }
+
+                result = await rebalancer.check_and_rebalance(
+                    account_id=account_id,
+                    smart_account_address=smart_account,
+                )
+
+                assert result["status"] == "skipped"
+                mock_rates.assert_not_awaited()
         finally:
             lock.release()
             rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()

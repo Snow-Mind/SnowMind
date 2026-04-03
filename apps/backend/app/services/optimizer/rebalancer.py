@@ -250,6 +250,7 @@ class Rebalancer:
         account_id: str,
         smart_account_address: str,
         target_allocations: dict[str, Decimal],
+        known_idle_usdc: Decimal | None = None,
     ) -> str | None:
         """Execute one rebalance per account at a time.
 
@@ -265,6 +266,7 @@ class Rebalancer:
                 account_id=account_id,
                 smart_account_address=smart_account_address,
                 target_allocations=target_allocations,
+                known_idle_usdc=known_idle_usdc,
             )
 
     # â”€â”€ Full pipeline (cron entry-point) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -308,6 +310,17 @@ class Rebalancer:
             logger.debug("No active session key for %s — skipping", account_id)
             return await self._log(db, account_id, "skipped",
                                    reason="No active session key")
+
+        # Fast-path: if another rebalance is currently executing for this account,
+        # skip early to avoid rerunning the full pipeline and amplifying RPC load.
+        execution_lock = _REBALANCE_EXECUTION_LOCKS.setdefault(account_id, asyncio.Lock())
+        if execution_lock.locked():
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason="Another rebalance attempt in flight",
+            )
 
         # 0b. Cooldown after PERMISSION_RECOVERY_NEEDED — stop hammering the
         # ZeroDev bundler every 6 minutes with the same broken session key.
@@ -1154,6 +1167,7 @@ class Rebalancer:
                 account_id=account_id,
                 smart_account_address=smart_account_address,
                 target_allocations=result_allocations,
+                known_idle_usdc=idle_usdc,
             )
         except RuntimeError as exc:
             if str(exc) == "REBALANCE_IN_FLIGHT":
@@ -1233,6 +1247,7 @@ class Rebalancer:
                             account_id=account_id,
                             smart_account_address=smart_account_address,
                             target_allocations=fallback_target,
+                            known_idle_usdc=idle_usdc,
                         )
                         if tx_hash:
                             return await self._log(
@@ -1518,6 +1533,7 @@ class Rebalancer:
         account_id: str,
         smart_account_address: str,
         target_allocations: dict[str, Decimal],
+        known_idle_usdc: Decimal | None = None,
     ) -> str | None:
         """
         Execute a full rebalance via the Node.js execution service:
@@ -1565,7 +1581,11 @@ class Rebalancer:
         # when on-chain balance reads differ from the scheduler's DB view.
         total_deposit_amt = sum(amt for _, amt in deposits)
         total_withdraw_amt = sum(amt for _, amt in withdrawals)
-        idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
+        idle_usdc = (
+            max(known_idle_usdc, Decimal("0"))
+            if known_idle_usdc is not None
+            else await self._get_idle_usdc_balance(smart_account_address)
+        )
 
         available_for_deposit = total_withdraw_amt + idle_usdc
         if total_deposit_amt > available_for_deposit + Decimal("0.05"):

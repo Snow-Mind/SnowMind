@@ -36,8 +36,16 @@ _ERC20_ABI = [
     }
 ]
 
+_PROTOCOL_BALANCE_DUST_USDC = Decimal("0.01")
+_BALANCE_RECONCILE_EPSILON_USDC = Decimal("0.000001")
+
 # Short-lived in-memory cache to dampen duplicate dashboard polling.
 _portfolio_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _should_refresh_amount(existing_amount: Decimal, onchain_amount: Decimal) -> bool:
+    """Return True when on-chain amount changed beyond micro-USDC noise."""
+    return abs(onchain_amount - existing_amount) > _BALANCE_RECONCILE_EPSILON_USDC
 
 
 def _portfolio_cache_get(cache_key: str) -> PortfolioResponse | None:
@@ -96,7 +104,7 @@ async def _get_idle_usdc(address: str) -> Decimal:
     return Decimal("0")
 
 
-async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal:
+async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | None:
     """Read on-chain underlying balance for a protocol."""
     for attempt in range(2):
         try:
@@ -111,8 +119,8 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal:
                 get_rpc_manager().report_rate_limit()
                 continue  # retry with rotated provider
             logger.warning("On-chain balance read failed for %s/%s: %s", protocol_id, address, exc)
-            return Decimal("0")
-    return Decimal("0")
+            return None
+    return None
 
 
 async def _get_live_apys() -> dict[str, Decimal]:
@@ -234,9 +242,13 @@ async def get_portfolio(
         onchain_balance = onchain_balances[pid]
         existing = next((a for a in allocations if a.protocol_id == pid), None)
 
-        if onchain_balance > Decimal("0.01"):
+        # Keep last known amount when this protocol read failed.
+        if onchain_balance is None:
+            continue
+
+        if onchain_balance > _PROTOCOL_BALANCE_DUST_USDC:
             if existing:
-                if abs(onchain_balance - existing.amount_usdc) > Decimal("0.5"):
+                if _should_refresh_amount(existing.amount_usdc, onchain_balance):
                     total_deposited -= existing.amount_usdc
                     existing.amount_usdc = onchain_balance
                     total_deposited += onchain_balance
@@ -256,7 +268,7 @@ async def get_portfolio(
                 total_deposited += onchain_balance
                 original_db_deposits += onchain_balance  # FIX: Don't count as yield
         else:
-            if existing and existing.amount_usdc > Decimal("0.01"):
+            if existing and existing.amount_usdc > _PROTOCOL_BALANCE_DUST_USDC:
                 total_deposited -= existing.amount_usdc
                 original_db_deposits -= existing.amount_usdc
                 existing.amount_usdc = Decimal("0")
