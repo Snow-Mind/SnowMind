@@ -4,8 +4,13 @@ import { avalanche } from 'viem/chains'
 export const CHAIN = avalanche
 export const CHAIN_ID = 43114
 
+const DEFAULT_BACKEND_URL =
+  process.env.NODE_ENV === "production"
+    ? "https://snowmindbackend-production-10ed.up.railway.app"
+    : "http://localhost:8000"
+
 export const BACKEND_URL =
-  (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/+$/, "");
+  (process.env.NEXT_PUBLIC_BACKEND_URL ?? DEFAULT_BACKEND_URL).replace(/\/+$/, "");
 
 export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? "";
 
