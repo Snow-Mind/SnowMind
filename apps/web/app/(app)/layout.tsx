@@ -38,6 +38,7 @@ import {
 import { useWallets } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { createSmartAccount, emergencyWithdrawAll } from "@/lib/zerodev";
+import { signWithdrawalAuthorization } from "@/lib/withdrawal-auth";
 
 function TopBar({
   smartAccountAddress,
@@ -969,11 +970,26 @@ function AgentDetailsModal({
 
     const requestedAmount = Math.max(totalUsdc, 0).toFixed(6);
 
+    if (!wallet) {
+      toast.error("Please connect MetaMask to authorize withdrawal.");
+      setWithdrawStep("idle");
+      return;
+    }
+
     try {
+      const signaturePayload = await signWithdrawalAuthorization(wallet, {
+        smartAccountAddress,
+        withdrawAmount: requestedAmount,
+        isFullWithdrawal: true,
+      });
+
       const result = await api.executeWithdrawal({
         smartAccountAddress,
         withdrawAmount: requestedAmount,
         isFullWithdrawal: true,
+        ownerSignature: signaturePayload.ownerSignature,
+        signatureMessage: signaturePayload.signatureMessage,
+        signatureTimestamp: signaturePayload.signatureTimestamp,
       });
 
       if (result.status === "executed") {

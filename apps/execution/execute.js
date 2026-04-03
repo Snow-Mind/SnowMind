@@ -37,11 +37,12 @@ const ZERODEV_ID = process.env.ZERODEV_PROJECT_ID
 const ZERODEV_RPC = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 const BUNDLER_URL = ZERODEV_RPC
 const PAYMASTER_URL = ZERODEV_RPC
+const REQUEST_ORIGIN = process.env.ZERODEV_REQUEST_ORIGIN || "https://app.snowmind.xyz"
 
 // Server-side Node.js doesn't send an Origin header automatically.
 // ZeroDev's domain allowlist needs it to verify the request source.
 const ZERODEV_FETCH_OPTIONS = {
-  headers: { Origin: "https://www.snowmind.xyz" },
+  headers: { Origin: REQUEST_ORIGIN },
 }
 
 const EXPLORER_BASE = "https://snowtrace.io"
@@ -604,12 +605,22 @@ async function getKernelClient(serializedPermission, sessionPrivateKey, options 
     if (enableDiagErr?.message?.includes("EnableNotApproved (pre-check)")) {
       throw enableDiagErr
     }
-    console.log(JSON.stringify({
-      level: "warn",
-      action: "enable_data_diagnostic_failed",
-      error: enableDiagErr?.message?.slice(0, 300),
-      timestamp: new Date().toISOString(),
-    }))
+    const enableDiagMessage = String(enableDiagErr?.message || "")
+    if (enableDiagMessage.toLowerCase().includes("sudo validator not set")) {
+      console.log(JSON.stringify({
+        level: "info",
+        action: "enable_data_diagnostic_skipped",
+        reason: "sudo validator not set in current plugin mode",
+        timestamp: new Date().toISOString(),
+      }))
+    } else {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "enable_data_diagnostic_failed",
+        error: enableDiagErr?.message?.slice(0, 300),
+        timestamp: new Date().toISOString(),
+      }))
+    }
   }
 
   const clientConfig = {
@@ -1273,10 +1284,11 @@ export async function executeRebalance({
           timestamp: new Date().toISOString(),
         }))
       } catch (simErr) {
-        console.error(JSON.stringify({
-          level: "error", action: "call_simulation_REVERTED",
+        console.log(JSON.stringify({
+          level: "warn", action: "call_simulation_reverted_nonfatal",
           smartAccountAddress, callIndex: i, target: call.to,
           selector: call.data?.slice(0, 10) || "none",
+          note: "Individual call simulation can fail for state-dependent calls; rely on batch_simulation_* for final verdict",
           error: simErr?.message?.slice(0, 2000),
           shortMessage: simErr?.shortMessage?.slice(0, 1000),
           details: simErr?.details?.slice(0, 1000),

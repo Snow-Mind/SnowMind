@@ -393,6 +393,9 @@ export const api = {
     smartAccountAddress: string;
     withdrawAmount: string;
     isFullWithdrawal: boolean;
+    ownerSignature: string;
+    signatureMessage: string;
+    signatureTimestamp: number;
   }) =>
     request<{
       status: string;

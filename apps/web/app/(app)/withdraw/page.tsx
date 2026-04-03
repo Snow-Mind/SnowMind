@@ -23,8 +23,10 @@ import {
   Info,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useWallets } from "@privy-io/react-auth";
 import { EXPLORER, FEE_CONFIG } from '@/lib/constants'
 import { api, APIError } from '@/lib/api-client'
+import { signWithdrawalAuthorization } from '@/lib/withdrawal-auth'
 import { usePortfolioStore } from '@/stores/portfolio.store'
 
 type WithdrawalStep = 'input' | 'preview' | 'executing' | 'success' | 'error'
@@ -81,6 +83,8 @@ export default function WithdrawPage() {
   const setTotals = usePortfolioStore((s) => s.setTotals)
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated)
   const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount)
+  const { wallets } = useWallets();
+  const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const balance = parseFloat(totalDepositedUsd || '0')
 
   const handlePreview = useCallback(async () => {
@@ -126,10 +130,23 @@ export default function WithdrawPage() {
       const effectiveFullWithdrawal =
         isFullWithdrawal || isEffectivelyFullWithdrawal(fallbackAmount, previewBalance)
 
+      if (!wallet) {
+        throw new Error('Please connect MetaMask to authorize withdrawal')
+      }
+
+      const signaturePayload = await signWithdrawalAuthorization(wallet, {
+        smartAccountAddress,
+        withdrawAmount: fallbackAmount,
+        isFullWithdrawal: effectiveFullWithdrawal,
+      })
+
       const data = await api.executeWithdrawal({
         smartAccountAddress,
         withdrawAmount: fallbackAmount,
         isFullWithdrawal: effectiveFullWithdrawal,
+        ownerSignature: signaturePayload.ownerSignature,
+        signatureMessage: signaturePayload.signatureMessage,
+        signatureTimestamp: signaturePayload.signatureTimestamp,
       })
 
       if (data.accountDeactivated) {
@@ -154,7 +171,7 @@ export default function WithdrawPage() {
       }
       setStep('error')
     }
-  }, [amount, balance, clearSmartAccount, isFullWithdrawal, preview, queryClient, setAgentActivated, setAllocations, setTotals, smartAccountAddress])
+  }, [amount, balance, clearSmartAccount, isFullWithdrawal, preview, queryClient, setAgentActivated, setAllocations, setTotals, smartAccountAddress, wallet])
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">

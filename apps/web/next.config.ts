@@ -7,6 +7,15 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         has: [
+          { type: "host", value: "app.snowmind.xyz" },
+          { type: "header", key: "x-forwarded-proto", value: "http" },
+        ],
+        destination: "https://app.snowmind.xyz/:path*",
+        permanent: true,
+      },
+      {
+        source: "/:path*",
+        has: [
           { type: "host", value: "snowmind.xyz" },
           { type: "header", key: "x-forwarded-proto", value: "http" },
         ],

@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
+from eth_account import Account
+from eth_account.messages import encode_defunct
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 from supabase import Client
@@ -36,6 +38,7 @@ router = APIRouter()
 _MIN_WITHDRAWAL_USDC = Decimal("0.01")
 # Maximum withdrawal: $10M (sanity guard)
 _MAX_WITHDRAWAL_USDC = Decimal("10000000")
+_WITHDRAW_SIGNATURE_TTL_SECONDS = 300
 
 
 # ── Request / Response Models ────────────────────────────────────────────────
@@ -83,6 +86,9 @@ class WithdrawalExecuteRequest(BaseModel):
     smart_account_address: str = Field(..., alias="smartAccountAddress")
     withdraw_amount: str = Field(..., alias="withdrawAmount")
     is_full_withdrawal: bool = Field(False, alias="isFullWithdrawal")
+    owner_signature: str | None = Field(None, alias="ownerSignature")
+    signature_message: str | None = Field(None, alias="signatureMessage")
+    signature_timestamp: int | None = Field(None, alias="signatureTimestamp")
     model_config = {"populate_by_name": True}
 
     @field_validator("withdraw_amount")
@@ -201,6 +207,76 @@ def _resolve_withdrawal_intent(
     return requested_amount_usdc, False
 
 
+def _build_withdrawal_authorization_message(
+    *,
+    smart_account_address: str,
+    owner_address: str,
+    withdraw_amount_raw: int,
+    is_full_withdrawal: bool,
+    signature_timestamp: int,
+) -> str:
+    return "\n".join([
+        "SnowMind Withdrawal Authorization",
+        f"Smart Account: {smart_account_address.lower()}",
+        f"Owner: {owner_address.lower()}",
+        f"Withdraw Amount (microUSDC): {withdraw_amount_raw}",
+        f"Full Withdrawal: {'true' if is_full_withdrawal else 'false'}",
+        "Chain ID: 43114",
+        f"Timestamp: {signature_timestamp}",
+    ])
+
+
+def _verify_withdrawal_authorization(req: WithdrawalExecuteRequest, account: dict) -> None:
+    """Require a fresh owner wallet signature before executing a withdrawal."""
+    owner_address_raw = str(account.get("owner_address") or "").strip()
+    if not owner_address_raw:
+        raise HTTPException(status_code=400, detail="Account owner address missing")
+
+    owner_signature = (req.owner_signature or "").strip()
+    signature_message = (req.signature_message or "").strip()
+    signature_timestamp = req.signature_timestamp
+
+    if not owner_signature or not signature_message or signature_timestamp is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Withdrawal authorization signature is required",
+        )
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if abs(now_ts - int(signature_timestamp)) > _WITHDRAW_SIGNATURE_TTL_SECONDS:
+        raise HTTPException(
+            status_code=401,
+            detail="Withdrawal authorization expired. Please sign again.",
+        )
+
+    withdraw_amount_raw = int((Decimal(req.withdraw_amount) * Decimal("1e6")))
+    expected_message = _build_withdrawal_authorization_message(
+        smart_account_address=req.smart_account_address,
+        owner_address=owner_address_raw,
+        withdraw_amount_raw=withdraw_amount_raw,
+        is_full_withdrawal=req.is_full_withdrawal,
+        signature_timestamp=int(signature_timestamp),
+    )
+
+    if signature_message != expected_message:
+        raise HTTPException(status_code=400, detail="Withdrawal authorization payload mismatch")
+
+    try:
+        recovered = Account.recover_message(
+            encode_defunct(text=expected_message),
+            signature=owner_signature,
+        )
+    except Exception as exc:
+        logger.warning("Invalid withdrawal signature for %s: %s", req.smart_account_address, exc)
+        raise HTTPException(status_code=400, detail="Invalid withdrawal signature")
+
+    if recovered.lower() != owner_address_raw.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Withdrawal signature does not match account owner",
+        )
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/preview", response_model=WithdrawalPreviewResponse)
@@ -280,6 +356,7 @@ async def execute_withdrawal(
     address = validate_eth_address(req.smart_account_address)
     account = await _get_account(db, address)
     verify_account_ownership(_auth, account, db=db)
+    _verify_withdrawal_authorization(req, account)
 
     # ── Treasury address guard ──────────────────────────────────────────
     if not settings.TREASURY_ADDRESS or settings.TREASURY_ADDRESS == "0x" + "0" * 40:

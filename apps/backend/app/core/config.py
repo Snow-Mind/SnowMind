@@ -12,7 +12,7 @@ from functools import lru_cache
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEFAULT_ORIGINS = "https://www.snowmind.xyz,https://snowmind.xyz"
+_DEFAULT_ORIGINS = "https://app.snowmind.xyz,https://www.snowmind.xyz,https://snowmind.xyz"
 _PROD_ORIGIN_REGEX = (
     r"^https://([a-z0-9-]+\.)?snowmind\.xyz$"
     r"|^https://[a-z0-9-]+-snowmind[a-z0-9-]*\.vercel\.app$"
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
             origins = [o.strip() for o in raw.split(",") if o.strip()]
 
         # Always include production origins
-        for prod in ["https://www.snowmind.xyz", "https://snowmind.xyz"]:
+        for prod in ["https://app.snowmind.xyz", "https://www.snowmind.xyz", "https://snowmind.xyz"]:
             if prod not in origins:
                 origins.append(prod)
         return origins

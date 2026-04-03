@@ -34,7 +34,7 @@ export default function RootLayout({
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="https://snowmind.xyz/dashboard"
+              href="https://app.snowmind.xyz/dashboard"
               className="inline-flex items-center gap-1.5 rounded-lg bg-snow-red px-4 py-1.5 text-sm font-semibold text-white hover:bg-snow-red-hover transition-colors"
             >
               Launch App

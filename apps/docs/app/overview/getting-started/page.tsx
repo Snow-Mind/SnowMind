@@ -22,7 +22,7 @@ export default function GettingStartedPage() {
 
       <h2>Step 1: Connect Your Wallet</h2>
       <p>
-        Visit <strong>snowmind.xyz</strong> and click <strong>Launch App</strong>. SnowMind supports
+        Visit <strong>app.snowmind.xyz</strong> and click <strong>Launch App</strong>. SnowMind supports
         wallet connect, email, and social login. Choose whichever method you prefer.
       </p>
 

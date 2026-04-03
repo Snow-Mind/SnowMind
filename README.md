@@ -8,7 +8,7 @@
 
 ## Live App
 
-**App**: https://www.snowmind.xyz
+**App**: https://app.snowmind.xyz (legacy https://www.snowmind.xyz still supported)
 **Network**: Avalanche C-Chain (Chain ID: 43114)
 
 ## Mainnet Contract Addresses
