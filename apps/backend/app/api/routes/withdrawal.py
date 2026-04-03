@@ -458,7 +458,7 @@ async def execute_withdrawal(
             "to_protocol": "user_eoa",
             "amount_moved": str(withdraw_amount),
             "tx_hash": tx_hash,
-            "apy_improvement": None,
+            "apr_improvement": None,
         }).execute()
 
         # If full withdrawal, deactivate account and clear live allocations.

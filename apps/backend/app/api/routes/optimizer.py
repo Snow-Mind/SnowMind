@@ -477,6 +477,12 @@ async def options_apy_timeseries() -> Response:
     return Response(status_code=200)
 
 
+@router.options("/rates/timeseries/")
+async def options_apy_timeseries_trailing_slash() -> Response:
+    """Compatibility preflight handler for clients that append trailing slash."""
+    return Response(status_code=200)
+
+
 @router.get("/rates/timeseries", response_model=list[ApyTimeseriesPoint])
 @limiter.limit("60/minute")
 async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):

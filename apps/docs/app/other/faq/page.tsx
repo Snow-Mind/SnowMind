@@ -28,7 +28,7 @@ const faqs = [
   },
   {
     q: "How often does SnowMind rebalance?",
-    a: "The optimizer runs every 30 minutes but only rebalances when it's profitable to do so. A rebalance must clear multiple safety gates: APY improvement above 0.1%, movement above $1, gas cost justified by yield gain, and at least 6 hours since the last rebalance.",
+    a: "SnowMind checks rates continuously but executes rebalances only when profitable and safe. Cooldown depends on balance size: <=$100 (24h), <=$1,000 (12h), <=$10,000 (8h), >$10,000 (6h). A rebalance must also pass APY-improvement, movement, and profitability gates.",
   },
   {
     q: "What is the deposit limit?",

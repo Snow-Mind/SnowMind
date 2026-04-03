@@ -111,12 +111,12 @@ How directly does Snow Mind interact with the yield source?
 |----------|-------------|----------------|------------------|------------|-------------------|-------------|
 | Aave V3 | 3 | 3 | 2 | 2 | 1 | **10** |
 | Spark Savings | 3 | 3 | 2 | 2 | 0 | **9** |*
-| Benqi Lending | 3 | 2 | 2 | 2 | 1 | **9** |*
+| Benqi Lending | 3 | 3 | 2 | 2 | 1 | **10** |
 | Silo (savUSD/USDC) | 3 | 2 | 1 | 1 | 1 | **8** |
-| Silo (sUSDp/USDC) | 3 | 1 | 1 | 1 | 1 | **7** |
+| Silo (sUSDp/USDC) | 2 | 1 | 1 | 1 | 1 | **6** |
 | Euler (9Summits) | 2 | 2 | 1 | 1 | 0 | **6** |
 
-*Spark and Benqi both score 9 but for different reasons — the AI assistant should explain this when asked.
+*Aave and Benqi both score 10 but for different reasons — the AI assistant should explain this when asked.
 
 ### Score Justifications
 
@@ -134,9 +134,9 @@ How directly does Snow Mind interact with the yield source?
 - Yield 2: Rate set by Sky governance, very stable.
 - Architecture 0: USDC is wrapped through a savings layer into Sky Protocol's DSR.
 
-**Benqi Lending (9/10)**
+**Benqi Lending (10/10)**
 - Safety 3: Audited, no exploits, Avalanche-native with established governance.
-- Liquidity 2: ~$5.9M USDC TVL.
+- Liquidity 3: Deep Avalanche USDC liquidity and mature market depth.
 - Collateral 2: Blue chip collateral (AVAX, BTC, ETH).
 - Yield 2: Organic lending interest, stable rates.
 - Architecture 1: Direct deposit into lending pool.
@@ -148,8 +148,8 @@ How directly does Snow Mind interact with the yield source?
 - Yield 1: Organic but volatile — rate depends on utilization in an isolated two-asset market.
 - Architecture 1: Direct deposit into Silo lending pool.
 
-**Silo sUSDp/USDC (7/10)**
-- Safety 3: Audited, formally verified, no exploits, immutable market deployed by Silo Labs.
+**Silo sUSDp/USDC (6/10)**
+- Safety 2: Newer market profile with shorter production history than core venues.
 - Liquidity 1: ~$462K USDC available. Very new market with limited history.
 - Collateral 1: sUSDp is a yield-bearing stablecoin from Parallel Protocol. Smaller market cap, less proven.
 - Yield 1: Organic but newly launched — insufficient historical data to confirm stability.

@@ -217,6 +217,48 @@ export default function ProtocolAssessmentPage() {
           </tbody>
         </table>
       </div>
+
+      <h2>Current Baseline Scores</h2>
+      <p>
+        The current baseline scorecard used in product surfaces is shown below.
+        Higher is safer (10 = lowest relative risk).
+      </p>
+      <div className="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Protocol</th>
+              <th>Total (/10)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Aave V3</td>
+              <td><strong>10</strong></td>
+            </tr>
+            <tr>
+              <td>Benqi Lending</td>
+              <td><strong>10</strong></td>
+            </tr>
+            <tr>
+              <td>Spark Savings</td>
+              <td><strong>9</strong></td>
+            </tr>
+            <tr>
+              <td>Silo (savUSD/USDC)</td>
+              <td><strong>8</strong></td>
+            </tr>
+            <tr>
+              <td>Euler (9Summits)</td>
+              <td><strong>6</strong></td>
+            </tr>
+            <tr>
+              <td>Silo (sUSDp/USDC)</td>
+              <td><strong>6</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
   );
 }

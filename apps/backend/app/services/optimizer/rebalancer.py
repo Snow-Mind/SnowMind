@@ -63,6 +63,14 @@ ERC20_BALANCE_ABI = [
 # racing and producing contradictory outcomes.
 _REBALANCE_EXECUTION_LOCKS: dict[str, asyncio.Lock] = {}
 
+# Deposit-size cooldown tiers (larger balances can rebalance more frequently).
+# Final min gap is max(tier_gap, scheduler_interval).
+_REBALANCE_COOLDOWN_TIERS: tuple[tuple[Decimal, Decimal], ...] = (
+    (Decimal("100"), Decimal("24")),
+    (Decimal("1000"), Decimal("12")),
+    (Decimal("10000"), Decimal("8")),
+)
+
 
 def _permission_blob_contains_address(serialized_permission: str, address: str) -> bool:
     """Return True if *address* is present in a serialized permission blob.
@@ -112,6 +120,32 @@ class Rebalancer:
             self._protocol_addresses["silo_savusd_usdc"] = self.settings.SILO_SAVUSD_VAULT
         if self.settings.SILO_SUSDP_VAULT:
             self._protocol_addresses["silo_susdp_usdc"] = self.settings.SILO_SUSDP_VAULT
+
+    def _min_rebalance_gap(self, total_usd: Decimal) -> timedelta:
+        """Return minimum time between successful rebalances for this balance size.
+
+        Tiers are conservative by design:
+          - <= $100   : 24h
+          - <= $1,000 : 12h
+          - <= $10,000: 8h
+          - >  $10,000: MIN_REBALANCE_INTERVAL_HOURS (default 6h)
+
+        The scheduler interval still provides a lower bound so we never demand
+        a cadence faster than the worker can actually run.
+        """
+        normalized_total = max(total_usd, Decimal("0"))
+        tier_hours = Decimal(str(self.settings.MIN_REBALANCE_INTERVAL_HOURS))
+
+        for max_usd, hours in _REBALANCE_COOLDOWN_TIERS:
+            if normalized_total <= max_usd:
+                tier_hours = hours
+                break
+
+        tier_seconds = int(
+            (tier_hours * Decimal("3600")).quantize(Decimal("1"), rounding=ROUND_DOWN)
+        )
+        scheduler_seconds = max(int(self.settings.REBALANCE_CHECK_INTERVAL), 60)
+        return timedelta(seconds=max(tier_seconds, scheduler_seconds))
 
     def _should_record_initial_deposit(self, db, account_id: str) -> bool:
         """Return True when initial deposit tracking should be (re)seeded.
@@ -996,14 +1030,14 @@ class Rebalancer:
         )
         if last.data and global_flag == RebalanceFlag.NONE and not skip_performance_gates:
             last_ts = datetime.fromisoformat(last.data[0]["created_at"])
-            # Keep execution cadence consistent with the scheduler tick.
-            # If checks run every 6 minutes, the minimum execution gap should
-            # also default to 6 minutes unless a forced rebalance is needed.
-            min_gap = timedelta(seconds=max(int(self.settings.REBALANCE_CHECK_INTERVAL), 60))
+            min_gap = self._min_rebalance_gap(total_usd)
             if datetime.now(timezone.utc) - last_ts < min_gap:
                 return await self._log(
                     db, account_id, "skipped",
-                    reason=f"Last rebalance too recent ({last_ts.isoformat()})",
+                    reason=(
+                        "Last rebalance too recent "
+                        f"({last_ts.isoformat()}, min_gap={str(min_gap)})"
+                    ),
                     proposed=result_allocations,
                 )
 

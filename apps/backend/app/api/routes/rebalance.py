@@ -258,7 +258,7 @@ async def get_rebalance_status(
                 timeout=3.0,
             )
         except TimeoutError:
-            logger.warning("Idle balance diagnostic timed out for %s", addr)
+            logger.info("Idle balance diagnostic timed out for %s", addr)
         except Exception as exc:
             logger.debug("Idle balance diagnostic failed for %s: %s", addr, exc)
 
@@ -444,6 +444,23 @@ async def withdraw_all(
             smart_account_address=addr,
         )
 
+        try:
+            fee_usd = Decimal(str(fee_breakdown.get("fee_usd", "0")))
+            net_withdrawal_usd = Decimal(str(fee_breakdown.get("net_withdrawal_usd", "0")))
+            total_withdrawal_usd = (fee_usd + net_withdrawal_usd).quantize(Decimal("0.000001"))
+            db.table("rebalance_logs").insert({
+                "account_id": account_id,
+                "status": "executed",
+                "skip_reason": None,
+                "from_protocol": "withdrawal",
+                "to_protocol": "user_eoa",
+                "amount_moved": str(total_withdrawal_usd),
+                "tx_hash": tx_hash,
+                "apr_improvement": None,
+            }).execute()
+        except Exception as exc:
+            logger.warning("Failed to log emergency withdrawal activity for %s: %s", addr, exc)
+
         return {
             "status": "executed",
             "txHash": tx_hash,
@@ -509,6 +526,21 @@ async def partial_withdraw(
             protocol_id=body.protocol_id,
             amount_usdc=float(amount),  # Rebalancer expects float; convert at boundary
         )
+
+        try:
+            db.table("rebalance_logs").insert({
+                "account_id": account_id,
+                "status": "executed",
+                "skip_reason": None,
+                "from_protocol": "withdrawal",
+                "to_protocol": "user_eoa",
+                "amount_moved": str(amount.quantize(Decimal("0.000001"))),
+                "tx_hash": tx_hash,
+                "apr_improvement": None,
+            }).execute()
+        except Exception as exc:
+            logger.warning("Failed to log partial withdrawal activity for %s: %s", addr, exc)
+
         return {
             "status": "executed",
             "txHash": tx_hash,

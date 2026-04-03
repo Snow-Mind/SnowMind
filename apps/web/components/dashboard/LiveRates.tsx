@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { Activity, RefreshCw, TrendingUp, Clock, Loader2 } from "lucide-react";
+import { Activity, RefreshCw, TrendingUp, Clock, Loader2, ExternalLink } from "lucide-react";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
@@ -10,11 +10,13 @@ import { useQueryClient } from "@tanstack/react-query";
 interface LiveRatesProps {
   activeProtocolIds?: string[]; // Selected protocols from onboarding
   activeAllocationIds?: string[]; // Protocols with current allocations > 0
+  totalDepositedUsd?: number;
 }
 
 export default function LiveRates({ 
   activeProtocolIds = [],
-  activeAllocationIds = []
+  activeAllocationIds = [],
+  totalDepositedUsd = 0,
 }: LiveRatesProps) {
   const { data: rates, isLoading, dataUpdatedAt, isFetching } = useProtocolRates();
   const queryClient = useQueryClient();
@@ -24,6 +26,13 @@ export default function LiveRates({
   }
 
   const lastRefresh = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
+
+  const rebalanceIntervalLabel = (() => {
+    if (totalDepositedUsd <= 100) return "24h";
+    if (totalDepositedUsd <= 1000) return "12h";
+    if (totalDepositedUsd <= 10000) return "8h";
+    return "6h";
+  })();
 
   // Sort: active protocols first, highest APY, then coming soon
   const sorted = [...(rates ?? [])].sort((a, b) => {
@@ -71,12 +80,38 @@ export default function LiveRates({
               height={24}
               className="rounded-full"
             />
-            <span className="text-sm font-medium text-arctic">
-              {r.name}
-            </span>
+            {meta.vaultUrl && !r.isComingSoon ? (
+              <a
+                href={meta.vaultUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-arctic transition-colors hover:text-glacier"
+                title={`Open ${meta.name}`}
+              >
+                {r.name}
+              </a>
+            ) : (
+              <span className="text-sm font-medium text-arctic">{r.name}</span>
+            )}
+            {meta.vaultUrl && !r.isComingSoon && (
+              <a
+                href={meta.vaultUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted-foreground transition-colors hover:text-glacier"
+                title={`View ${meta.name} vault`}
+              >
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
             {r.isComingSoon && (
               <span className="rounded-full bg-amber/10 px-2 py-0.5 text-[10px] text-amber">
                 Coming Soon
+              </span>
+            )}
+            {!r.isComingSoon && (
+              <span className="rounded-full bg-void-2 px-2 py-0.5 text-[10px] text-muted-foreground">
+                Risk {meta.riskScore}/10
               </span>
             )}
           </div>
@@ -90,6 +125,20 @@ export default function LiveRates({
             </div>
           )}
         </div>
+
+        {!r.isComingSoon && meta.vaultUrl && (
+          <div className="mt-2 pl-8 text-[10px] text-muted-foreground">
+            <a
+              href={meta.vaultUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 hover:text-glacier"
+            >
+              View protocol page
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        )}
       </div>
     );
   };
@@ -107,6 +156,9 @@ export default function LiveRates({
             </h2>
             <p className="text-xs text-muted-foreground">
               APY comparison across protocols
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Rebalance cadence for current deposit size: every {rebalanceIntervalLabel}
             </p>
           </div>
         </div>

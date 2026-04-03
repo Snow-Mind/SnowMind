@@ -573,6 +573,8 @@ export default function OnboardingPage() {
           const hasDerivedFunds = portfolioHasFunds(derivedPortfolio);
           if (derivedAccountDetail?.address && derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
             setAgentActivated(true);
+            router.replace("/dashboard");
+            return;
           }
           if (derivedAccountDetail?.isActive && !derivedAccountDetail?.sessionKey?.isActive && hasDerivedFunds) {
             setRegrantOnlyMode(true);

@@ -115,8 +115,10 @@ function allocationSummary(allocations: Record<string, number>): string {
 
 function inferAction(entry: RebalanceLogEntry): ActionType {
   if (entry.status === "skipped") return "monitoring";
-  if ((entry as ExtendedLogEntry).fromProtocol === "user_wallet") return "deposit";
-  if ((entry as ExtendedLogEntry).fromProtocol === "withdrawal") return "withdraw";
+  const ext = entry as ExtendedLogEntry;
+  const skipReason = (entry.skipReason ?? "").toLowerCase();
+  if (ext.fromProtocol === "user_wallet" || skipReason.includes("initial funding transfer")) return "deposit";
+  if (ext.fromProtocol === "withdrawal" || ext.toProtocol === "user_eoa") return "withdraw";
 
   const allocations = parseAllocations(entry);
   if (allocationTotal(allocations) > 0) {
@@ -320,8 +322,9 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
 
     const allocations = parseAllocations(entry);
     const allocationSum = allocationTotal(allocations);
-    const explicitDeposit = entry.fromProtocol === "user_wallet";
-    const explicitWithdrawal = entry.fromProtocol === "withdrawal";
+    const reasonLower = (entry.skipReason ?? "").toLowerCase();
+    const explicitDeposit = entry.fromProtocol === "user_wallet" || reasonLower.includes("initial funding transfer");
+    const explicitWithdrawal = entry.fromProtocol === "withdrawal" || entry.toProtocol === "user_eoa";
 
     if (explicitDeposit) {
       const depositedAmount = Number(entry.amountMoved ?? "0");

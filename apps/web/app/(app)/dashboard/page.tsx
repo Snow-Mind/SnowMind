@@ -578,6 +578,7 @@ export default function DashboardPage() {
             <LiveRates 
               activeProtocolIds={activeProtocolIds}
               activeAllocationIds={activeAllocationIds}
+              totalDepositedUsd={stats?.totalDeposited ?? 0}
             />
           </ErrorBoundary>
         </div>

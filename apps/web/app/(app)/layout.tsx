@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
@@ -182,8 +182,10 @@ export default function AppLayout({
   const { data: accountDetail, isLoading: accountDetailLoading, error: accountDetailError } = useAccountDetail(effectiveSmartAccountAddress ?? undefined);
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
+  const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
+  const recoveryInFlightRef = useRef(false);
   const appQueryClient = useQueryClient();
 
   const handleDeactivateAgent = async () => {
@@ -236,19 +238,51 @@ export default function AppLayout({
   // NEVER clear on query errors — transient 500s/CORS failures must not deactivate agent
   const dataLoaded = accountDataReady;
   useEffect(() => {
-    if (dataLoaded && storeActivated && (hasInactiveAccount || !hasActiveSessionKey || !hasFunds) && !accountDetailError && !portfolioError) {
+    const provenInactive = hasInactiveAccount;
+    const provenNoActivation = !hasActiveSessionKey && !hasFunds;
+    if (dataLoaded && storeActivated && (provenInactive || provenNoActivation) && !accountDetailError && !portfolioError) {
       setAgentActivated(false);
     }
   }, [dataLoaded, storeActivated, hasInactiveAccount, hasActiveSessionKey, hasFunds, setAgentActivated, accountDetailError, portfolioError]);
 
   const isAgentActive = !!effectiveSmartAccountAddress && !hasInactiveAccount
-    && (optimisticStoreActive || (hasActiveSessionKey && hasFunds));
+    && (optimisticStoreActive || hasActiveSessionKey || hasFunds);
   const isAuthFault = (err: unknown): boolean => {
     if (!err || typeof err !== "object") return false;
     const status = (err as { status?: unknown }).status;
     return status === 401 || status === 429;
   };
   const hasAuthFault = isAuthFault(portfolioError) || isAuthFault(accountDetailError);
+
+  // Silent recovery: if persisted smart-account address is missing (common in
+  // mobile in-app browsers), derive it from the connected wallet without
+  // prompting signatures so returning users can stay on dashboard.
+  useEffect(() => {
+    if (!clientReady || !ready || !authenticated || !activeWallet) return;
+    if (effectiveSmartAccountAddress) return;
+    if (recoveryInFlightRef.current) return;
+
+    recoveryInFlightRef.current = true;
+    (async () => {
+      try {
+        const { smartAccountAddress } = await createSmartAccount(activeWallet);
+        setSmartAccountAddress(smartAccountAddress);
+      } catch {
+        // Ignore recovery failures and fall back to normal onboarding flow.
+      } finally {
+        recoveryInFlightRef.current = false;
+      }
+    })();
+  }, [
+    clientReady,
+    ready,
+    authenticated,
+    activeWallet,
+    effectiveSmartAccountAddress,
+    setSmartAccountAddress,
+  ]);
+
+  const awaitingAddressRecovery = clientReady && ready && authenticated && !!activeWallet && !effectiveSmartAccountAddress;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -266,10 +300,11 @@ export default function AppLayout({
   useEffect(() => {
     if (!clientReady) return;
     const storedAddr = usePortfolioStore.getState().smartAccountAddress;
+    if (!storedAddr && awaitingAddressRecovery) return;
     if (!storedAddr && pathname !== "/onboarding" && pathname !== "/settings") {
       router.replace("/onboarding");
     }
-  }, [clientReady, pathname, router]);
+  }, [clientReady, awaitingAddressRecovery, pathname, router]);
 
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
@@ -302,10 +337,10 @@ export default function AppLayout({
     if (!accountDataReady) return;
     if (accountDetailError || portfolioError) return;
     if (isOnboardingInProgress) return;
-    if (accountDetail?.isActive && isAgentActive && pathname === "/onboarding") {
+    if (accountDetail?.isActive && hasActiveSessionKey && hasFunds && pathname === "/onboarding") {
       router.replace("/dashboard");
     }
-  }, [accountDataReady, accountDetail, isAgentActive, pathname, router, isOnboardingInProgress, accountDetailError, portfolioError]);
+  }, [accountDataReady, accountDetail, hasActiveSessionKey, hasFunds, pathname, router, isOnboardingInProgress, accountDetailError, portfolioError]);
 
   // Don't render until auth is ready
   if (!ready) {
@@ -352,7 +387,7 @@ export default function AppLayout({
   }
 
   // Dashboard-specific loading: wait for hydration to determine routing
-  if (pathname === "/dashboard" && (!clientReady || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady && !hasAuthFault))) {
+  if (pathname === "/dashboard" && (!clientReady || awaitingAddressRecovery || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady && !hasAuthFault))) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
@@ -475,6 +510,14 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
       const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
       await publicClient.waitForTransactionReceipt({ hash: transferHash });
+
+      await api.registerAccount({
+        ownerAddress: account,
+        smartAccountAddress,
+        fundingTxHash: transferHash,
+        fundingAmountUsdc: parsedAmount.toFixed(6),
+        fundingSource: "dashboard_wallet_transfer",
+      }).catch(() => undefined);
 
       if (smartAccountAddress) {
         await api.triggerRebalance(smartAccountAddress).catch(() => undefined);
@@ -907,6 +950,7 @@ function AgentDetailsModal({
   onDeactivate: () => Promise<void>;
 }) {
   const { data: portfolio } = usePortfolio(smartAccountAddress);
+  const queryClient = useQueryClient();
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const [withdrawStep, setWithdrawStep] = useState<"idle" | "processing" | "deactivating">("idle");
@@ -920,8 +964,44 @@ function AgentDetailsModal({
   const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
 
   async function handleFullWithdraw() {
-    if (!wallet || !smartAccountAddress) return;
+    if (!smartAccountAddress) return;
     setWithdrawStep("processing");
+
+    const requestedAmount = Math.max(totalUsdc, 0).toFixed(6);
+
+    try {
+      const result = await api.executeWithdrawal({
+        smartAccountAddress,
+        withdrawAmount: requestedAmount,
+        isFullWithdrawal: true,
+      });
+
+      if (result.status === "executed") {
+        await Promise.allSettled([
+          queryClient.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] }),
+          queryClient.invalidateQueries({ queryKey: ["rebalance-history", smartAccountAddress] }),
+          queryClient.invalidateQueries({ queryKey: ["rebalance-status", smartAccountAddress] }),
+          queryClient.invalidateQueries({ queryKey: ["account-detail", smartAccountAddress] }),
+        ]);
+
+        setWithdrawStep("deactivating");
+        toast.success("Successfully withdrawn funds!");
+        await new Promise((r) => setTimeout(r, 1500));
+        await onDeactivate();
+        return;
+      }
+
+      throw new Error(result.message || "Withdrawal was not executed");
+    } catch (primaryError) {
+      console.warn("[AgentDetails] Backend withdrawal failed, falling back to wallet flow", primaryError);
+    }
+
+    if (!wallet) {
+      toast.error("Withdrawal fallback requires a connected wallet.");
+      setWithdrawStep("idle");
+      return;
+    }
+
     try {
       const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
 
