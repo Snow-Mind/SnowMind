@@ -5,7 +5,6 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { GLSLHills } from "@/components/ui/glsl-hills";
-import { useAuth } from "@/hooks/useAuth";
 import ApyGrowthChart from "@/components/marketing/ApyGrowthChart";
 import {
   Shield,
@@ -72,8 +71,6 @@ export default function LandingPage() {
   const [cardsVisible, setCardsVisible] = useState(false);
   const [featuresVisible, setFeaturesVisible] = useState(false);
   const router = useRouter();
-  const { authenticated, login, ready } = useAuth();
-  const pendingLaunchRef = useRef(false);
 
   const dashboardTarget = (
     typeof window !== "undefined"
@@ -165,21 +162,18 @@ export default function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (!pendingLaunchRef.current || !ready) return;
-    if (!authenticated) return;
-    pendingLaunchRef.current = false;
-    router.push(dashboardTarget);
-  }, [ready, authenticated, router, dashboardTarget]);
-
   const handleLaunchApp = () => {
-    if (authenticated) {
+    if (
+      typeof window !== "undefined"
+      && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ) {
       router.push(dashboardTarget);
       return;
     }
-    if (!ready) return;
-    pendingLaunchRef.current = true;
-    login();
+
+    // Authentication must occur on app.snowmind.xyz so session state is
+    // established on the same host as protected routes.
+    window.location.href = "https://app.snowmind.xyz/dashboard";
   };
 
   return (

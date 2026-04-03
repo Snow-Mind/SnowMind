@@ -187,7 +187,10 @@ export default function AppLayout({
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const recoveryInFlightRef = useRef(false);
+  const appHostLoginKickoffRef = useRef(false);
   const appQueryClient = useQueryClient();
+  const currentHostname = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
+  const isAppHost = currentHostname === "app.snowmind.xyz";
 
   const handleDeactivateAgent = async () => {
     const addr = effectiveSmartAccountAddress;
@@ -292,9 +295,19 @@ export default function AppLayout({
       if (pathname === "/onboarding" && authRepairInProgress) {
         return;
       }
+
+      if (isAppHost) {
+        // Initiate auth on app host so session and protected routes are on the same origin.
+        if (!appHostLoginKickoffRef.current) {
+          appHostLoginKickoffRef.current = true;
+          login();
+        }
+        return;
+      }
+
       router.replace("/");
     }
-  }, [ready, authenticated, router, pathname, authRepairInProgress]);
+  }, [ready, authenticated, router, pathname, authRepairInProgress, isAppHost, login]);
 
   // Redirect new users (no stored smart account) to onboarding.
   // Gated on clientReady to prevent false redirect during Zustand hydration.
@@ -384,6 +397,38 @@ export default function AppLayout({
         </div>
       );
     }
+
+    if (isAppHost) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB] px-6">
+          <div className="w-full max-w-md rounded-xl border border-[#E8E2DA] bg-white p-6 text-center shadow-sm">
+            <p className="text-sm font-semibold text-[#1A1715]">Sign In To Launch SnowMind</p>
+            <p className="mt-2 text-xs text-[#5C5550]">
+              For security, app access is authenticated on app.snowmind.xyz.
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                onClick={login}
+                className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
+              >
+                Continue Sign-in
+              </button>
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.location.href = "https://www.snowmind.xyz/";
+                  }
+                }}
+                className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+              >
+                Go to Website
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return null;
   }
 
