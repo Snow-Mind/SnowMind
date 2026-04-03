@@ -19,7 +19,7 @@ const nextConfig: NextConfig = {
           { type: "host", value: "snowmind.xyz" },
           { type: "header", key: "x-forwarded-proto", value: "http" },
         ],
-        destination: "https://snowmind.xyz/:path*",
+        destination: "https://www.snowmind.xyz/:path*",
         permanent: true,
       },
       {
@@ -44,6 +44,11 @@ const nextConfig: NextConfig = {
       {
         source: "/docs",
         destination: "https://docs.snowmind.xyz/",
+        permanent: true,
+      },
+      {
+        source: "/docs/:path*",
+        destination: "https://docs.snowmind.xyz/:path*",
         permanent: true,
       },
     ];

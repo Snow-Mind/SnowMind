@@ -597,7 +597,10 @@ Then, from the Gnosis Safe, execute `acceptOwnership()` on the registry.
 1. In Vercel, go to your project settings
 2. Set all environment variables from Section 4B
 3. Set the production branch to `dev` (or merge `dev` → `main` first)
-4. Set custom domain: `app.snowmind.xyz` or `www.snowmind.xyz`
+4. Add custom domains on the same Vercel project:
+  - `www.snowmind.xyz` (marketing landing)
+  - `app.snowmind.xyz` (authenticated product app)
+  - `snowmind.xyz` (apex; redirects to `www.snowmind.xyz`)
 5. Deploy
 
 ### Step 8: Verify End-to-End
@@ -630,7 +633,9 @@ You need a small amount of AVAX in your deployer EOA to deploy the Registry cont
 
 1. Go to [https://dashboard.privy.io/](https://dashboard.privy.io/)
 2. Ensure your app is configured for production (not development mode)
-3. Add your production domain (`www.snowmind.xyz`) to the allowed origins
+3. Add both production web origins to allowed origins:
+  - `https://www.snowmind.xyz`
+  - `https://app.snowmind.xyz`
 4. Copy the App ID and App Secret
 
 ### 7C. RPC Provider (Optional but Recommended)
@@ -698,7 +703,7 @@ Before going live, verify each item:
 - [ ] Railway backend deployed with all env vars set
 - [ ] Vercel frontend deployed with all env vars set
 - [ ] Execution service running alongside backend
-- [ ] Custom domains configured (api.snowmind.xyz, app.snowmind.xyz)
+- [ ] Custom domains configured (api.snowmind.xyz, www.snowmind.xyz, app.snowmind.xyz, docs.snowmind.xyz)
 
 ### Blockchain
 - [ ] SnowMindRegistry deployed on Avalanche mainnet

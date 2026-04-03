@@ -20,6 +20,13 @@ Next.js 16 frontend for the SnowMind yield optimizer, deployed on Vercel.
 | `/onboarding` | 4-step setup: account → strategy → deposit → activate |
 | `/dashboard` | Portfolio overview, allocations, deposit/withdraw panels |
 
+## Domain Split
+
+- `https://www.snowmind.xyz` serves marketing pages (`/`, `/how-it-works`)
+- `https://app.snowmind.xyz` serves product routes (`/onboarding`, `/dashboard`, `/portfolio`, `/settings`, `/withdraw`)
+- `https://docs.snowmind.xyz` serves documentation (separate docs app)
+- `https://snowmind.xyz` should redirect to `https://www.snowmind.xyz`
+
 ## Key Files
 
 | File | Purpose |

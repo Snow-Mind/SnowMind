@@ -685,6 +685,9 @@ export default function OnboardingPage() {
     const effectiveSelectedProtocols = selectedProtocols;
     const requestedAmount = regrantOnlyMode ? "0" : depositAmount;
     const amountWei = parseUnits(requestedAmount || "0", 6);
+    let transferRequirementSatisfied = amountWei <= 0n;
+    let transferConfirmationUncertain = false;
+    let minExpectedSmartAccountBalance = 0n;
     let activationAddress = smartAccountAddress;
     let fundingTransferHash: string | null = null;
     let fundingTransferAmountUsdc: string | null = null;
@@ -729,6 +732,10 @@ export default function OnboardingPage() {
       );
 
       const shortfall = amountWei > existingBalance ? amountWei - existingBalance : 0n;
+      minExpectedSmartAccountBalance = existingBalance + shortfall;
+      if (shortfall <= 0n) {
+        transferRequirementSatisfied = true;
+      }
 
       if (shortfall > 0n) {
         const provider = await wallet.getEthereumProvider();
@@ -915,14 +922,32 @@ export default function OnboardingPage() {
         fundingTransferHash = transferHash;
         fundingTransferAmountUsdc = formatUnits(shortfall, 6);
 
-        await waitForTransferConfirmationWithFallback({
-          transferHash,
-          recipient: derivedAddr as `0x${string}`,
-          minRecipientBalance: existingBalance + shortfall,
-          walletProvider: provider as Eip1193Provider,
-        });
-        toast.success("USDC transferred to smart account!");
+        try {
+          await waitForTransferConfirmationWithFallback({
+            transferHash,
+            recipient: derivedAddr as `0x${string}`,
+            minRecipientBalance: minExpectedSmartAccountBalance,
+            walletProvider: provider as Eip1193Provider,
+          });
+          transferRequirementSatisfied = true;
+          toast.success("USDC transferred to smart account!");
+        } catch (confirmErr: unknown) {
+          const confirmMsg = confirmErr instanceof Error ? confirmErr.message : String(confirmErr);
+          const confirmationUncertain =
+            confirmMsg.includes("confirmation could not be verified due RPC instability")
+            || isRpcTransportFailure(confirmMsg);
+
+          if (!confirmationUncertain) {
+            throw confirmErr;
+          }
+
+          transferConfirmationUncertain = true;
+          toast.info(
+            "Transfer submitted. Confirmation is delayed by RPC instability; continuing activation without sending a duplicate transfer.",
+          );
+        }
       } else {
+        transferRequirementSatisfied = true;
         if (amountWei > 0n) {
           toast.success("Smart account already funded — skipping transfer.");
         } else {
@@ -1022,7 +1047,35 @@ export default function OnboardingPage() {
       try {
         await api.saveDiversificationPreference(derivedAddr, diversificationPref);
       } catch { /* non-critical — default is balanced */ }
-      const expectedFundsAfterActivation = hasRecoverableFunds || amountWei > 0n;
+
+      if (
+        !transferRequirementSatisfied
+        && transferConfirmationUncertain
+        && !hasRecoverableFunds
+      ) {
+        try {
+          const postTransferBalance = await withRetry(
+            () => withRpcFallback(
+              "smart-account USDC balance post-transfer verify",
+              (client) => client.readContract({
+                address: CONTRACTS.USDC as `0x${string}`,
+                abi: ERC20_ABI,
+                functionName: "balanceOf",
+                args: [derivedAddr as `0x${string}`],
+              }) as Promise<bigint>,
+            ),
+            { label: "post-transfer balance verify", maxRetries: 2 },
+          );
+          if (postTransferBalance >= minExpectedSmartAccountBalance) {
+            transferRequirementSatisfied = true;
+          }
+        } catch {
+          // Non-fatal: if verification still fails, finalizeActivationSuccess
+          // will keep the user on onboarding until funds are actually visible.
+        }
+      }
+
+      const expectedFundsAfterActivation = hasRecoverableFunds || transferRequirementSatisfied;
       await finalizeActivationSuccess(derivedAddr, false, expectedFundsAfterActivation);
     } catch (err) {
       activateGuardRef.current = false;
@@ -1068,7 +1121,7 @@ export default function OnboardingPage() {
         // transfer is prevented even if the first transfer confirmed late.
         setActivationPhase("idle");
         setActivationError(null);
-        toast.error("Transfer submitted. Retry Activation in a few seconds; duplicate transfer is prevented.");
+        toast.info("Transfer submitted. Retry Activation in a few seconds; duplicate transfer is prevented.");
       } else if (isRpcTransportFailure(msg)) {
         setActivationPhase("error");
         setActivationError(sanitizeActivationErrorMessage(msg));

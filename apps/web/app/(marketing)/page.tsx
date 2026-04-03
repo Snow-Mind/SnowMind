@@ -75,6 +75,13 @@ export default function LandingPage() {
   const { authenticated, login, ready } = useAuth();
   const pendingLaunchRef = useRef(false);
 
+  const dashboardTarget = (
+    typeof window !== "undefined"
+    && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  )
+    ? "/dashboard"
+    : "https://app.snowmind.xyz/dashboard";
+
   const scrollProgressRef = useRef(0);
   const heroRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -162,12 +169,12 @@ export default function LandingPage() {
     if (!pendingLaunchRef.current || !ready) return;
     if (!authenticated) return;
     pendingLaunchRef.current = false;
-    router.push("/dashboard");
-  }, [ready, authenticated, router]);
+    router.push(dashboardTarget);
+  }, [ready, authenticated, router, dashboardTarget]);
 
   const handleLaunchApp = () => {
     if (authenticated) {
-      router.push("/dashboard");
+      router.push(dashboardTarget);
       return;
     }
     if (!ready) return;
