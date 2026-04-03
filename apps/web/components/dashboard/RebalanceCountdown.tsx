@@ -2,24 +2,26 @@
 
 import { useState, useEffect } from "react";
 import { Clock } from "lucide-react";
-
-const REBALANCE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+import { getRebalanceCadence } from "@/lib/rebalanceCadence";
 
 interface RebalanceCountdownProps {
   lastRebalance: string | null;
+  totalDepositedUsd?: number;
 }
 
 export default function RebalanceCountdown({
   lastRebalance,
+  totalDepositedUsd = 0,
 }: RebalanceCountdownProps) {
   const [remaining, setRemaining] = useState<string | null>(null);
+  const rebalanceIntervalMs = getRebalanceCadence(totalDepositedUsd).intervalMs;
 
   useEffect(() => {
     if (!lastRebalance) return;
 
     function tick() {
       const next =
-        new Date(lastRebalance!).getTime() + REBALANCE_INTERVAL_MS;
+        new Date(lastRebalance!).getTime() + rebalanceIntervalMs;
       const diff = Math.max(0, next - Date.now());
       const mins = Math.floor(diff / 60_000);
       const secs = Math.floor((diff % 60_000) / 1000);
@@ -29,7 +31,7 @@ export default function RebalanceCountdown({
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [lastRebalance]);
+  }, [lastRebalance, rebalanceIntervalMs]);
 
   if (!remaining) {
     return (

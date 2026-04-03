@@ -10,37 +10,39 @@ import {
   Eye,
 } from "lucide-react";
 import { ACTIVE_PROTOCOLS, PROTOCOL_CONFIG } from "@/lib/constants";
+import { getRebalanceCadence } from "@/lib/rebalanceCadence";
 
 interface AgentStatusPulseProps {
   lastRebalance: string | null;
   isActive: boolean;
   activeProtocols: number;
+  totalDepositedUsd?: number;
 }
-
-const REBALANCE_INTERVAL_MS = 30 * 60 * 1000;
 
 export default function AgentStatusPulse({
   lastRebalance,
   isActive,
   activeProtocols,
+  totalDepositedUsd = 0,
 }: AgentStatusPulseProps) {
   const [countdown, setCountdown] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const rebalanceIntervalMs = getRebalanceCadence(totalDepositedUsd).intervalMs;
 
   useEffect(() => {
     if (!lastRebalance) return;
     function tick() {
-      const next = new Date(lastRebalance!).getTime() + REBALANCE_INTERVAL_MS;
+      const next = new Date(lastRebalance!).getTime() + rebalanceIntervalMs;
       const diff = Math.max(0, next - Date.now());
       const mins = Math.floor(diff / 60_000);
       const secs = Math.floor((diff % 60_000) / 1000);
       setCountdown(`${mins}m ${String(secs).padStart(2, "0")}s`);
-      setProgress(1 - diff / REBALANCE_INTERVAL_MS);
+      setProgress(1 - diff / rebalanceIntervalMs);
     }
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [lastRebalance]);
+  }, [lastRebalance, rebalanceIntervalMs]);
 
   const monitoredProtocols = ACTIVE_PROTOCOLS.map(
     (id) => PROTOCOL_CONFIG[id].shortName,

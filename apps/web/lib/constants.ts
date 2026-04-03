@@ -14,23 +14,45 @@ export const ZERODEV_PROJECT_ID =
 
 const DEFAULT_AVALANCHE_RPC_URLS = [
   "https://api.avax.network/ext/bc/C/rpc",
-  "https://avalanche.public-rpc.com",
   "https://rpc.ankr.com/avalanche",
 ] as const;
+
+const BLOCKED_AVALANCHE_RPC_HOSTS = new Set([
+  "avalanche.public-rpc.com",
+]);
+
+function isValidRpcUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedRpcUrl(value: string): boolean {
+  if (!isValidRpcUrl(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return !BLOCKED_AVALANCHE_RPC_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 function parseRpcUrlList(value: string | undefined): string[] {
   if (!value) return [];
   return value
     .split(",")
     .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+    .filter((entry) => isAllowedRpcUrl(entry));
 }
 
 const configuredAvalancheRpcUrls = [
   ...parseRpcUrlList(process.env.NEXT_PUBLIC_AVALANCHE_RPC_URLS),
   process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL,
   ...DEFAULT_AVALANCHE_RPC_URLS,
-].filter((url): url is string => typeof url === "string" && url.length > 0);
+].filter((url): url is string => typeof url === "string" && isAllowedRpcUrl(url));
 
 export const AVALANCHE_RPC_URLS = Array.from(new Set(configuredAvalancheRpcUrls));
 export const AVALANCHE_RPC_URL = AVALANCHE_RPC_URLS[0] ?? DEFAULT_AVALANCHE_RPC_URLS[0];

@@ -37,7 +37,54 @@ const ZERODEV_ID = process.env.ZERODEV_PROJECT_ID
 const ZERODEV_RPC = `https://rpc.zerodev.app/api/v3/${ZERODEV_ID}/chain/${CHAIN.id}`
 const BUNDLER_URL = ZERODEV_RPC
 const PAYMASTER_URL = ZERODEV_RPC
-const REQUEST_ORIGIN = process.env.ZERODEV_REQUEST_ORIGIN || "https://app.snowmind.xyz"
+const DEFAULT_ZERODEV_REQUEST_ORIGIN = "https://app.snowmind.xyz"
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === "https:" || parsed.protocol === "http:"
+  } catch {
+    return false
+  }
+}
+
+function normalizeOrigin(raw) {
+  if (!raw) return null
+  const value = raw.trim()
+  if (!value) return null
+
+  const candidates = []
+  if (value.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (typeof item === "string") {
+            candidates.push(item)
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed JSON and fall back to comma-separated parsing.
+    }
+  }
+
+  if (candidates.length === 0) {
+    candidates.push(...value.split(","))
+  }
+
+  for (const entry of candidates) {
+    const normalized = entry.trim().replace(/^['"]|['"]$/g, "")
+    if (!isHttpUrl(normalized)) continue
+    const parsed = new URL(normalized)
+    return `${parsed.protocol}//${parsed.host}`
+  }
+
+  return null
+}
+
+const REQUEST_ORIGIN =
+  normalizeOrigin(process.env.ZERODEV_REQUEST_ORIGIN) ?? DEFAULT_ZERODEV_REQUEST_ORIGIN
 
 // Server-side Node.js doesn't send an Origin header automatically.
 // ZeroDev's domain allowlist needs it to verify the request source.
@@ -49,16 +96,29 @@ const EXPLORER_BASE = "https://snowtrace.io"
 
 const DEFAULT_AVALANCHE_RPC_URLS = [
   "https://api.avax.network/ext/bc/C/rpc",
-  "https://avalanche.public-rpc.com",
   "https://rpc.ankr.com/avalanche",
 ]
+
+const BLOCKED_AVALANCHE_RPC_HOSTS = new Set([
+  "avalanche.public-rpc.com",
+])
+
+function isAllowedRpcUrl(value) {
+  if (!isHttpUrl(value)) return false
+  try {
+    const parsed = new URL(value)
+    return !BLOCKED_AVALANCHE_RPC_HOSTS.has(parsed.hostname.toLowerCase())
+  } catch {
+    return false
+  }
+}
 
 function parseRpcUrlList(raw) {
   if (!raw) return []
   return raw
     .split(",")
     .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
+    .filter((entry) => isAllowedRpcUrl(entry))
 }
 
 function getAvalancheRpcUrls() {
@@ -66,7 +126,7 @@ function getAvalancheRpcUrls() {
     ...parseRpcUrlList(process.env.AVALANCHE_RPC_URLS),
     process.env.AVALANCHE_RPC_URL,
     ...DEFAULT_AVALANCHE_RPC_URLS,
-  ].filter((value) => typeof value === "string" && value.length > 0)
+  ].filter((value) => typeof value === "string" && isAllowedRpcUrl(value))
 
   return [...new Set(configured)]
 }

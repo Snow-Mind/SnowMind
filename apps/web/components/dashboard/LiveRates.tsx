@@ -6,6 +6,7 @@ import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
+import { getRebalanceCadence } from "@/lib/rebalanceCadence";
 
 interface LiveRatesProps {
   activeProtocolIds?: string[]; // Selected protocols from onboarding
@@ -27,12 +28,7 @@ export default function LiveRates({
 
   const lastRefresh = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
 
-  const rebalanceIntervalLabel = (() => {
-    if (totalDepositedUsd <= 100) return "24h";
-    if (totalDepositedUsd <= 1000) return "12h";
-    if (totalDepositedUsd <= 10000) return "8h";
-    return "6h";
-  })();
+  const rebalanceIntervalLabel = getRebalanceCadence(totalDepositedUsd).label;
 
   // Sort: active protocols first, highest APY, then coming soon
   const sorted = [...(rates ?? [])].sort((a, b) => {
