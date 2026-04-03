@@ -3,12 +3,15 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import httpx
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from supabase import Client
 
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.limiter import limiter
-from app.core.security import require_service_auth
+from app.core.request_metrics import get_dashboard_load_snapshot
+from app.core.security import require_privy_auth, require_service_auth, verify_account_ownership
+from app.core.validators import validate_eth_address
 from app.services.execution.session_key import decrypt_session_key, encrypt_session_key
 from app.services.monitoring import send_sentry_alert
 from app.services.protocols import ACTIVE_ADAPTERS
@@ -17,6 +20,47 @@ from app.services.protocols.circuit_breaker import protocol_circuit_breaker
 logger = logging.getLogger("snowmind")
 
 router = APIRouter()
+
+
+@router.get("/health/dashboard-load/{address}")
+@limiter.limit("30/minute")
+async def health_dashboard_load(
+    request: Request,
+    address: str,
+    window_minutes: int = Query(default=15, ge=1, le=120),
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Per-account dashboard request diagnostics for before/after comparison.
+
+    Returns process-local request telemetry collected by middleware for the
+    most common dashboard endpoints plus global dependencies.
+    """
+    normalized_address = validate_eth_address(address)
+    account = (
+        db.table("accounts")
+        .select("id, owner_address, privy_did")
+        .eq("address", normalized_address)
+        .limit(1)
+        .execute()
+    )
+    if not account.data:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    verify_account_ownership(_auth, account.data[0], db=db)
+
+    snapshot = get_dashboard_load_snapshot(
+        normalized_address,
+        window_seconds=window_minutes * 60,
+    )
+
+    return {
+        "address": normalized_address,
+        "windowMinutes": window_minutes,
+        "processLocal": True,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **snapshot,
+    }
 
 
 @router.get("/health")

@@ -106,9 +106,11 @@ export default function DashboardPage() {
   const deploymentKickRef = useRef<string | null>(null);
   const deploymentLastTriggerAtRef = useRef(0);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const lastDashboardRefreshAtRef = useRef(0);
 
   const transactionPage = address ? (transactionPageByAddress[address] ?? 0) : 0;
   const logPage = address ? (logPageByAddress[address] ?? 0) : 0;
+  const historyAddress = activeTab === "agent-log" ? address : undefined;
 
   const setTransactionPage = useCallback((page: number) => {
     if (!address) return;
@@ -142,12 +144,12 @@ export default function DashboardPage() {
   const {
     data: transactionHistoryData,
     error: transactionHistoryError,
-  } = useRebalanceHistory(address, transactionPage, HISTORY_PAGE_SIZE, true);
+  } = useRebalanceHistory(historyAddress, transactionPage, HISTORY_PAGE_SIZE, true);
 
   const {
     data: historyData,
     error: rebalanceHistoryError,
-  } = useRebalanceHistory(address, logPage, HISTORY_PAGE_SIZE, false);
+  } = useRebalanceHistory(historyAddress, logPage, HISTORY_PAGE_SIZE, false);
 
   // Fetch account detail to get allowedProtocols (selected markets during onboarding)
   const {
@@ -164,26 +166,37 @@ export default function DashboardPage() {
     rebalanceHistoryError,
   ].some((err) => err instanceof APIError && (err.status === 401 || err.status === 429));
 
-  const refreshDashboardQueries = useCallback(async () => {
+  const refreshDashboardQueries = useCallback(async (force = false) => {
     if (!address) return;
+
+    const now = Date.now();
+    if (!force && now - lastDashboardRefreshAtRef.current < 1200) {
+      return;
+    }
 
     if (refreshInFlightRef.current) {
       await refreshInFlightRef.current;
       return;
     }
 
+    lastDashboardRefreshAtRef.current = now;
+
     const refreshTask = Promise.allSettled([
       refetchPortfolio(),
       queryClient.refetchQueries({ queryKey: ["rebalance-status", address], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["account-detail", address], type: "active" }),
+      ...(activeTab === "agent-log"
+        ? [queryClient.refetchQueries({ queryKey: ["rebalance-history", address], type: "active" })]
+        : []),
     ]).then(() => undefined)
       .finally(() => {
+        lastDashboardRefreshAtRef.current = Date.now();
         refreshInFlightRef.current = null;
       });
 
     refreshInFlightRef.current = refreshTask;
     await refreshTask;
-  }, [address, queryClient, refetchPortfolio]);
+  }, [address, queryClient, refetchPortfolio, activeTab]);
 
   useRealtimePortfolio(address, accountDetail?.id || null);
 
@@ -339,7 +352,7 @@ export default function DashboardPage() {
 
     const tick = async () => {
       attempts += 1;
-      await refreshDashboardQueries();
+      await refreshDashboardQueries(true);
     };
 
     void tick();
@@ -363,17 +376,29 @@ export default function DashboardPage() {
     if (rebalanceStatus?.status !== "executed") return;
 
     let attempts = 0;
-    const maxAttempts = 10;
+    let inFlight = false;
+    const maxAttempts = 6;
 
-    void refetchPortfolio();
+    const burstTick = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      attempts += 1;
+      try {
+        await refetchPortfolio();
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void burstTick();
 
     const burst = window.setInterval(() => {
-      attempts += 1;
-      void refetchPortfolio();
       if (attempts >= maxAttempts) {
         window.clearInterval(burst);
+        return;
       }
-    }, 1000);
+      void burstTick();
+    }, 1500);
 
     return () => {
       window.clearInterval(burst);
@@ -539,7 +564,7 @@ export default function DashboardPage() {
                 type="button"
                 onClick={() => {
                   void triggerIdleDeployment(true, true);
-                  void refreshDashboardQueries();
+                  void refreshDashboardQueries(true);
                 }}
                 className="shrink-0 rounded-md border border-glacier/30 bg-white px-3 py-1.5 text-[11px] font-medium text-glacier hover:bg-glacier/[0.08]"
               >

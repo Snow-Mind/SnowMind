@@ -66,6 +66,10 @@ function allocationTotal(allocations: Record<string, number>): number {
 
 function protocolLabel(protocolId: string | null | undefined): string {
   if (!protocolId) return "Monitoring";
+  const normalized = protocolId.trim().toLowerCase();
+  if (normalized === "idle") return "Smart Account";
+  if (normalized === "user_eoa" || normalized === "user_wallet") return "Wallet";
+  if (normalized === "withdrawal") return "Protocol";
   const key = protocolId as ProtocolId;
   const cfg = PROTOCOL_CONFIG[key];
   return cfg?.name ?? protocolId;
@@ -372,9 +376,15 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
     const isDeposit = previousPortfolioTotal <= 0.01 && allocationSum > 0.01;
     const action: Exclude<ActionType, "monitoring"> = isDeposit ? "deposit" : "rebalance";
 
+    const movedAmountRaw = Number(entry.amountMoved ?? "0");
+    const movedAmount = Number.isFinite(movedAmountRaw) && movedAmountRaw > 0
+      ? movedAmountRaw
+      : null;
+    const deltaAmount = Math.abs(allocationSum - previousPortfolioTotal);
+
     const amountValue = isDeposit
-      ? allocationSum
-      : Math.max(Math.abs(allocationSum - previousPortfolioTotal), allocationSum);
+      ? (movedAmount ?? allocationSum)
+      : (movedAmount ?? (deltaAmount > 0 ? deltaAmount : allocationSum));
 
     transactions.push({
       entry,
@@ -392,7 +402,7 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
   }
 
   return transactions
-    .filter((tx) => !isIdleOnlyTransaction(tx))
+    .filter((tx) => (tx.action === "rebalance" ? !isIdleOnlyTransaction(tx) : true))
     .sort(
     (a, b) => new Date(b.entry.createdAt).getTime() - new Date(a.entry.createdAt).getTime(),
     );

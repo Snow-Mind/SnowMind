@@ -7,7 +7,7 @@ frontend can use the address it already has from ZeroDev.
 import logging
 import asyncio
 import json
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -492,64 +492,21 @@ async def partial_withdraw(
     db: Client = Depends(get_db),
     _auth: dict = Depends(require_privy_auth),
 ):
-    """Partially withdraw from a single protocol — no fee charged.
+    """Legacy endpoint retained for backward compatibility.
 
-    Tracks cumulative_withdrawn so the full-withdrawal profit calculation
-    remains correct (Mark's fee architecture: fee only on deactivation).
+    Security policy: partial withdrawals must go through the new
+    signature-protected `/api/v1/withdrawals/*` flow so fee, treasury, and
+    accounting behavior remains consistent across all withdrawal paths.
     """
-    account = await _lookup_account(db, address, _auth)
-    addr = account["address"]
-    account_id = account["id"]
-
-    try:
-        amount = Decimal(str(body.amount_usdc))
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        logger.warning(
-            "Invalid partial withdraw amount for %s: %r (%s)",
-            addr,
-            body.amount_usdc,
-            exc,
-        )
-        raise HTTPException(status_code=400, detail="amount_usdc must be a valid decimal string")
-
-    if amount <= Decimal("0"):
-        raise HTTPException(status_code=400, detail="amount_usdc must be positive")
-
-    from app.services.optimizer.rebalancer import Rebalancer
-
-    rebalancer = Rebalancer()
-
-    try:
-        tx_hash = await rebalancer.execute_partial_withdrawal(
-            account_id=account_id,
-            smart_account_address=addr,
-            protocol_id=body.protocol_id,
-            amount_usdc=float(amount),  # Rebalancer expects float; convert at boundary
-        )
-
-        try:
-            db.table("rebalance_logs").insert({
-                "account_id": account_id,
-                "status": "executed",
-                "skip_reason": None,
-                "from_protocol": "withdrawal",
-                "to_protocol": "user_eoa",
-                "amount_moved": str(amount.quantize(Decimal("0.000001"))),
-                "tx_hash": tx_hash,
-                "apr_improvement": None,
-            }).execute()
-        except Exception as exc:
-            logger.warning("Failed to log partial withdrawal activity for %s: %s", addr, exc)
-
-        return {
-            "status": "executed",
-            "txHash": tx_hash,
-            "feeCharged": False,
-            "amountUsdc": str(amount),
-            "protocolId": body.protocol_id,
-        }
-    except ValueError as exc:
-        return {"status": "skipped", "txHash": None, "reason": str(exc)}
+    # Keep ownership/auth checks in place before returning a migration error.
+    await _lookup_account(db, address, _auth)
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Legacy partial-withdraw endpoint is deprecated. "
+            "Use /api/v1/withdrawals/preview and /api/v1/withdrawals/execute."
+        ),
+    )
 
 
 # ── GET /platform/capacity — remaining deposit capacity for guarded launch ──

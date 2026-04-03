@@ -61,6 +61,40 @@ export function useRealtimePortfolio(
   useEffect(() => {
     if (!smartAccountAddress || !accountId || !supabase || isRealtimeTemporarilyDisabled()) return
 
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const pendingInvalidations = {
+      portfolio: false,
+      history: false,
+      status: false,
+    }
+
+    const flushInvalidations = () => {
+      if (pendingInvalidations.portfolio) {
+        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
+      }
+      if (pendingInvalidations.history) {
+        qc.invalidateQueries({ queryKey: ["rebalance-history", smartAccountAddress] })
+      }
+      if (pendingInvalidations.status) {
+        qc.invalidateQueries({ queryKey: ["rebalance-status", smartAccountAddress] })
+      }
+
+      pendingInvalidations.portfolio = false
+      pendingInvalidations.history = false
+      pendingInvalidations.status = false
+      flushTimer = null
+    }
+
+    const scheduleInvalidations = (
+      keys: Array<keyof typeof pendingInvalidations>,
+    ) => {
+      for (const key of keys) {
+        pendingInvalidations[key] = true
+      }
+      if (flushTimer) return
+      flushTimer = setTimeout(flushInvalidations, 600)
+    }
+
     // Subscribe to changes on both rebalance_logs and allocations tables
     const channel = supabase
       .channel(`portfolio-${smartAccountAddress}`)
@@ -70,10 +104,8 @@ export function useRealtimePortfolio(
         table:  "rebalance_logs",
         filter: `account_id=eq.${accountId}`,
       }, (payload: { new: Record<string, unknown> }) => {
-        // Invalidate all portfolio-related queries for this account
-        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
-        qc.invalidateQueries({ queryKey: ["rebalance-history", smartAccountAddress] })
-        qc.invalidateQueries({ queryKey: ["rebalance-status", smartAccountAddress] })
+        // Coalesce invalidations so multi-row bursts do not flood API reads.
+        scheduleInvalidations(["portfolio", "history", "status"])
 
         const status = payload.new.status
         if (status === "executed") {
@@ -94,8 +126,8 @@ export function useRealtimePortfolio(
         table:  "allocations",
         filter: `account_id=eq.${accountId}`,
       }, () => {
-        // Allocation changed — refresh portfolio
-        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
+        // Allocation changed — refresh portfolio (coalesced).
+        scheduleInvalidations(["portfolio"])
       })
       .on("postgres_changes", {
         event:  "INSERT",
@@ -103,7 +135,7 @@ export function useRealtimePortfolio(
         table:  "allocations",
         filter: `account_id=eq.${accountId}`,
       }, () => {
-        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
+        scheduleInvalidations(["portfolio"])
       })
       .on("postgres_changes", {
         event:  "DELETE",
@@ -111,7 +143,7 @@ export function useRealtimePortfolio(
         table:  "allocations",
         filter: `account_id=eq.${accountId}`,
       }, () => {
-        qc.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] })
+        scheduleInvalidations(["portfolio"])
       })
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
@@ -128,6 +160,10 @@ export function useRealtimePortfolio(
     channelRef.current = channel
 
     return () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
       if (channelRef.current) {
         supabase!.removeChannel(channelRef.current)
         channelRef.current = null

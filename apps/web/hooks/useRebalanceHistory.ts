@@ -18,6 +18,7 @@ export function useRebalanceStatus(address: string | undefined) {
     queryKey: ["rebalance-status", safeAddress],
     queryFn: () => api.getRebalanceStatus(safeAddress!),
     enabled: !!safeAddress && ready && authenticated,
+    refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const err = query.state.error;
       if (isNonRetryableClientError(err)) return false;
@@ -44,6 +45,7 @@ export function useRebalanceHistory(
     queryKey: ["rebalance-history", safeAddress, page, limit, transactionsOnly],
     queryFn: () => api.getRebalanceHistory(safeAddress!, page, limit, transactionsOnly),
     enabled: !!safeAddress && ready && authenticated,
+    refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const err = query.state.error;
       if (isNonRetryableClientError(err)) return false;

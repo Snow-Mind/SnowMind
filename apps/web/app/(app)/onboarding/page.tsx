@@ -605,6 +605,7 @@ export default function OnboardingPage() {
     await Promise.allSettled([
       queryClient.invalidateQueries({ queryKey: ["portfolio", address] }),
       queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] }),
+      queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] }),
       queryClient.invalidateQueries({ queryKey: ["account-detail", address] }),
     ]);
 

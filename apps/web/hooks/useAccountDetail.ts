@@ -14,6 +14,7 @@ export function useAccountDetail(smartAccountAddress: string | undefined) {
     queryKey: ["account-detail", safeAddress],
     queryFn: () => api.getAccountDetail(safeAddress!),
     enabled: !!safeAddress && ready && authenticated,
+    refetchOnWindowFocus: false,
     staleTime: 30_000,
     refetchInterval: (query) => {
       const err = query.state.error;

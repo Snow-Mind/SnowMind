@@ -14,6 +14,7 @@ export function usePortfolio(address: string | undefined) {
     queryKey: ["portfolio", safeAddress],
     queryFn: () => api.getPortfolio(safeAddress!),
     enabled: !!safeAddress && ready && authenticated,
+    refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const err = query.state.error;
       if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;

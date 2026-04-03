@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.core.limiter import limiter
 from app.core.observability import init_sentry
+from app.core.request_metrics import record_dashboard_request
 from app.core.security import rate_limit_middleware
 
 logger = logging.getLogger("snowmind")
@@ -104,6 +105,16 @@ async def log_requests(request: Request, call_next):  # type: ignore[no-untyped-
     start = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - start) * 1000
+    try:
+        record_dashboard_request(
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            latency_ms=elapsed_ms,
+        )
+    except Exception:
+        # Telemetry must never affect request handling.
+        pass
     logger.info(
         "%s %s → %d (%.1fms)",
         request.method,

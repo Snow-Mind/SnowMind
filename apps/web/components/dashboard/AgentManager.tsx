@@ -227,6 +227,23 @@ export default function AgentManager({
                   </div>
                 </div>
 
+                <div className="hidden justify-center md:flex md:w-14">
+                  <span className={cn(
+                    "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                    riskToneClass,
+                  )}>
+                    {protocol.riskScore}/10
+                  </span>
+                </div>
+
+                <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:block">
+                  {apyLabel}
+                </span>
+
+                <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:block">
+                  {tvlLabel}
+                </span>
+
                 <div className="flex justify-center md:w-12">
                   <button
                     onClick={(e) => {
@@ -248,23 +265,6 @@ export default function AgentManager({
                     />
                   </button>
                 </div>
-
-                <div className="hidden justify-center md:flex md:w-14">
-                  <span className={cn(
-                    "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
-                    riskToneClass,
-                  )}>
-                    {protocol.riskScore}/10
-                  </span>
-                </div>
-
-                <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:block">
-                  {apyLabel}
-                </span>
-
-                <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:block">
-                  {tvlLabel}
-                </span>
               </div>
             );
           })}
