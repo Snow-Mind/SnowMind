@@ -163,3 +163,64 @@ async def test_get_rebalance_history_sanitizes_legacy_rows(monkeypatch) -> None:
     assert len(result.logs) == 1
     assert result.logs[0].status == "failed"
     assert "Legacy rebalance status" in (result.logs[0].skip_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_get_rebalance_history_backfills_executed_metadata(monkeypatch) -> None:
+    """Executed rows missing amount/protocol fields should be normalized for transaction UIs."""
+
+    class _MissingMetadataDB:
+        def __init__(self):
+            self._count_query = _FakeRebalanceLogsQuery(count=1)
+            self._rows_query = _FakeRebalanceLogsQuery(rows=[
+                {
+                    "id": "00000000-0000-0000-0000-000000000010",
+                    "status": "executed",
+                    "skip_reason": None,
+                    "from_protocol": None,
+                    "to_protocol": None,
+                    "amount_moved": "$0.00",
+                    "proposed_allocations": '{"euler_v2":"$1.00"}',
+                    "executed_allocations": None,
+                    "apr_improvement": None,
+                    "gas_cost_usd": None,
+                    "tx_hash": "0xabc",
+                    "created_at": "2026-04-01T00:00:00Z",
+                }
+            ])
+            self._table_calls = 0
+
+        def table(self, name: str):
+            assert name == "rebalance_logs"
+            self._table_calls += 1
+            return self._count_query if self._table_calls == 1 else self._rows_query
+
+    db = _MissingMetadataDB()
+
+    async def _fake_lookup_account(_db, _address, _auth):
+        return {"id": "acct-metadata", "address": "0xabc"}
+
+    monkeypatch.setattr(rebalance, "_lookup_account", _fake_lookup_account)
+
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/rebalance/0xabc/history",
+        "headers": [],
+    })
+
+    result = await rebalance.get_rebalance_history(
+        request=request,
+        address="0xabc",
+        db=db,
+        _auth={"sub": "did:privy:test"},
+        limit=10,
+        offset=0,
+        transactions_only=True,
+    )
+
+    assert result.total == 1
+    assert len(result.logs) == 1
+    assert result.logs[0].amount_moved == "1.000000"
+    assert result.logs[0].from_protocol == "rebalance"
+    assert result.logs[0].to_protocol == "euler_v2"

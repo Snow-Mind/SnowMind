@@ -76,30 +76,7 @@ export default function LiveRates({
               height={24}
               className="rounded-full"
             />
-            {meta.vaultUrl && !r.isComingSoon ? (
-              <a
-                href={meta.vaultUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm font-medium text-arctic transition-colors hover:text-glacier"
-                title={`Open ${meta.name}`}
-              >
-                {r.name}
-              </a>
-            ) : (
-              <span className="text-sm font-medium text-arctic">{r.name}</span>
-            )}
-            {meta.vaultUrl && !r.isComingSoon && (
-              <a
-                href={meta.vaultUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted-foreground transition-colors hover:text-glacier"
-                title={`View ${meta.name} vault`}
-              >
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
+            <span className="text-sm font-medium text-arctic">{r.name}</span>
             {r.isComingSoon && (
               <span className="rounded-full bg-amber/10 px-2 py-0.5 text-[10px] text-amber">
                 Coming Soon

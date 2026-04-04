@@ -214,7 +214,7 @@ export const PROTOCOL_CONFIG = {
     description: 'Isolated lending market — savUSD/USDC on Silo V2',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.SILO_SAVUSD_VAULT),
-    vaultUrl: 'https://app.silo.finance/markets/avalanche/142?action=deposit',
+    vaultUrl: 'https://app.silo.finance/markets/avalanche/savusd-usdc-142?action=deposit',
   },
   silo_susdp_usdc: {
     id: 'silo_susdp_usdc' as const,

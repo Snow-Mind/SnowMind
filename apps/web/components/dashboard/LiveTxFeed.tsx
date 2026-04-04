@@ -39,8 +39,10 @@ type ExtendedLogEntry = RebalanceLogEntry & {
 interface TransactionItem {
   entry: ExtendedLogEntry;
   action: Exclude<ActionType, "monitoring">;
-  protocol: string;
-  amountValue: number;
+  operationProtocol: string;
+  sourceProtocol: string;
+  destinationProtocol: string;
+  amountValue: number | null;
   amountLabel: string;
   allocations: Record<string, number>;
   reasoning: string;
@@ -52,7 +54,11 @@ function parseAllocations(entry: RebalanceLogEntry): Record<string, number> {
 
   const parsed: Record<string, number> = {};
   for (const [protocol, value] of Object.entries(source)) {
-    const numeric = Number(value);
+    let numeric = Number(value);
+    if (!Number.isFinite(numeric) && typeof value === "string") {
+      const cleaned = value.replace(/[^0-9.-]/g, "");
+      numeric = Number(cleaned);
+    }
     if (Number.isFinite(numeric) && numeric > 0) {
       parsed[protocol] = numeric;
     }
@@ -70,6 +76,7 @@ function protocolLabel(protocolId: string | null | undefined): string {
   if (normalized === "idle") return "Smart Account";
   if (normalized === "user_eoa" || normalized === "user_wallet") return "Wallet";
   if (normalized === "withdrawal") return "Protocol";
+  if (normalized === "rebalance") return "Rebalance";
   const key = protocolId as ProtocolId;
   const cfg = PROTOCOL_CONFIG[key];
   return cfg?.name ?? protocolId;
@@ -83,11 +90,22 @@ function topProtocol(allocations: Record<string, number>): string {
   return protocolLabel(protocolId);
 }
 
-function formatAmountLabel(amount: number): string {
-  if (Number.isFinite(amount) && amount > 0) {
-    return `${formatUsd(amount)} USDC`;
+function parseNumericAmount(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[^0-9.-]/g, "");
+    const numeric = Number(cleaned);
+    if (Number.isFinite(numeric)) return numeric;
   }
-  return "USDC";
+  return null;
+}
+
+function formatAmountLabel(amount: number | null): string {
+  if (amount != null && Number.isFinite(amount) && amount > 0) {
+    const maxFractionDigits = amount < 1 ? 6 : 2;
+    return `${formatUsd(amount, { minFractionDigits: 2, maxFractionDigits })} USDC`;
+  }
+  return "-";
 }
 
 function formatTransactionDate(iso: string): string {
@@ -139,7 +157,7 @@ const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: s
 };
 
 function isIdleOnlyTransaction(tx: TransactionItem): boolean {
-  const topProtocol = tx.protocol.trim().toLowerCase();
+  const topProtocol = tx.operationProtocol.trim().toLowerCase();
   const toProtocol = (tx.entry.toProtocol ?? "").trim().toLowerCase();
   if (topProtocol === "idle" || toProtocol === "idle") {
     return true;
@@ -172,8 +190,16 @@ function TransactionDetailsPanel({ tx, className = "" }: { tx: TransactionItem; 
           <p className="mt-0.5 font-mono text-xs text-arctic">{tx.amountLabel}</p>
         </div>
         <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Protocol</p>
-          <p className="mt-0.5 text-xs text-arctic">{tx.protocol}</p>
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">From</p>
+          <p className="mt-0.5 text-xs text-arctic">{tx.sourceProtocol}</p>
+        </div>
+        <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">To</p>
+          <p className="mt-0.5 text-xs text-arctic">{tx.destinationProtocol}</p>
+        </div>
+        <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Allocation</p>
+          <p className="mt-0.5 text-xs text-arctic">{allocationSummary(tx.allocations)}</p>
         </div>
         <div className="rounded-md border border-border/30 bg-white/40 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Date</p>
@@ -329,43 +355,51 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
     const reasonLower = (entry.skipReason ?? "").toLowerCase();
     const explicitDeposit = entry.fromProtocol === "user_wallet" || reasonLower.includes("initial funding transfer");
     const explicitWithdrawal = entry.fromProtocol === "withdrawal" || entry.toProtocol === "user_eoa";
+    const movedAmountRaw = parseNumericAmount(entry.amountMoved);
+    const movedAmount = movedAmountRaw != null && movedAmountRaw > 0
+      ? movedAmountRaw
+      : null;
+    const derivedSourceProtocol = explicitWithdrawal
+      ? (Object.keys(allocations).length > 0 ? topProtocol(allocations) : protocolLabel(entry.fromProtocol || "withdrawal"))
+      : protocolLabel(entry.fromProtocol || (explicitDeposit ? "user_wallet" : "rebalance"));
+    const derivedDestinationProtocol = protocolLabel(entry.toProtocol || (explicitDeposit ? "idle" : "rebalance"));
 
     if (explicitDeposit) {
-      const depositedAmount = Number(entry.amountMoved ?? "0");
-      const normalizedAmount = Number.isFinite(depositedAmount) && depositedAmount > 0
-        ? depositedAmount
-        : allocationSum;
+      const normalizedAmount = movedAmount ?? (allocationSum > 0 ? allocationSum : null);
       transactions.push({
         entry,
         action: "deposit",
-        protocol: protocolLabel(entry.toProtocol || "idle"),
+        operationProtocol: derivedDestinationProtocol,
+        sourceProtocol: derivedSourceProtocol,
+        destinationProtocol: derivedDestinationProtocol,
         amountValue: normalizedAmount,
         amountLabel: formatAmountLabel(normalizedAmount),
         allocations,
         reasoning: deriveReasoning(entry) ?? "USDC funded to smart account.",
       });
-      if (normalizedAmount > 0) {
+      if (normalizedAmount != null && normalizedAmount > 0) {
         previousPortfolioTotal += normalizedAmount;
       }
       continue;
     }
 
     if (explicitWithdrawal) {
-      const withdrawnAmount = Number(entry.amountMoved ?? "0");
-      const normalizedAmount = Number.isFinite(withdrawnAmount) && withdrawnAmount > 0
-        ? withdrawnAmount
-        : 0;
+      const normalizedAmount = movedAmount ?? (allocationSum > 0 ? allocationSum : null);
       const reasoning = deriveReasoning(entry) ?? "Funds moved back to your wallet.";
       transactions.push({
         entry,
         action: "withdraw",
-        protocol: protocolLabel(entry.toProtocol || "user_eoa"),
+        operationProtocol: derivedSourceProtocol,
+        sourceProtocol: derivedSourceProtocol,
+        destinationProtocol: derivedDestinationProtocol,
         amountValue: normalizedAmount,
         amountLabel: formatAmountLabel(normalizedAmount),
         allocations,
         reasoning,
       });
-      previousPortfolioTotal = Math.max(previousPortfolioTotal - normalizedAmount, 0);
+      if (normalizedAmount != null && normalizedAmount > 0) {
+        previousPortfolioTotal = Math.max(previousPortfolioTotal - normalizedAmount, 0);
+      }
       continue;
     }
 
@@ -373,23 +407,17 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
       continue;
     }
 
-    const isDeposit = previousPortfolioTotal <= 0.01 && allocationSum > 0.01;
-    const action: Exclude<ActionType, "monitoring"> = isDeposit ? "deposit" : "rebalance";
-
-    const movedAmountRaw = Number(entry.amountMoved ?? "0");
-    const movedAmount = Number.isFinite(movedAmountRaw) && movedAmountRaw > 0
-      ? movedAmountRaw
-      : null;
+    const action: Exclude<ActionType, "monitoring"> = "rebalance";
     const deltaAmount = Math.abs(allocationSum - previousPortfolioTotal);
 
-    const amountValue = isDeposit
-      ? (movedAmount ?? allocationSum)
-      : (movedAmount ?? (deltaAmount > 0 ? deltaAmount : allocationSum));
+    const amountValue = movedAmount ?? (deltaAmount > 0 ? deltaAmount : (allocationSum > 0 ? allocationSum : null));
 
     transactions.push({
       entry,
       action,
-      protocol: topProtocol(allocations),
+      operationProtocol: topProtocol(allocations),
+      sourceProtocol: derivedSourceProtocol,
+      destinationProtocol: derivedDestinationProtocol,
       amountValue,
       amountLabel: formatAmountLabel(amountValue),
       allocations,
@@ -505,7 +533,7 @@ export default function LiveTxFeed({
                           </div>
                           <div className="min-w-0">
                             <p className="truncate text-xs font-medium text-arctic">
-                              {cfg.label} · {tx.protocol}
+                              {cfg.label} · {tx.operationProtocol}
                             </p>
                             <p className="truncate text-[10px] text-muted-foreground">{tx.reasoning}</p>
                           </div>
@@ -547,7 +575,7 @@ export default function LiveTxFeed({
                           <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/40 bg-void-2/30 ${cfg.iconClass}`}>
                             <Icon className="h-3.5 w-3.5" />
                           </div>
-                          <p className="truncate text-xs font-medium text-arctic">{cfg.label} · {tx.protocol}</p>
+                          <p className="truncate text-xs font-medium text-arctic">{cfg.label} · {tx.operationProtocol}</p>
                         </div>
                         <span className="shrink-0 font-mono text-xs text-arctic">{tx.amountLabel}</span>
                       </div>

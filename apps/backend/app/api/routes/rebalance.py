@@ -30,6 +30,47 @@ router = APIRouter()  # Auth applied per-endpoint
 _VALID_REBALANCE_STATUSES = {"executed", "skipped", "failed", "halted", "pending"}
 
 
+def _parse_alloc_amount(value: object) -> Decimal | None:
+    """Parse numeric allocation values from legacy/string payloads."""
+    try:
+        if isinstance(value, Decimal):
+            numeric = value
+        elif isinstance(value, (int, float)):
+            numeric = Decimal(str(value))
+        elif isinstance(value, str):
+            cleaned = value.replace(",", "").replace("$", "").strip()
+            if not cleaned:
+                return None
+            numeric = Decimal(cleaned)
+        else:
+            return None
+    except Exception:
+        return None
+
+    if numeric <= Decimal("0"):
+        return None
+    return numeric
+
+
+def _normalize_alloc_map(payload: object) -> dict[str, Decimal]:
+    if not isinstance(payload, dict):
+        return {}
+
+    normalized: dict[str, Decimal] = {}
+    for protocol_id, raw_amount in payload.items():
+        amount = _parse_alloc_amount(raw_amount)
+        if amount is None:
+            continue
+        normalized[str(protocol_id)] = amount
+    return normalized
+
+
+def _dominant_protocol(allocations: dict[str, Decimal]) -> str | None:
+    if not allocations:
+        return None
+    return max(allocations.items(), key=lambda item: item[1])[0]
+
+
 def _classify_reason(
     *,
     is_active: bool,
@@ -388,6 +429,42 @@ async def get_rebalance_history(
                     normalized[alloc_field] = None
             elif alloc_value is not None and not isinstance(alloc_value, dict):
                 normalized[alloc_field] = None
+
+        proposed_allocations = _normalize_alloc_map(normalized.get("proposed_allocations"))
+        executed_allocations = _normalize_alloc_map(normalized.get("executed_allocations"))
+        if not executed_allocations and proposed_allocations:
+            executed_allocations = dict(proposed_allocations)
+
+        if proposed_allocations:
+            normalized["proposed_allocations"] = {
+                pid: str(amount.quantize(Decimal("0.000001")))
+                for pid, amount in proposed_allocations.items()
+            }
+        elif normalized.get("proposed_allocations") is not None:
+            normalized["proposed_allocations"] = None
+
+        if executed_allocations:
+            normalized["executed_allocations"] = {
+                pid: str(amount.quantize(Decimal("0.000001")))
+                for pid, amount in executed_allocations.items()
+            }
+        elif normalized.get("executed_allocations") is not None:
+            normalized["executed_allocations"] = None
+
+        if raw_status == "executed":
+            parsed_amount_moved = _parse_alloc_amount(normalized.get("amount_moved"))
+            if parsed_amount_moved is None:
+                alloc_total = sum(executed_allocations.values())
+                if alloc_total > Decimal("0"):
+                    normalized["amount_moved"] = str(alloc_total.quantize(Decimal("0.000001")))
+
+            if not normalized.get("from_protocol") and executed_allocations:
+                normalized["from_protocol"] = "rebalance"
+
+            if not normalized.get("to_protocol"):
+                dominant = _dominant_protocol(executed_allocations)
+                if dominant:
+                    normalized["to_protocol"] = dominant
 
         for numeric_field in ("apr_improvement", "gas_cost_usd"):
             numeric_value = normalized.get(numeric_field)
