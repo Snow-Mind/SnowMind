@@ -41,14 +41,14 @@ function AllocationSlider({
             className="h-3 w-3 rounded-full"
             style={{ backgroundColor: config.color }}
           />
-          <span className="text-sm font-medium text-white/80">{config.name}</span>
+          <span className="text-sm font-medium text-[#1A1715]">{config.name}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-mono font-semibold text-white/90">
+          <span className="text-sm font-mono font-semibold text-[#1A1715]">
             {value}%
           </span>
           {maxValue < 100 && (
-            <span className="text-xs text-white/30 font-mono">
+            <span className="text-xs text-[#8A837C] font-mono">
               (max {maxValue}%)
             </span>
           )}
@@ -64,13 +64,15 @@ function AllocationSlider({
           onChange={(e) => onChange(protocolId, Number(e.target.value))}
           disabled={disabled}
           className="w-full h-2 rounded-full appearance-none cursor-pointer
-            bg-white/[0.06] accent-current
+            bg-[#E8E2DA] accent-current
             disabled:opacity-40 disabled:cursor-not-allowed
             [&::-webkit-slider-thumb]:appearance-none
             [&::-webkit-slider-thumb]:w-4
             [&::-webkit-slider-thumb]:h-4
             [&::-webkit-slider-thumb]:rounded-full
             [&::-webkit-slider-thumb]:bg-white
+            [&::-webkit-slider-thumb]:border
+            [&::-webkit-slider-thumb]:border-[#D4CEC7]
             [&::-webkit-slider-thumb]:shadow-lg
             [&::-webkit-slider-thumb]:transition-transform
             [&::-webkit-slider-thumb]:hover:scale-125"
@@ -82,7 +84,7 @@ function AllocationSlider({
           style={{
             width: `${(value / maxValue) * 100}%`,
             backgroundColor: config.color,
-            opacity: disabled ? 0.3 : 0.6,
+            opacity: disabled ? 0.3 : 0.45,
           }}
         />
       </div>
@@ -115,12 +117,12 @@ export function AllocationSliders({
 
   if (!isEligible) {
     return (
-      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
-        <div className="flex items-center gap-2 text-white/40 mb-2">
+      <div className="rounded-2xl border border-[#E8E2DA] bg-[#F8F4EF] p-5">
+        <div className="mb-2 flex items-center gap-2 text-[#8A837C]">
           <Lock className="h-4 w-4" />
           <span className="text-sm font-medium">Custom Allocation</span>
         </div>
-        <p className="text-xs text-white/30 leading-relaxed">
+        <p className="text-xs leading-relaxed text-[#8A837C]">
           Per-protocol allocation caps are available for deposits of $10,000 or more.
           Your current balance: ${totalBalance.toLocaleString()}.
         </p>
@@ -129,16 +131,16 @@ export function AllocationSliders({
   }
 
   return (
-    <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
+    <div className="rounded-2xl border border-[#E8E2DA] bg-[#F8F4EF] p-5">
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-2">
-          <SlidersHorizontal className="h-4 w-4 text-white/50" />
-          <span className="text-sm font-semibold text-white/90">Per-Protocol Max Caps</span>
+          <SlidersHorizontal className="h-4 w-4 text-[#8A837C]" />
+          <span className="text-sm font-semibold text-[#1A1715]">Per-Protocol Max Caps</span>
         </div>
         <div className="group relative">
-          <Info className="h-4 w-4 text-white/30 cursor-help" />
-          <div className="absolute right-0 top-6 z-50 hidden group-hover:block w-64 rounded-lg bg-zinc-800 border border-white/10 p-3 text-xs text-white/60 shadow-xl">
+          <Info className="h-4 w-4 cursor-help text-[#8A837C]" />
+          <div className="absolute right-0 top-6 z-50 hidden w-64 rounded-lg border border-[#E8E2DA] bg-white p-3 text-xs text-[#5C5550] shadow-xl group-hover:block">
             Set maximum allocation per protocol. The system applies the most restrictive
             of your cap and the 15% TVL system cap. Spark has no TVL cap since its rate is fixed.
           </div>
