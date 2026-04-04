@@ -39,7 +39,50 @@ class ActiveSessionKey(TypedDict):
     serialized_permission: str
     session_private_key: str
     allowed_protocols: list[str]
+    allocation_caps: dict[str, int] | None
     max_amount_per_tx: str
+
+
+_DEFAULT_ALLOWED_PROTOCOLS = [
+    "aave_v3",
+    "benqi",
+    "spark",
+    "euler_v2",
+    "silo_savusd_usdc",
+    "silo_susdp_usdc",
+]
+
+
+def _normalize_allocation_caps(raw_caps: object) -> dict[str, int] | None:
+    if not isinstance(raw_caps, dict):
+        return None
+
+    normalized: dict[str, int] = {}
+    for raw_pid, raw_value in raw_caps.items():
+        pid = str(raw_pid).strip().lower()
+        if pid == "aave":
+            pid = "aave_v3"
+        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+            continue
+
+        if isinstance(raw_value, bool):
+            continue
+
+        parsed: int | None = None
+        if isinstance(raw_value, int):
+            parsed = raw_value
+        elif isinstance(raw_value, float) and raw_value.is_integer():
+            parsed = int(raw_value)
+        elif isinstance(raw_value, str):
+            stripped = raw_value.strip()
+            if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+                parsed = int(stripped)
+
+        if parsed is None or parsed < 0 or parsed > 100:
+            continue
+        normalized[pid] = parsed
+
+    return normalized or None
 
 
 def _kms_key_id_or_none() -> str | None:
@@ -101,18 +144,35 @@ def is_session_key_expiry_valid(expires_raw: object, now: datetime | None = None
 def _select_latest_active_key_row(db: Client, account_id: UUID) -> dict | None:
     """Return the newest non-expired active session-key row for an account."""
     now = datetime.now(timezone.utc)
-    rows = (
-        db.table("session_keys")
-        .select(
-            "id, key_address, serialized_permission, expires_at, allowed_protocols, "
-            "max_amount_per_tx, created_at"
+    try:
+        rows = (
+            db.table("session_keys")
+            .select(
+                "id, key_address, serialized_permission, expires_at, allowed_protocols, "
+                "allocation_caps, max_amount_per_tx, created_at"
+            )
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
         )
-        .eq("account_id", str(account_id))
-        .eq("is_active", True)
-        .order("created_at", desc=True)
-        .limit(5)
-        .execute()
-    )
+    except Exception as exc:
+        # Backward-compatible fallback during rolling deploys before migration.
+        if "allocation_caps" not in str(exc).lower():
+            raise
+        rows = (
+            db.table("session_keys")
+            .select(
+                "id, key_address, serialized_permission, expires_at, allowed_protocols, "
+                "max_amount_per_tx, created_at"
+            )
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
 
     if not rows.data:
         return None
@@ -419,23 +479,39 @@ def store_session_key(
     except Exception as exc:
         logger.warning("Failed to deactivate old session keys for %s: %s", account_id, exc)
 
-    row = (
-        db.table("session_keys")
-        .insert(
-            {
-                "account_id": str(account_id),
-                "serialized_permission": encrypted,
-                "key_address": key_address,
-                "expires_at": expires_at,
-                "is_active": True,
-                "allowed_protocols": session_key_data.get("allowed_protocols")
-                    or session_key_data.get("allowedProtocols")
-                    or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
-                "max_amount_per_tx": session_key_data.get("max_amount_per_tx", "0"),
-            }
+    row_payload = {
+        "account_id": str(account_id),
+        "serialized_permission": encrypted,
+        "key_address": key_address,
+        "expires_at": expires_at,
+        "is_active": True,
+        "allowed_protocols": session_key_data.get("allowed_protocols")
+            or session_key_data.get("allowedProtocols")
+            or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
+        "allocation_caps": _normalize_allocation_caps(
+            session_key_data.get("allocation_caps")
+            if "allocation_caps" in session_key_data
+            else session_key_data.get("allocationCaps")
+        ),
+        "max_amount_per_tx": session_key_data.get("max_amount_per_tx", "0"),
+    }
+
+    try:
+        row = (
+            db.table("session_keys")
+            .insert(row_payload)
+            .execute()
         )
-        .execute()
-    )
+    except Exception as exc:
+        # Backward-compatible fallback during rolling deploys before migration.
+        if "allocation_caps" not in str(exc).lower():
+            raise
+        row_payload.pop("allocation_caps", None)
+        row = (
+            db.table("session_keys")
+            .insert(row_payload)
+            .execute()
+        )
     new_id = row.data[0]["id"]
     logger.info("Session key stored for account %s (key_id=%s)", account_id, new_id)
     return new_id
@@ -465,6 +541,7 @@ def get_active_session_key_metadata(db: Client, account_id: UUID) -> dict | None
         if isinstance(raw_allowed, list) and raw_allowed
         else ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"]
     )
+    allocation_caps = _normalize_allocation_caps(row.get("allocation_caps"))
 
     return {
         "id": row.get("id"),
@@ -472,6 +549,7 @@ def get_active_session_key_metadata(db: Client, account_id: UUID) -> dict | None
         "expires_at": row.get("expires_at"),
         "created_at": row.get("created_at"),
         "allowed_protocols": allowed_protocols,
+        "allocation_caps": allocation_caps,
         "max_amount_per_tx": str(row.get("max_amount_per_tx") or "0"),
         "serialized_permission": row.get("serialized_permission"),
     }
@@ -538,6 +616,7 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
         "serialized_permission": serialized_permission,
         "session_private_key": session_private_key,
         "allowed_protocols": allowed_protocols,
+        "allocation_caps": _normalize_allocation_caps(row.get("allocation_caps")),
         "max_amount_per_tx": str(row.get("max_amount_per_tx") or "0"),
     }
 
@@ -575,15 +654,28 @@ def get_deactivated_session_key_records(
     Keys that fail decryption or lack a ``session_private_key`` are
     silently skipped.
     """
-    result = (
-        db.table("session_keys")
-        .select("id, serialized_permission, expires_at, allowed_protocols")
-        .eq("account_id", str(account_id))
-        .eq("is_active", False)
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
+    try:
+        result = (
+            db.table("session_keys")
+            .select("id, serialized_permission, expires_at, allowed_protocols, allocation_caps")
+            .eq("account_id", str(account_id))
+            .eq("is_active", False)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as exc:
+        if "allocation_caps" not in str(exc).lower():
+            raise
+        result = (
+            db.table("session_keys")
+            .select("id, serialized_permission, expires_at, allowed_protocols")
+            .eq("account_id", str(account_id))
+            .eq("is_active", False)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
     if not result.data:
         return []
 
@@ -616,6 +708,7 @@ def get_deactivated_session_key_records(
                 "serialized_permission": serialized_permission,
                 "session_private_key": session_private_key,
                 "allowed_protocols": allowed_protocols,
+                "allocation_caps": _normalize_allocation_caps(row.get("allocation_caps")),
             })
         except Exception:
             logger.debug(

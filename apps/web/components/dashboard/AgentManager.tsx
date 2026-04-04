@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { LayoutGrid, Loader2, Save } from "lucide-react";
+import { Check, LayoutGrid, Loader2, Minus, Pencil, Plus, Save, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -31,6 +31,7 @@ interface AgentManagerProps {
   address?: string;
   hasActiveSessionKey: boolean;
   allowedProtocols: string[];
+  allocationCaps: Record<string, number> | null;
 }
 
 function normalizeAllowedProtocols(protocols: string[] | undefined): CanonicalProtocolId[] {
@@ -48,6 +49,40 @@ function normalizeAllowedProtocols(protocols: string[] | undefined): CanonicalPr
     normalized.push(canonical as CanonicalProtocolId);
   }
   return normalized;
+}
+
+function defaultAllocationCaps(): Record<CanonicalProtocolId, number> {
+  return Object.fromEntries(
+    CANONICAL_PROTOCOL_IDS.map((pid) => [pid, 100]),
+  ) as Record<CanonicalProtocolId, number>;
+}
+
+function normalizeAllocationCaps(
+  rawCaps: Record<string, number> | null | undefined,
+): Record<CanonicalProtocolId, number> {
+  const normalized = defaultAllocationCaps();
+  if (!rawCaps) {
+    return normalized;
+  }
+
+  for (const [rawPid, rawValue] of Object.entries(rawCaps)) {
+    const maybe = rawPid.toLowerCase().trim();
+    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    if (!CANONICAL_PROTOCOL_IDS.includes(canonical as CanonicalProtocolId)) continue;
+
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) continue;
+    normalized[canonical as CanonicalProtocolId] = Math.max(0, Math.min(100, Math.round(parsed)));
+  }
+
+  return normalized;
+}
+
+function areCapsEqual(
+  a: Record<CanonicalProtocolId, number>,
+  b: Record<CanonicalProtocolId, number>,
+): boolean {
+  return CANONICAL_PROTOCOL_IDS.every((pid) => a[pid] === b[pid]);
 }
 
 function formatTvl(tvl: number | undefined): string {
@@ -70,6 +105,7 @@ export default function AgentManager({
   address,
   hasActiveSessionKey,
   allowedProtocols,
+  allocationCaps,
 }: AgentManagerProps) {
   const queryClient = useQueryClient();
   const { data: protocolRates } = useProtocolRates();
@@ -79,29 +115,76 @@ export default function AgentManager({
     return normalized.length > 0 ? normalized : [...CANONICAL_PROTOCOL_IDS];
   }, [allowedProtocols]);
 
+  const currentCaps = useMemo(
+    () => normalizeAllocationCaps(allocationCaps),
+    [allocationCaps],
+  );
+
   const [selectedProtocols, setSelectedProtocols] = useState<Set<CanonicalProtocolId>>(
     () => new Set(currentScope),
   );
+  const [protocolCaps, setProtocolCaps] = useState<Record<CanonicalProtocolId, number>>(
+    () => currentCaps,
+  );
+  const [editingCapProtocol, setEditingCapProtocol] = useState<CanonicalProtocolId | null>(null);
+  const [pendingCapPct, setPendingCapPct] = useState<number>(100);
   const [saving, setSaving] = useState(false);
 
   const currentScopeKey = currentScope.join("|");
+  const currentCapsKey = CANONICAL_PROTOCOL_IDS.map((pid) => currentCaps[pid]).join("|");
+
   useEffect(() => {
     setSelectedProtocols(new Set(currentScope));
-  }, [currentScopeKey, currentScope]);
+    setProtocolCaps(currentCaps);
+    setEditingCapProtocol(null);
+  }, [currentScopeKey, currentScope, currentCapsKey, currentCaps]);
 
   const selectedOrdered = CANONICAL_PROTOCOL_IDS.filter((id) => selectedProtocols.has(id));
-  const canSave = selectedOrdered.length > 0 && !isSameOrderedScope(selectedOrdered, currentScope);
+  const scopeChanged = selectedOrdered.length > 0 && !isSameOrderedScope(selectedOrdered, currentScope);
+  const capsChanged = !areCapsEqual(protocolCaps, currentCaps);
+  const canSave = selectedOrdered.length > 0 && (scopeChanged || capsChanged);
 
   const toggleProtocol = (protocolId: CanonicalProtocolId, isEnabled: boolean) => {
     if (!isEnabled) return;
     setSelectedProtocols((prev) => {
       const next = new Set(prev);
       if (next.has(protocolId)) {
+        if (next.size <= 1) return prev;
         next.delete(protocolId);
       } else {
         next.add(protocolId);
       }
       return next;
+    });
+
+    if (editingCapProtocol === protocolId && selectedProtocols.has(protocolId)) {
+      setEditingCapProtocol(null);
+    }
+  };
+
+  const openCapEditor = (protocolId: CanonicalProtocolId) => {
+    if (!selectedProtocols.has(protocolId)) return;
+    setEditingCapProtocol(protocolId);
+    setPendingCapPct(protocolCaps[protocolId] ?? 100);
+  };
+
+  const cancelCapEdit = () => {
+    setEditingCapProtocol(null);
+  };
+
+  const confirmCapEdit = () => {
+    if (!editingCapProtocol) return;
+    setProtocolCaps((prev) => ({
+      ...prev,
+      [editingCapProtocol]: pendingCapPct,
+    }));
+    setEditingCapProtocol(null);
+  };
+
+  const adjustPendingCap = (delta: number) => {
+    setPendingCapPct((prev) => {
+      const next = prev + (delta * 10);
+      return Math.max(10, Math.min(100, next));
     });
   };
 
@@ -121,16 +204,28 @@ export default function AgentManager({
 
     setSaving(true);
     try {
-      await api.updateAllowedProtocols(address, selectedOrdered);
+      if (scopeChanged) {
+        await api.updateAllowedProtocols(address, selectedOrdered);
+      }
+      if (capsChanged) {
+        await api.updateAllocationCaps(address, protocolCaps as Record<string, number>);
+      }
+
       await Promise.allSettled([
         queryClient.invalidateQueries({ queryKey: ["account-detail", address] }),
         queryClient.invalidateQueries({ queryKey: ["rebalance-status", address] }),
         queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] }),
       ]);
 
-      toast.success("Agent market scope updated.");
+      if (scopeChanged && capsChanged) {
+        toast.success("Agent markets and max caps updated.");
+      } else if (scopeChanged) {
+        toast.success("Agent market scope updated.");
+      } else {
+        toast.success("Allocation caps updated.");
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to update market scope";
+      const message = err instanceof Error ? err.message : "Failed to update agent preferences";
       toast.error(message);
     } finally {
       setSaving(false);
@@ -148,7 +243,7 @@ export default function AgentManager({
         </div>
 
         <p className="text-xs text-[#8A837C]">
-          Control which markets your optimizer is allowed to use after onboarding.
+          Control which markets your optimizer is allowed to use and set per-market max exposure caps.
           Changes sync to your active session-key scope in backend.
           To change on-chain signed permissions, re-grant session key from Settings.
         </p>
@@ -170,14 +265,15 @@ export default function AgentManager({
         <div className="overflow-hidden rounded-lg border border-[#E8E2DA]">
           <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2 md:grid">
             <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
-            <span className="w-14 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Risk</span>
+            <span className="w-28 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Max Exposure</span>
             <span className="w-16 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">APY</span>
             <span className="w-20 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">TVL</span>
-            <span className="w-12 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
+            <span className="w-20 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
           </div>
 
           {MANAGED_PROTOCOLS.map((protocol, idx) => {
-            const isSelected = selectedProtocols.has(protocol.id as CanonicalProtocolId);
+            const protocolId = protocol.id as CanonicalProtocolId;
+            const isSelected = selectedProtocols.has(protocolId);
             const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
             const isEnabled = protocol.isActive;
             const apyLabel = rateData && rateData.currentApy > 0
@@ -187,11 +283,8 @@ export default function AgentManager({
             const displayRiskScore = rateData && Number.isFinite(rateData.riskScore)
               ? Math.round(rateData.riskScore)
               : protocol.riskScore;
-            const riskToneClass = displayRiskScore >= 9
-              ? "bg-[#059669]/10 text-[#059669]"
-              : displayRiskScore >= 7
-                ? "bg-[#D97706]/10 text-[#D97706]"
-                : "bg-[#DC2626]/10 text-[#DC2626]";
+            const displayCap = protocolCaps[protocolId] ?? 100;
+            const isEditingRow = editingCapProtocol === protocolId;
 
             return (
               <div
@@ -201,8 +294,10 @@ export default function AgentManager({
                   idx > 0 && "border-t border-[#E8E2DA]",
                   !isEnabled && "cursor-not-allowed opacity-55",
                   isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
+                  isEditingRow && "bg-[#1A1715]/90 text-white",
+                  editingCapProtocol && !isEditingRow && "opacity-45",
                 )}
-                onClick={() => toggleProtocol(protocol.id as CanonicalProtocolId, isEnabled)}
+                onClick={() => toggleProtocol(protocolId, isEnabled)}
               >
                 <div className="flex min-w-0 items-start gap-3">
                   <Image
@@ -218,6 +313,9 @@ export default function AgentManager({
                         <span className="sm:hidden">{protocol.shortName}</span>
                         <span className="hidden sm:inline">{protocol.name}</span>
                       </p>
+                      <span className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]">
+                        Risk {displayRiskScore}/10
+                      </span>
                       {!isEnabled && (
                         <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
                           Soon
@@ -230,13 +328,50 @@ export default function AgentManager({
                   </div>
                 </div>
 
-                <div className="hidden justify-center md:flex md:w-14">
-                  <span className={cn(
-                    "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
-                    riskToneClass,
-                  )}>
-                    {displayRiskScore}/10
-                  </span>
+                <div className="hidden justify-center md:flex md:w-28">
+                  {isEditingRow ? (
+                    <div className="flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-2 py-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          adjustPendingCap(-1);
+                        }}
+                        className="rounded-full p-1 text-white transition-colors hover:bg-white/15"
+                        disabled={pendingCapPct <= 10}
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="w-10 text-center font-mono text-xs font-semibold text-white">
+                        {pendingCapPct}%
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          adjustPendingCap(1);
+                        }}
+                        className="rounded-full p-1 text-white transition-colors hover:bg-white/15"
+                        disabled={pendingCapPct >= 100}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-[11px] font-semibold text-[#1A1715]">{displayCap}%</span>
+                      {isSelected && isEnabled && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openCapEditor(protocolId);
+                          }}
+                          className="rounded-full p-1 text-[#8A837C] transition-colors hover:bg-[#1A1715]/5 hover:text-[#1A1715]"
+                          title="Edit max exposure"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:block">
@@ -247,26 +382,73 @@ export default function AgentManager({
                   {tvlLabel}
                 </span>
 
-                <div className="flex justify-center md:w-12">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleProtocol(protocol.id as CanonicalProtocolId, isEnabled);
-                    }}
-                    className={cn(
-                      "flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors",
-                      !isEnabled && "opacity-40",
-                      isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
-                    )}
-                    disabled={!isEnabled}
-                  >
-                    <div
+                <div className="flex justify-center gap-1.5 md:w-20">
+                  {isEditingRow ? (
+                    <>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          cancelCapEdit();
+                        }}
+                        className="rounded-full bg-[#DC2626] p-1 text-white"
+                        title="Cancel"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          confirmCapEdit();
+                        }}
+                        className="rounded-full bg-white p-1 text-[#1A1715]"
+                        title="Apply"
+                      >
+                        <Check className="h-3 w-3" />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleProtocol(protocolId, isEnabled);
+                      }}
                       className={cn(
-                        "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                        isSelected ? "translate-x-4" : "translate-x-0",
+                        "flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors",
+                        !isEnabled && "opacity-40",
+                        isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
                       )}
-                    />
-                  </button>
+                      disabled={!isEnabled}
+                    >
+                      <div
+                        className={cn(
+                          "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                          isSelected ? "translate-x-4" : "translate-x-0",
+                        )}
+                      />
+                    </button>
+                  )}
+                </div>
+
+                <div className="col-span-2 flex items-center justify-between rounded-md bg-[#F8F4EF] px-2.5 py-2 md:hidden">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-wide text-[#8A837C]">Max Exposure</span>
+                    <span className="font-mono text-xs font-semibold text-[#1A1715]">{displayCap}%</span>
+                  </div>
+                  {isSelected && isEnabled && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isEditingRow) {
+                          confirmCapEdit();
+                        } else {
+                          openCapEditor(protocolId);
+                        }
+                      }}
+                      className="rounded-full p-1 text-[#8A837C] hover:bg-[#1A1715]/5"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -287,12 +469,12 @@ export default function AgentManager({
           {saving ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Saving Market Scope...
+              Saving Preferences...
             </>
           ) : (
             <>
               <Save className="h-4 w-4" />
-              Save Market Scope
+              Save Agent Preferences
             </>
           )}
         </button>

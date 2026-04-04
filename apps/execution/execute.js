@@ -278,20 +278,6 @@ const PERMIT2_ABI = [
   },
 ]
 
-const REGISTRY_ABI = [
-  {
-    name: "logRebalance",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "fromProtocol", type: "address" },
-      { name: "toProtocol", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [],
-  },
-]
-
 function formatExecutionError(err) {
   const message = err?.shortMessage || err?.message || "Unknown execution error"
   const details = err?.details ? ` | details=${err.details}` : ""
@@ -806,130 +792,6 @@ function resolveContractKey(protocol, contracts) {
     silo_susdp_usdc: "SILO_SUSDP_VAULT",
   }
   return contracts[map[protocol]] || null
-}
-
-function parseUsdcAmountToRaw(amountUSDC) {
-  if (amountUSDC === undefined || amountUSDC === null || amountUSDC === "MAX") {
-    return null
-  }
-  try {
-    const parsed = parseUnits(String(amountUSDC), 6)
-    return parsed > 0n ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function buildRegistryLogCalls({ withdrawals, deposits, contracts }) {
-  const registryAddress = contracts?.REGISTRY
-  const idleAddress = contracts?.USDC
-
-  if (!registryAddress || registryAddress.toLowerCase() === zeroAddress) {
-    return []
-  }
-  if (!idleAddress || idleAddress.toLowerCase() === zeroAddress) {
-    return []
-  }
-
-  // Build source buckets from withdrawals. "MAX" withdrawals are tracked as
-  // unbounded sources because exact realized assets are only known post-withdraw.
-  const boundedSources = []
-  let unboundedSource = null
-  for (const wd of withdrawals || []) {
-    const sourceAddress = resolveContractKey(wd.protocol, contracts)
-    if (!sourceAddress) continue
-
-    if (wd.amountUSDC === "MAX") {
-      if (!unboundedSource) {
-        unboundedSource = { protocol: wd.protocol, address: sourceAddress }
-      }
-      continue
-    }
-
-    const rawAmount = parseUsdcAmountToRaw(wd.amountUSDC)
-    if (!rawAmount) continue
-    boundedSources.push({
-      protocol: wd.protocol,
-      address: sourceAddress,
-      remaining: rawAmount,
-    })
-  }
-
-  const calls = []
-
-  // Log protocol-to-protocol moves by mapping withdrawals into deposits.
-  for (const dep of deposits || []) {
-    const targetAddress = resolveContractKey(dep.protocol, contracts)
-    const depositRaw = parseUsdcAmountToRaw(dep.amountUSDC)
-    if (!targetAddress || !depositRaw) continue
-
-    let remaining = depositRaw
-
-    for (const source of boundedSources) {
-      if (remaining <= 0n) break
-      if (source.remaining <= 0n) continue
-
-      const moved = source.remaining < remaining ? source.remaining : remaining
-      if (moved <= 0n) continue
-
-      calls.push({
-        to: registryAddress,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: REGISTRY_ABI,
-          functionName: "logRebalance",
-          args: [source.address, targetAddress, moved],
-        }),
-      })
-
-      source.remaining -= moved
-      remaining -= moved
-    }
-
-    if (remaining > 0n && unboundedSource) {
-      calls.push({
-        to: registryAddress,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: REGISTRY_ABI,
-          functionName: "logRebalance",
-          args: [unboundedSource.address, targetAddress, remaining],
-        }),
-      })
-      remaining = 0n
-    }
-
-    // If deposits exceed known withdrawals, treat remainder as idle->protocol.
-    if (remaining > 0n && idleAddress.toLowerCase() !== targetAddress.toLowerCase()) {
-      calls.push({
-        to: registryAddress,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: REGISTRY_ABI,
-          functionName: "logRebalance",
-          args: [idleAddress, targetAddress, remaining],
-        }),
-      })
-    }
-  }
-
-  // Remaining withdrawals are protocol->idle moves (de-risking / undeployed cash).
-  for (const source of boundedSources) {
-    if (source.remaining <= 0n) continue
-    if (source.address.toLowerCase() === idleAddress.toLowerCase()) continue
-
-    calls.push({
-      to: registryAddress,
-      value: 0n,
-      data: encodeFunctionData({
-        abi: REGISTRY_ABI,
-        functionName: "logRebalance",
-        args: [source.address, idleAddress, source.remaining],
-      }),
-    })
-  }
-
-  return calls
 }
 
 async function resolveKernelOwner(permissionAccount) {
@@ -1799,47 +1661,9 @@ export async function executeRebalance({
       }))
     }
 
-    // Best-effort on-chain audit logging in a NON-CRITICAL follow-up UserOp.
-    // This ensures Registry failures never revert the main rebalance transaction.
-    let registryLogTxHash = null
-    let registryLogError = null
-    const registryLogCalls = buildRegistryLogCalls({ withdrawals, deposits, contracts })
-
-    if (registryLogCalls.length > 0) {
-      try {
-        const { client: registryLogClient } = await getKernelClient(
-          serializedPermission,
-          sessionPrivateKey || "",
-          { withPaymaster: true, forceRegularMode: true },
-        )
-        registryLogTxHash = await registryLogClient.sendTransaction({ calls: registryLogCalls })
-        console.log(JSON.stringify({
-          level: "info",
-          action: "registry_log_rebalance_submitted",
-          smartAccountAddress,
-          txHash: registryLogTxHash,
-          callCount: registryLogCalls.length,
-          timestamp: new Date().toISOString(),
-        }))
-      } catch (registryErr) {
-        registryLogError = formatExecutionError(registryErr)
-        console.log(JSON.stringify({
-          level: "warn",
-          action: "registry_log_rebalance_failed_nonfatal",
-          smartAccountAddress,
-          callCount: registryLogCalls.length,
-          error: registryLogError,
-          timestamp: new Date().toISOString(),
-        }))
-      }
-    }
-
     return {
       txHash,
       explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
-      registryLogTxHash,
-      registryLogExplorerUrl: registryLogTxHash ? `${EXPLORER_BASE}/tx/${registryLogTxHash}` : null,
-      registryLogError,
     }
   } catch (err) {
     const allText = [err?.shortMessage, err?.message, err?.details,

@@ -57,3 +57,4 @@ class SessionKeyStatusResponse(CamelModel):
 
 class AccountDetailResponse(AccountResponse):
     session_key: SessionKeyStatusResponse | None = None
+    allocation_caps: dict[str, int] | None = None

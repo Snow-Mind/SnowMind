@@ -4,11 +4,16 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
+  Check,
   CheckCircle2,
   Copy,
   ExternalLink,
   Loader2,
+  Minus,
+  Pencil,
+  Plus,
   Wallet,
+  X,
   Zap,
   Shield,
   ArrowRight,
@@ -117,6 +122,31 @@ const MARKET_PROTOCOL_IDS: ProtocolId[] = [
 const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
   .map((id) => PROTOCOL_CONFIG[id])
   .filter(Boolean);
+
+function defaultAllocationCaps(): Record<ProtocolId, number> {
+  return Object.fromEntries(
+    MARKET_PROTOCOL_IDS.map((pid) => [pid, 100]),
+  ) as Record<ProtocolId, number>;
+}
+
+function normalizeIncomingAllocationCaps(
+  rawCaps: Record<string, number> | null | undefined,
+): Record<ProtocolId, number> {
+  const caps = defaultAllocationCaps();
+  if (!rawCaps) return caps;
+
+  for (const [rawPid, rawValue] of Object.entries(rawCaps)) {
+    const maybe = rawPid.toLowerCase().trim();
+    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    if (!MARKET_PROTOCOL_IDS.includes(canonical as ProtocolId)) continue;
+
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) continue;
+    caps[canonical as ProtocolId] = Math.max(0, Math.min(100, Math.round(parsed)));
+  }
+
+  return caps;
+}
 
 const RECEIPT_CONFIRMATION_TIMEOUT_MS = 180_000;
 const RECEIPT_POLL_INTERVAL_MS = 3_000;
@@ -376,6 +406,11 @@ export default function OnboardingPage() {
   const [selectedProtocols, setSelectedProtocols] = useState<Set<string>>(
     () => new Set(MARKET_PROTOCOLS.filter((p) => p.defaultEnabled).map((p) => p.id)),
   );
+  const [allocationCaps, setAllocationCaps] = useState<Record<ProtocolId, number>>(
+    () => defaultAllocationCaps(),
+  );
+  const [editingCapProtocolId, setEditingCapProtocolId] = useState<ProtocolId | null>(null);
+  const [pendingCapPct, setPendingCapPct] = useState<number>(100);
   // Diversification preference — hardcoded to balanced (allocation strategy UI removed)
   const diversificationPref: DiversificationPreference = "balanced";
 
@@ -390,6 +425,36 @@ export default function OnboardingPage() {
         next.add(id);
       }
       return next;
+    });
+
+    if (editingCapProtocolId === id && selectedProtocols.has(id)) {
+      setEditingCapProtocolId(null);
+    }
+  };
+
+  const openCapEditor = (protocolId: ProtocolId) => {
+    if (!selectedProtocols.has(protocolId)) return;
+    setEditingCapProtocolId(protocolId);
+    setPendingCapPct(allocationCaps[protocolId] ?? 100);
+  };
+
+  const cancelCapEdit = () => {
+    setEditingCapProtocolId(null);
+  };
+
+  const confirmCapEdit = () => {
+    if (!editingCapProtocolId) return;
+    setAllocationCaps((prev) => ({
+      ...prev,
+      [editingCapProtocolId]: pendingCapPct,
+    }));
+    setEditingCapProtocolId(null);
+  };
+
+  const adjustPendingCap = (delta: number) => {
+    setPendingCapPct((prev) => {
+      const next = prev + (delta * 10);
+      return Math.max(10, Math.min(100, next));
     });
   };
 
@@ -427,6 +492,11 @@ export default function OnboardingPage() {
   const yearlyEarning = effectiveDepositAmount >= 1 ? effectiveDepositAmount * (bestApy / 100) : 0;
 
   const hasAuthError = accountDetailError instanceof APIError && accountDetailError.status === 401;
+
+  useEffect(() => {
+    if (!accountDetail?.allocationCaps) return;
+    setAllocationCaps(normalizeIncomingAllocationCaps(accountDetail.allocationCaps));
+  }, [accountDetail?.allocationCaps]);
 
   // Poll USDC balance of user's EOA wallet
   useEffect(() => {
@@ -1012,6 +1082,7 @@ export default function OnboardingPage() {
           sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
           expiresAt: sessionKeyResult.expiresAt,
           allowedProtocols: Array.from(effectiveSelectedProtocols),
+          allocationCaps: allocationCaps,
         },
       });
 
@@ -1036,6 +1107,7 @@ export default function OnboardingPage() {
             sessionKeyAddress: sessionKeyResult.sessionKeyAddress,
             expiresAt: sessionKeyResult.expiresAt,
             allowedProtocols: Array.from(effectiveSelectedProtocols),
+            allocationCaps: allocationCaps,
             force: true,
           });
         } catch {
@@ -1405,7 +1477,7 @@ export default function OnboardingPage() {
               </div>
 
               <p className="text-xs text-[#8A837C]">
-                Select which markets your optimizer is allowed to use, then choose a diversification strategy.
+                Select markets your optimizer can use and set per-market max exposure.
               </p>
 
               {regrantOnlyMode && (
@@ -1438,15 +1510,16 @@ export default function OnboardingPage() {
                 {/* Desktop table header */}
                 <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2 md:grid">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
-                  <span className="w-14 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Risk</span>
+                  <span className="w-28 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Max Exposure</span>
                   <span className="w-16 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">APY</span>
                   <span className="w-20 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">TVL</span>
-                  <span className="w-12 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
+                  <span className="w-20 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
                 </div>
 
                 {/* Protocol rows */}
                 {MARKET_PROTOCOLS.map((protocol, idx) => {
-                  const isSelected = selectedProtocols.has(protocol.id);
+                  const protocolId = protocol.id as ProtocolId;
+                  const isSelected = selectedProtocols.has(protocolId);
                   const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
                   const tvl = rateData?.tvlUsd;
                   const apy = rateData?.currentApy;
@@ -1457,6 +1530,8 @@ export default function OnboardingPage() {
                   const tvlLabel = tvl != null && tvl > 0
                     ? `$${tvl >= 1e9 ? `${(tvl / 1e9).toFixed(1)}B` : tvl >= 1e6 ? `${(tvl / 1e6).toFixed(1)}M` : `${(tvl / 1e3).toFixed(0)}K`}`
                     : "-";
+                  const displayCap = allocationCaps[protocolId] ?? 100;
+                  const isEditingRow = editingCapProtocolId === protocolId;
                   const riskToneClass = protocol.riskScore >= 9
                     ? "bg-[#059669]/10 text-[#059669]"
                     : protocol.riskScore >= 7
@@ -1471,8 +1546,13 @@ export default function OnboardingPage() {
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
+                        isEditingRow && "bg-[#1A1715]/90 text-white",
+                        editingCapProtocolId && !isEditingRow && "opacity-45",
                       )}
-                      onClick={() => toggleProtocol(protocol.id, isEnabled)}
+                      onClick={() => {
+                        if (editingCapProtocolId && editingCapProtocolId !== protocolId) return;
+                        toggleProtocol(protocolId, isEnabled);
+                      }}
                     >
                       {/* Protocol info */}
                       <div className="flex min-w-0 items-start gap-3 md:order-1">
@@ -1489,6 +1569,9 @@ export default function OnboardingPage() {
                               <span className="sm:hidden">{protocol.shortName}</span>
                               <span className="hidden sm:inline">{protocol.name}</span>
                             </p>
+                            <span className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]">
+                              Risk {protocol.riskScore}/10
+                            </span>
                             {!isEnabled && (
                               <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
                                 Soon
@@ -1513,34 +1596,51 @@ export default function OnboardingPage() {
                         </div>
                       </div>
 
-                      {/* Toggle */}
-                      <div className="flex justify-center md:order-5 md:w-12">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleProtocol(protocol.id, isEnabled); }}
-                          className={cn(
-                            "flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors",
-                            !isEnabled && "opacity-40",
-                            isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
-                          )}
-                          disabled={!isEnabled}
-                        >
-                          <div
-                            className={cn(
-                              "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                              isSelected ? "translate-x-4" : "translate-x-0",
+                      {/* Max exposure (desktop) */}
+                      <div className="hidden justify-center md:order-2 md:flex md:w-28">
+                        {isEditingRow ? (
+                          <div className="flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-2 py-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                adjustPendingCap(-1);
+                              }}
+                              className="rounded-full p-1 text-white transition-colors hover:bg-white/15"
+                              disabled={pendingCapPct <= 10}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </button>
+                            <span className="w-10 text-center font-mono text-xs font-semibold text-white">
+                              {pendingCapPct}%
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                adjustPendingCap(1);
+                              }}
+                              className="rounded-full p-1 text-white transition-colors hover:bg-white/15"
+                              disabled={pendingCapPct >= 100}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[11px] font-semibold text-[#1A1715]">{displayCap}%</span>
+                            {isSelected && isEnabled && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openCapEditor(protocolId);
+                                }}
+                                className="rounded-full p-1 text-[#8A837C] transition-colors hover:bg-[#1A1715]/5 hover:text-[#1A1715]"
+                                title="Edit max exposure"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
                             )}
-                          />
-                        </button>
-                      </div>
-
-                      {/* Risk Score (desktop) */}
-                      <div className="hidden justify-center md:order-2 md:flex md:w-14">
-                        <span className={cn(
-                          "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
-                          riskToneClass,
-                        )}>
-                          {protocol.riskScore}/10
-                        </span>
+                          </div>
+                        )}
                       </div>
 
                       {/* APY (desktop) */}
@@ -1552,6 +1652,54 @@ export default function OnboardingPage() {
                       <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:order-4 md:block">
                         {tvlLabel}
                       </span>
+
+                      {/* Toggle / row actions */}
+                      <div className="flex justify-center gap-1.5 md:order-5 md:w-20">
+                        {isEditingRow ? (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                cancelCapEdit();
+                              }}
+                              className="rounded-full bg-[#DC2626] p-1 text-white"
+                              title="Cancel"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                confirmCapEdit();
+                              }}
+                              className="rounded-full bg-white p-1 text-[#1A1715]"
+                              title="Apply"
+                            >
+                              <Check className="h-3 w-3" />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleProtocol(protocolId, isEnabled);
+                            }}
+                            className={cn(
+                              "flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors",
+                              !isEnabled && "opacity-40",
+                              isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
+                            )}
+                            disabled={!isEnabled}
+                          >
+                            <div
+                              className={cn(
+                                "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                                isSelected ? "translate-x-4" : "translate-x-0",
+                              )}
+                            />
+                          </button>
+                        )}
+                      </div>
 
                       {/* Compact mobile metrics */}
                       <div className="col-span-2 grid grid-cols-3 gap-2 rounded-md bg-[#F8F4EF] px-2.5 py-2 md:hidden">
@@ -1572,6 +1720,55 @@ export default function OnboardingPage() {
                           <p className="text-[9px] uppercase tracking-wide text-[#8A837C]">TVL</p>
                           <p className="mt-1 font-mono text-[11px] text-[#5C5550]">{tvlLabel}</p>
                         </div>
+                      </div>
+
+                      <div className="col-span-2 flex items-center justify-between rounded-md bg-[#F8F4EF] px-2.5 py-2 md:hidden">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] uppercase tracking-wide text-[#8A837C]">Max Exposure</span>
+                          {isEditingRow ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  adjustPendingCap(-1);
+                                }}
+                                className="rounded-full bg-[#1A1715]/10 p-1 text-[#1A1715]"
+                                disabled={pendingCapPct <= 10}
+                              >
+                                <Minus className="h-3 w-3" />
+                              </button>
+                              <span className="font-mono text-xs font-semibold text-[#1A1715]">{pendingCapPct}%</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  adjustPendingCap(1);
+                                }}
+                                className="rounded-full bg-[#1A1715]/10 p-1 text-[#1A1715]"
+                                disabled={pendingCapPct >= 100}
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="font-mono text-xs font-semibold text-[#1A1715]">{displayCap}%</span>
+                          )}
+                        </div>
+                        {isSelected && isEnabled && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isEditingRow) {
+                                confirmCapEdit();
+                              } else {
+                                openCapEditor(protocolId);
+                              }
+                            }}
+                            className="rounded-full p-1 text-[#8A837C] hover:bg-[#1A1715]/5"
+                            title={isEditingRow ? "Apply" : "Edit max exposure"}
+                          >
+                            {isEditingRow ? <Check className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

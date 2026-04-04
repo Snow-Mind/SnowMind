@@ -61,3 +61,9 @@ contracts/broadcast/
 
 # ── Misc ─────────────────────────────────────────────────────
 docs/snowmindenv.txt
+
+# ── Local strategy/docs scratch files (keep out of repo) ─────────
+zany-moseying-penguin.md
+zany-moseying-penguin (2).md
+tvl-cap-liquidity.md
+tech_stack.md

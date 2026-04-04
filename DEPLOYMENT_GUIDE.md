@@ -340,6 +340,7 @@ CREATE TABLE IF NOT EXISTS session_keys (
   expires_at            TIMESTAMPTZ NOT NULL,
   is_active             BOOLEAN DEFAULT true,
   allowed_protocols     TEXT[] NOT NULL,
+  allocation_caps       JSONB DEFAULT NULL,
   max_amount_per_tx     TEXT NOT NULL,
   created_at            TIMESTAMPTZ DEFAULT now()
 );

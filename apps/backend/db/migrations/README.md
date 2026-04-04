@@ -48,6 +48,7 @@ Expected tables (after all migrations):
 | 012 | `012_enforce_single_active_session_key.sql` | Enforce single active session key per account to prevent race-induced divergence |
 | 013 | `013_add_internal_request_nonces.sql` | Add persistent nonce table for execution-service replay protection across restarts |
 | 014 | `014_add_activity_indexes_and_platform_kpis.sql` | Add activity feed indexes, backfill funding activity rows, and enterprise KPI snapshot storage |
+| 015 | `015_add_session_key_allocation_caps.sql` | Add per-protocol max allocation caps (`allocation_caps`) to session keys |
 
 ## Creating a new migration
 

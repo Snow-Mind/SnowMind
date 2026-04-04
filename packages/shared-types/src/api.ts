@@ -19,6 +19,7 @@ export interface RegisterAccountRequest {
     sessionKeyAddress: string;
     expiresAt: number;
     allowedProtocols?: string[];
+    allocationCaps?: Record<string, number>;
   };
   initialAllocation?: Record<string, string>;
 }
@@ -167,6 +168,7 @@ export interface AccountDetailResponse {
   createdAt: string;
   diversificationPreference: DiversificationPreference;
   sessionKey: SessionKeyStatusResponse | null;
+  allocationCaps: Record<string, number> | null;
 }
 
 export interface DiversificationPreferenceResponse {
@@ -175,5 +177,10 @@ export interface DiversificationPreferenceResponse {
 
 export interface AllowedProtocolsUpdateResponse {
   allowedProtocols: string[];
+  updatedRows: number;
+}
+
+export interface AllocationCapsUpdateResponse {
+  allocationCaps: Record<string, number> | null;
   updatedRows: number;
 }

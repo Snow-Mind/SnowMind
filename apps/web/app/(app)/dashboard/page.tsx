@@ -617,6 +617,7 @@ export default function DashboardPage() {
             address={address}
             hasActiveSessionKey={hasActiveSessionKey}
             allowedProtocols={activeProtocolIds}
+            allocationCaps={accountDetail?.allocationCaps ?? null}
           />
         </ErrorBoundary>
       )}

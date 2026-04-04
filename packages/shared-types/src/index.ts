@@ -17,6 +17,7 @@ export type {
   AccountDetailResponse,
   DiversificationPreferenceResponse,
   AllowedProtocolsUpdateResponse,
+  AllocationCapsUpdateResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
 } from "./api";

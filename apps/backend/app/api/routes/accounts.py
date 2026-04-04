@@ -46,6 +46,13 @@ _DEFAULT_ALLOWED_PROTOCOLS = [
 ]
 
 
+def _canonical_protocol_id(raw_protocol_id: str) -> str:
+    pid = str(raw_protocol_id).strip().lower()
+    if pid == "aave":
+        return "aave_v3"
+    return pid
+
+
 def _normalize_allowed_protocols(protocols: list[str] | None) -> list[str]:
     """Normalize allowed protocol IDs to canonical values and preserve order."""
     if not protocols:
@@ -54,17 +61,69 @@ def _normalize_allowed_protocols(protocols: list[str] | None) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
     for raw in protocols:
-        pid = str(raw).strip().lower()
+        pid = _canonical_protocol_id(raw)
         if not pid:
             continue
-        if pid == "aave":
-            pid = "aave_v3"
         if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
             continue
         if pid in seen:
             continue
         seen.add(pid)
         normalized.append(pid)
+    return normalized
+
+
+def _normalize_allocation_caps(
+    caps: dict[str, object] | None,
+    *,
+    strict: bool = False,
+) -> dict[str, int] | None:
+    """Normalize per-protocol max allocation caps.
+
+    Returns a canonical ``{protocol_id: integer_percent}`` mapping where values
+    are constrained to ``0..100``. ``None`` means no explicit caps (equivalent to
+    100% for all protocols).
+    """
+    if caps is None:
+        return None
+    if not isinstance(caps, dict):
+        if strict:
+            raise ValueError("allocationCaps must be an object")
+        return None
+
+    normalized: dict[str, int] = {}
+    for raw_pid, raw_value in caps.items():
+        pid = _canonical_protocol_id(str(raw_pid))
+        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+            if strict:
+                raise ValueError(f"Invalid protocol in allocationCaps: {raw_pid}")
+            continue
+
+        value: int | None = None
+        if isinstance(raw_value, bool):
+            value = None
+        elif isinstance(raw_value, int):
+            value = raw_value
+        elif isinstance(raw_value, float) and raw_value.is_integer():
+            value = int(raw_value)
+        elif isinstance(raw_value, str):
+            stripped = raw_value.strip()
+            if stripped.isdigit() or (
+                stripped.startswith("-") and stripped[1:].isdigit()
+            ):
+                value = int(stripped)
+
+        if value is None or value < 0 or value > 100:
+            if strict:
+                raise ValueError(
+                    f"allocationCaps[{pid}] must be an integer between 0 and 100"
+                )
+            continue
+
+        normalized[pid] = value
+
+    if not normalized:
+        return None
     return normalized
 
 
@@ -103,6 +162,44 @@ def _resolve_allowed_protocols(
     return list(_DEFAULT_ALLOWED_PROTOCOLS)
 
 
+def _resolve_allocation_caps(
+    db: Client,
+    account_id: str,
+    requested_caps: dict[str, object] | None,
+) -> dict[str, int] | None:
+    """Resolve per-protocol cap map for session-key storage.
+
+    Priority:
+      1) Explicit caps from request.
+      2) Most recent stored session-key caps for this account.
+      3) ``None`` (means 100% for all protocols).
+    """
+    explicit = _normalize_allocation_caps(requested_caps, strict=True)
+    if explicit is not None:
+        return explicit
+
+    try:
+        latest = (
+            db.table("session_keys")
+            .select("allocation_caps")
+            .eq("account_id", account_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if latest.data:
+            preserved = _normalize_allocation_caps(
+                latest.data[0].get("allocation_caps"),
+                strict=False,
+            )
+            if preserved is not None:
+                return preserved
+    except Exception as exc:
+        logger.warning("Failed to reuse previous allocation_caps for %s: %s", account_id, exc)
+
+    return None
+
+
 def _find_excluded_funded_protocols(
     db: Client,
     account_id: str,
@@ -125,11 +222,9 @@ def _find_excluded_funded_protocols(
 
     excluded: list[str] = []
     for row in allocations.data or []:
-        pid = str(row.get("protocol_id") or "").strip().lower()
+        pid = _canonical_protocol_id(str(row.get("protocol_id") or ""))
         if not pid:
             continue
-        if pid == "aave":
-            pid = "aave_v3"
         if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
             continue
 
@@ -402,7 +497,26 @@ async def _do_register(
     session_key_stored = False
     if req.session_key_data:
         try:
-            store_session_key(db, account["id"], req.session_key_data, force=True)
+            session_key_payload = dict(req.session_key_data)
+
+            resolved_protocols = _resolve_allowed_protocols(
+                db,
+                account["id"],
+                session_key_payload.get("allowedProtocols")
+                or session_key_payload.get("allowed_protocols"),
+            )
+            resolved_caps = _resolve_allocation_caps(
+                db,
+                account["id"],
+                session_key_payload.get("allocationCaps")
+                or session_key_payload.get("allocation_caps"),
+            )
+
+            session_key_payload["allowedProtocols"] = resolved_protocols
+            if resolved_caps is not None:
+                session_key_payload["allocationCaps"] = resolved_caps
+
+            store_session_key(db, account["id"], session_key_payload, force=True)
             session_key_stored = True
         except Exception as exc:
             logger.error(
@@ -576,6 +690,7 @@ async def get_account(
             created_at=datetime.now(timezone.utc).isoformat(),
             diversification_preference="balanced",
             session_key=None,
+            allocation_caps=None,
         )
 
     row = acct.data[0]
@@ -602,6 +717,7 @@ async def get_account(
         created_at=row["created_at"],
         diversification_preference=row.get("diversification_preference", "balanced"),
         session_key=sk_resp,
+        allocation_caps=sk_meta.get("allocation_caps") if sk_meta else None,
     )
 
 
@@ -657,6 +773,7 @@ class StoreSessionKeyRequest(BaseModel):
     session_key_address: str = Field(..., alias="sessionKeyAddress")
     expires_at: int | str = Field(..., alias="expiresAt")
     allowed_protocols: list[str] | None = Field(None, alias="allowedProtocols")
+    allocation_caps: dict[str, int] | None = Field(None, alias="allocationCaps")
     force: bool = Field(False, description="Bypass renewal guard and always store the new session key")
     owner_address: str | None = Field(
         None,
@@ -732,6 +849,11 @@ async def store_account_session_key(
 
     # Store session key
     resolved_protocols = _resolve_allowed_protocols(db, account_id, req.allowed_protocols)
+    resolved_caps = _resolve_allocation_caps(
+        db,
+        account_id,
+        req.allocation_caps,
+    )
 
     session_key_data = {
         "serializedPermission": req.serialized_permission,
@@ -739,6 +861,7 @@ async def store_account_session_key(
         "sessionKeyAddress": req.session_key_address,
         "expiresAt": req.expires_at,
         "allowedProtocols": resolved_protocols,
+        "allocationCaps": resolved_caps,
     }
     try:
         key_id = store_session_key(db, account_id, session_key_data, force=req.force)
@@ -792,6 +915,11 @@ class DiversificationPreferenceRequest(BaseModel):
 
 class AllowedProtocolsUpdateRequest(BaseModel):
     allowed_protocols: list[str] = Field(..., alias="allowedProtocols")
+    model_config = {"populate_by_name": True}
+
+
+class AllocationCapsUpdateRequest(BaseModel):
+    allocation_caps: dict[str, int] = Field(..., alias="allocationCaps")
     model_config = {"populate_by_name": True}
 
 
@@ -933,6 +1061,81 @@ async def update_allowed_protocols(
 
     return {
         "allowedProtocols": normalized,
+        "updatedRows": active_count,
+    }
+
+
+@router.put("/{address}/allocation-caps")
+@limiter.limit("20/minute")
+async def update_allocation_caps(
+    request: Request,
+    address: str,
+    req: AllocationCapsUpdateRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Update active session-key per-protocol max allocation caps.
+
+    Caps are stored off-chain in ``session_keys.allocation_caps`` and applied by
+    the rebalancer as user-level constraints (most restrictive wins against
+    system TVL caps).
+    """
+    address = validate_eth_address(address)
+    acct = (
+        db.table("accounts")
+        .select("id, owner_address, privy_did")
+        .eq("address", address)
+        .limit(1)
+        .execute()
+    )
+    if not acct.data:
+        raise HTTPException(status_code=404, detail="Account not found")
+    verify_account_ownership(_auth, acct.data[0], db=db)
+
+    account_id = acct.data[0]["id"]
+
+    try:
+        normalized_caps = _normalize_allocation_caps(req.allocation_caps, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    active_keys = (
+        db.table("session_keys")
+        .select("id")
+        .eq("account_id", account_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    active_count = len(active_keys.data or [])
+    if active_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="No active session key found. Re-grant session key first",
+        )
+
+    try:
+        db.table("session_keys").update(
+            {
+                "allocation_caps": normalized_caps,
+            }
+        ).eq("account_id", account_id).eq("is_active", True).execute()
+    except Exception as exc:
+        logger.exception(
+            "Failed to update allocation caps for %s (account_id=%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update allocation caps",
+        ) from exc
+
+    # Best-effort: apply updated caps without waiting for next scheduler tick.
+    asyncio.create_task(_trigger_initial_rebalance(account_id, address))
+
+    return {
+        "allocationCaps": normalized_caps,
         "updatedRows": active_count,
     }
 

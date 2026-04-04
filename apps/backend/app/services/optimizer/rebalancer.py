@@ -99,6 +99,33 @@ def _permission_blob_contains_address(serialized_permission: str, address: str) 
         return False
 
 
+def _build_user_preferences(
+    protocol_ids: set[str],
+    allocation_caps: dict[str, int] | None,
+) -> dict[str, UserPreference]:
+    """Build allocator preferences from allowed protocols and optional cap map."""
+    caps = allocation_caps or {}
+    preferences: dict[str, UserPreference] = {}
+
+    for pid in protocol_ids:
+        cap_value = caps.get(pid)
+        if cap_value is None and pid == "aave_v3":
+            cap_value = caps.get("aave")
+
+        max_pct: Decimal | None = None
+        if cap_value is not None:
+            bounded = max(0, min(int(cap_value), 100))
+            max_pct = Decimal(str(bounded)) / Decimal("100")
+
+        preferences[pid] = UserPreference(
+            protocol_id=pid,
+            enabled=True,
+            max_pct=max_pct,
+        )
+
+    return preferences
+
+
 class Rebalancer:
     """Decides whether to rebalance and executes the on-chain moves."""
 
@@ -980,16 +1007,17 @@ class Rebalancer:
                     "; ".join(hr.exclusion_reasons),
                 )
 
+        allocation_caps = session_key_record.get("allocation_caps")
         allocation_result = compute_allocation(
             health_results=health_results,
             twap_apys=apy_by_protocol,
             protocol_tvls=tvl_by_protocol,
             total_balance=total_usd,
             protocol_utilizations=protocol_utilizations,
-            user_preferences={
-                pid: UserPreference(protocol_id=pid, enabled=True, max_pct=None)
-                for pid in allowed_rates
-            },
+            user_preferences=_build_user_preferences(
+                set(allowed_rates.keys()),
+                allocation_caps if isinstance(allocation_caps, dict) else None,
+            ),
         )
 
         result_allocations = allocation_result.allocations

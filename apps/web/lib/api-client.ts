@@ -15,6 +15,7 @@ import type {
   DiversificationPreference,
   DiversificationPreferenceResponse,
   AllowedProtocolsUpdateResponse,
+  AllocationCapsUpdateResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
 } from "@snowmind/shared-types";
@@ -323,6 +324,7 @@ export const api = {
       sessionKeyAddress: string;
       expiresAt: number;
       allowedProtocols?: string[];
+      allocationCaps?: Record<string, number>;
       initialAllocation?: Record<string, string>;
       force?: boolean;
       ownerAddress?: string;
@@ -365,6 +367,18 @@ export const api = {
       {
         method: "PUT",
         body: JSON.stringify({ allowedProtocols }),
+      },
+    ),
+
+  updateAllocationCaps: (
+    address: string,
+    allocationCaps: Record<string, number>,
+  ) =>
+    request<AllocationCapsUpdateResponse>(
+      `/api/v1/accounts/${encodeURIComponent(address)}/allocation-caps`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ allocationCaps }),
       },
     ),
 
