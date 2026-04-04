@@ -248,8 +248,8 @@ export const IDLE_CONFIG = {
 
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
-// Protocol IDs used by optimizer/runtime paths (keep aave alias for compatibility)
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'aave', 'benqi', 'spark', 'euler_v2', 'silo_savusd_usdc', 'silo_susdp_usdc']
+// Protocol IDs used by optimizer/runtime paths (canonical IDs only)
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'spark', 'euler_v2', 'silo_savusd_usdc', 'silo_susdp_usdc']
 
 // Session key on-chain call policy — function selectors per protocol
 export const SESSION_KEY_SELECTORS = {

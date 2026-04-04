@@ -184,9 +184,12 @@ export default function AgentManager({
               ? `${(rateData.currentApy * 100).toFixed(2)}%`
               : "-";
             const tvlLabel = formatTvl(rateData?.tvlUsd);
-            const riskToneClass = protocol.riskScore >= 9
+            const displayRiskScore = rateData && Number.isFinite(rateData.riskScore)
+              ? Math.round(rateData.riskScore)
+              : protocol.riskScore;
+            const riskToneClass = displayRiskScore >= 9
               ? "bg-[#059669]/10 text-[#059669]"
-              : protocol.riskScore >= 7
+              : displayRiskScore >= 7
                 ? "bg-[#D97706]/10 text-[#D97706]"
                 : "bg-[#DC2626]/10 text-[#DC2626]";
 
@@ -232,7 +235,7 @@ export default function AgentManager({
                     "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
                     riskToneClass,
                   )}>
-                    {protocol.riskScore}/10
+                    {displayRiskScore}/10
                   </span>
                 </div>
 

@@ -25,7 +25,15 @@ logger = logging.getLogger("snowmind")
 router = APIRouter()  # All portfolio reads are public
 
 # Protocol display names
-_NAMES = {"benqi": "Benqi", "aave_v3": "Aave V3", "euler_v2": "Euler V2", "spark": "Spark Savings", "silo_savusd_usdc": "Silo savUSD/USDC", "silo_susdp_usdc": "Silo sUSDp/USDC"}
+_NAMES = {
+    "benqi": "Benqi",
+    "aave_v3": "Aave V3",
+    "aave": "Aave V3",  # Legacy alias kept for backward-compatible display
+    "euler_v2": "Euler V2",
+    "spark": "Spark Savings",
+    "silo_savusd_usdc": "Silo savUSD/USDC",
+    "silo_susdp_usdc": "Silo sUSDp/USDC",
+}
 
 # ERC-20 balanceOf ABI
 _ERC20_ABI = [
@@ -53,6 +61,12 @@ _SNOWTRACE_TIMEOUT_SECONDS = 20.0
 # Short-lived in-memory cache to dampen duplicate dashboard polling.
 _portfolio_cache: dict[str, tuple[float, dict]] = {}
 _principal_reconcile_cooldowns: dict[str, float] = {}
+
+
+def _canonical_protocol_id(protocol_id: str) -> str:
+    if protocol_id == "aave":
+        return "aave_v3"
+    return protocol_id
 
 
 def _should_refresh_amount(existing_amount: Decimal, onchain_amount: Decimal) -> bool:
@@ -433,20 +447,38 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | Non
 
 
 async def _get_live_apys() -> dict[str, Decimal]:
-    """Get live APYs from the rate fetcher (uses 24h snapshots for vaults).
+    """Get display APYs aligned with /optimizer/rates behavior.
 
-    CRITICAL: Do NOT call adapter.get_rate() directly for ERC-4626 vaults
-    (Euler, Spark, Silo). The rate_fetcher passes the 24h convertToAssets
-    snapshot to vault adapters, producing stable APYs. Calling get_rate()
-    without the snapshot falls back to short-term share-price observation
-    (~60s window) which produces wildly inaccurate APYs when rewards
-    accrue in lumps (e.g. Euler 9Summits: measured 18% vs actual 6%).
+    Uses the same smoothing/fallback policy as rates endpoint:
+      1. Prefer TWAP APY when available.
+      2. Fall back to fresh spot APY from fetch_all_rates.
+      3. Fall back to last cached TWAP snapshot when live fetch is missing.
+      4. Apply same display safety cap (25%).
+
+    This keeps portfolio allocations, optimizer preview, and dashboard rate cards
+    consistent under transient RPC failures.
     """
-    from app.services.optimizer.rate_fetcher import RateFetcher
+    from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
     try:
         fetcher = RateFetcher()
         rates = await fetcher.fetch_all_rates()
-        return {pid: rate.apy for pid, rate in rates.items()}
+        apys: dict[str, Decimal] = {}
+
+        for pid in ACTIVE_ADAPTERS.keys():
+            rate = rates.get(pid)
+            if rate is not None:
+                display_apy = rate.apy
+                twap_apy = twap_buffer.get_twap_effective_apy(pid)
+                if twap_apy is not None and twap_apy > Decimal("0"):
+                    display_apy = twap_apy
+                apys[pid] = min(display_apy, Decimal("0.25"))
+                continue
+
+            cached = twap_buffer.get_latest(pid)
+            if cached is not None:
+                apys[pid] = min(cached.effective_apy, Decimal("0.25"))
+
+        return apys
     except Exception as exc:
         logger.warning("Rate fetcher failed in portfolio: %s", exc)
         return {}
@@ -532,18 +564,42 @@ async def get_portfolio(
     total_current_value = Decimal(0)
     db_protocol_ids: set[str] = set()
     for row in allocs.data or []:
-        amt = Decimal(str(row["amount_usdc"]))
+        raw_protocol_id = str(row.get("protocol_id") or "")
+        if not raw_protocol_id:
+            continue
+
+        protocol_id = _canonical_protocol_id(raw_protocol_id)
+        amt = Decimal(str(row.get("amount_usdc") or 0))
+        if amt <= Decimal("0"):
+            continue
+
         total_current_value += amt
-        db_protocol_ids.add(row["protocol_id"])
-        allocations.append(
-            AllocationResponse(
-                protocol_id=row["protocol_id"],
-                name=_NAMES.get(row["protocol_id"], row["protocol_id"]),
-                amount_usdc=amt,
-                allocation_pct=Decimal(str(row["allocation_pct"])),
-                current_apy=Decimal(str(row["apy_at_allocation"] or 0)),
+        db_protocol_ids.add(protocol_id)
+
+        row_apy = Decimal(str(row.get("apy_at_allocation") or 0))
+        row_pct = Decimal(str(row.get("allocation_pct") or 0))
+
+        existing = next((a for a in allocations if a.protocol_id == protocol_id), None)
+        if existing is None:
+            allocations.append(
+                AllocationResponse(
+                    protocol_id=protocol_id,
+                    name=_NAMES.get(protocol_id, protocol_id),
+                    amount_usdc=amt,
+                    allocation_pct=row_pct,
+                    current_apy=row_apy,
+                )
             )
-        )
+            continue
+
+        previous_amount = existing.amount_usdc
+        combined_amount = previous_amount + amt
+        if combined_amount > Decimal("0"):
+            existing.current_apy = (
+                (existing.current_apy * previous_amount) + (row_apy * amt)
+            ) / combined_amount
+        existing.amount_usdc = combined_amount
+        existing.allocation_pct = existing.allocation_pct + row_pct
 
     # ── Parallel on-chain reads: protocol balances + idle USDC ────────────
     # APYs come from the rate_fetcher cache (uses 24h snapshots for vaults).

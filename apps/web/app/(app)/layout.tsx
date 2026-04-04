@@ -1022,12 +1022,73 @@ function AgentDetailsModal({
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const [withdrawStep, setWithdrawStep] = useState<"idle" | "processing" | "deactivating">("idle");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [withdrawPreview, setWithdrawPreview] = useState<{
+    currentBalance: number;
+    userReceives: number;
+    agentFee: number;
+  } | null>(null);
 
-  // Compute USDC balance across all allocations
-  const totalUsdc = portfolio?.allocations?.reduce(
+  // Compute a robust fallback balance while preview is loading.
+  const allocationTotalUsdc = portfolio?.allocations?.reduce(
     (sum, a) => sum + Number(a.amountUsdc),
     0,
   ) ?? 0;
+  const portfolioTotalUsdc = portfolio
+    ? Math.max(Number(portfolio.totalDepositedUsd) + Number(portfolio.totalYieldUsd), 0)
+    : 0;
+  const fallbackTotalUsdc = Math.max(allocationTotalUsdc, portfolioTotalUsdc, 0);
+
+  const displayUserReceivesUsdc = withdrawPreview?.userReceives ?? fallbackTotalUsdc;
+  const requestCurrentBalanceUsdc = withdrawPreview?.currentBalance ?? fallbackTotalUsdc;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWithdrawalPreview() {
+      if (!smartAccountAddress) return;
+      if (fallbackTotalUsdc <= 0) {
+        setWithdrawPreview(null);
+        setPreviewError(null);
+        return;
+      }
+
+      setPreviewLoading(true);
+      setPreviewError(null);
+      try {
+        const data = await api.previewWithdrawal({
+          smartAccountAddress,
+          withdrawAmount: fallbackTotalUsdc.toFixed(6),
+          isFullWithdrawal: true,
+        });
+
+        if (cancelled) return;
+
+        const parsedCurrent = Number(data.currentBalance);
+        const parsedReceives = Number(data.userReceives);
+        const parsedFee = Number(data.agentFee);
+
+        setWithdrawPreview({
+          currentBalance: Number.isFinite(parsedCurrent) ? parsedCurrent : fallbackTotalUsdc,
+          userReceives: Number.isFinite(parsedReceives) ? parsedReceives : fallbackTotalUsdc,
+          agentFee: Number.isFinite(parsedFee) ? parsedFee : 0,
+        });
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        setPreviewError(msg);
+        setWithdrawPreview(null);
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }
+
+    void loadWithdrawalPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [smartAccountAddress, fallbackTotalUsdc]);
 
   const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
 
@@ -1035,7 +1096,7 @@ function AgentDetailsModal({
     if (!smartAccountAddress) return;
     setWithdrawStep("processing");
 
-    const requestedAmount = Math.max(totalUsdc, 0).toFixed(6);
+    const requestedAmount = Math.max(requestCurrentBalanceUsdc, 0).toFixed(6);
 
     if (!wallet) {
       toast.error("Please connect MetaMask to authorize withdrawal.");
@@ -1149,12 +1210,28 @@ function AgentDetailsModal({
               <p className="text-sm font-medium text-[#1A1715]">Withdraw Agent Account balance</p>
               <div className="mt-1 flex items-center gap-1.5">
                 <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#2775CA] text-[8px] font-bold text-white">$</span>
-                <span className="font-mono text-sm text-[#5C5550]">{totalUsdc.toFixed(2)} USDC</span>
+                <span className="font-mono text-sm text-[#5C5550]">
+                  {previewLoading
+                    ? "Calculating..."
+                    : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
+                </span>
               </div>
+              {withdrawPreview && withdrawPreview.agentFee > 0 && (
+                <p className="mt-1 text-[10px] text-[#8A837C]">
+                  Net after ${(withdrawPreview.agentFee).toFixed(6)} agent fee
+                </p>
+              )}
+              {previewError && (
+                <p className="mt-1 text-[10px] text-[#DC2626]">{previewError}</p>
+              )}
             </div>
             <button
               onClick={handleFullWithdraw}
-              disabled={withdrawStep === "processing" || totalUsdc <= 0}
+              disabled={
+                withdrawStep === "processing"
+                || previewLoading
+                || displayUserReceivesUsdc <= 0
+              }
               className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
             >
               {withdrawStep === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

@@ -50,6 +50,10 @@ export default function LiveRates({
       PROTOCOL_CONFIG[r.protocolId as keyof typeof PROTOCOL_CONFIG];
     if (!meta) return null;
 
+    const displayRiskScore = Number.isFinite(r.riskScore)
+      ? Math.round(r.riskScore)
+      : meta.riskScore;
+
     const isSelected = activeProtocolIds.includes(r.protocolId);
     const hasAllocation = activeAllocationIds.includes(r.protocolId);
     const isActive = isSelected && hasAllocation; // Actively depositing
@@ -84,7 +88,7 @@ export default function LiveRates({
             )}
             {!r.isComingSoon && (
               <span className="rounded-full bg-void-2 px-2 py-0.5 text-[10px] text-muted-foreground">
-                Risk {meta.riskScore}/10
+                Risk {displayRiskScore}/10
               </span>
             )}
           </div>

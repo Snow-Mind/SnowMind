@@ -28,7 +28,8 @@ from app.services.fee_calculator import (
 )
 from app.services.execution.session_key import get_active_session_key, get_active_session_key_record, revoke_session_key
 from app.services.execution.executor import ExecutionService
-from app.services.protocols import get_adapter
+from app.services.protocols import ACTIVE_ADAPTERS, get_adapter
+from app.services.protocols.base import get_shared_async_web3
 
 logger = logging.getLogger("snowmind.api.withdrawal")
 
@@ -41,6 +42,16 @@ _FULL_WITHDRAWAL_DUST_USDC = Decimal("0.01")
 # Maximum withdrawal: $10M (sanity guard)
 _MAX_WITHDRAWAL_USDC = Decimal("10000000")
 _WITHDRAW_SIGNATURE_TTL_SECONDS = 300
+
+_ERC20_BALANCE_OF_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    }
+]
 
 
 # ── Request / Response Models ────────────────────────────────────────────────
@@ -143,21 +154,53 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
 
     Uses protocol adapters for accurate balance reading.
     """
-    from app.services.protocols import ALL_ADAPTERS
+    total_raw = 0
+    failed_protocols: list[str] = []
 
-    total = 0
-    for pid, adapter in ALL_ADAPTERS.items():
+    for pid, adapter in ACTIVE_ADAPTERS.items():
         try:
             balance = await adapter.get_balance(smart_account)
-            total += balance
+            total_raw += int(balance)
         except Exception as exc:
+            failed_protocols.append(pid)
             logger.warning(
                 "Failed to read %s balance for %s: %s",
                 pid,
                 smart_account,
                 exc,
             )
-    return Decimal(str(total)) / Decimal("1e6")  # Convert to USDC (6 decimals → human)
+
+    # Include idle USDC held directly in the smart account so full-withdrawal
+    # previews/executions represent the actual amount user can receive.
+    try:
+        settings = get_settings()
+        w3 = get_shared_async_web3()
+        usdc = w3.eth.contract(
+            address=w3.to_checksum_address(settings.USDC_ADDRESS),
+            abi=_ERC20_BALANCE_OF_ABI,
+        )
+        idle_raw = await usdc.functions.balanceOf(
+            w3.to_checksum_address(smart_account)
+        ).call()
+        total_raw += int(idle_raw)
+    except Exception as exc:
+        logger.warning("Failed to read idle USDC balance for %s: %s", smart_account, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to read idle USDC balance. Please retry shortly.",
+        )
+
+    # Fail safe: do not compute fees from partial balances.
+    if failed_protocols:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Unable to read balances for all active protocols "
+                f"({', '.join(sorted(failed_protocols))}). Please retry shortly."
+            ),
+        )
+
+    return Decimal(str(total_raw)) / Decimal("1e6")
 
 
 def _compute_fee(
