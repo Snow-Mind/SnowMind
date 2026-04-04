@@ -434,6 +434,7 @@ export default function OnboardingPage() {
 
   const openCapEditor = (protocolId: ProtocolId) => {
     if (!selectedProtocols.has(protocolId)) return;
+    if (editingCapProtocolId && editingCapProtocolId !== protocolId) return;
     setEditingCapProtocolId(protocolId);
     setPendingCapPct(allocationCaps[protocolId] ?? 100);
   };
@@ -1546,11 +1547,11 @@ export default function OnboardingPage() {
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
-                        isEditingRow && "bg-[#1A1715]/90 text-white",
-                        editingCapProtocolId && !isEditingRow && "opacity-45",
+                        isEditingRow && "bg-[#FFF4F3] shadow-[inset_0_0_0_1px_rgba(232,65,66,0.35)]",
+                        editingCapProtocolId && !isEditingRow && "opacity-55",
                       )}
                       onClick={() => {
-                        if (editingCapProtocolId && editingCapProtocolId !== protocolId) return;
+                        if (editingCapProtocolId) return;
                         toggleProtocol(protocolId, isEnabled);
                       }}
                     >
@@ -1599,18 +1600,18 @@ export default function OnboardingPage() {
                       {/* Max exposure (desktop) */}
                       <div className="hidden justify-center md:order-2 md:flex md:w-28">
                         {isEditingRow ? (
-                          <div className="flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-2 py-1">
+                          <div className="flex items-center gap-2 rounded-full border border-[#E84142]/25 bg-white px-2 py-1">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 adjustPendingCap(-1);
                               }}
-                              className="rounded-full p-1 text-white transition-colors hover:bg-white/15"
+                              className="rounded-full p-1 text-[#5C5550] transition-colors hover:bg-[#E84142]/10 hover:text-[#E84142] disabled:opacity-40"
                               disabled={pendingCapPct <= 10}
                             >
                               <Minus className="h-3 w-3" />
                             </button>
-                            <span className="w-10 text-center font-mono text-xs font-semibold text-white">
+                            <span className="w-10 text-center font-mono text-xs font-semibold text-[#E84142]">
                               {pendingCapPct}%
                             </span>
                             <button
@@ -1618,7 +1619,7 @@ export default function OnboardingPage() {
                                 e.stopPropagation();
                                 adjustPendingCap(1);
                               }}
-                              className="rounded-full p-1 text-white transition-colors hover:bg-white/15"
+                              className="rounded-full p-1 text-[#5C5550] transition-colors hover:bg-[#E84142]/10 hover:text-[#E84142] disabled:opacity-40"
                               disabled={pendingCapPct >= 100}
                             >
                               <Plus className="h-3 w-3" />
@@ -1635,6 +1636,7 @@ export default function OnboardingPage() {
                                 }}
                                 className="rounded-full p-1 text-[#8A837C] transition-colors hover:bg-[#1A1715]/5 hover:text-[#1A1715]"
                                 title="Edit max exposure"
+                                disabled={editingCapProtocolId !== null && !isEditingRow}
                               >
                                 <Pencil className="h-3 w-3" />
                               </button>
@@ -1662,7 +1664,7 @@ export default function OnboardingPage() {
                                 e.stopPropagation();
                                 cancelCapEdit();
                               }}
-                              className="rounded-full bg-[#DC2626] p-1 text-white"
+                              className="rounded-full bg-[#FEE2E2] p-1 text-[#B91C1C] transition-colors hover:bg-[#FECACA]"
                               title="Cancel"
                             >
                               <X className="h-3 w-3" />
@@ -1672,7 +1674,7 @@ export default function OnboardingPage() {
                                 e.stopPropagation();
                                 confirmCapEdit();
                               }}
-                              className="rounded-full bg-white p-1 text-[#1A1715]"
+                              className="rounded-full bg-[#E84142] p-1 text-white transition-colors hover:bg-[#D63031]"
                               title="Apply"
                             >
                               <Check className="h-3 w-3" />
@@ -1689,7 +1691,7 @@ export default function OnboardingPage() {
                               !isEnabled && "opacity-40",
                               isSelected ? "bg-[#E84142]" : "bg-[#E8E2DA]",
                             )}
-                            disabled={!isEnabled}
+                            disabled={!isEnabled || (editingCapProtocolId !== null && !isEditingRow)}
                           >
                             <div
                               className={cn(
@@ -1732,18 +1734,18 @@ export default function OnboardingPage() {
                                   e.stopPropagation();
                                   adjustPendingCap(-1);
                                 }}
-                                className="rounded-full bg-[#1A1715]/10 p-1 text-[#1A1715]"
+                                className="rounded-full bg-[#1A1715]/10 p-1 text-[#1A1715] disabled:opacity-40"
                                 disabled={pendingCapPct <= 10}
                               >
                                 <Minus className="h-3 w-3" />
                               </button>
-                              <span className="font-mono text-xs font-semibold text-[#1A1715]">{pendingCapPct}%</span>
+                              <span className="font-mono text-xs font-semibold text-[#E84142]">{pendingCapPct}%</span>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   adjustPendingCap(1);
                                 }}
-                                className="rounded-full bg-[#1A1715]/10 p-1 text-[#1A1715]"
+                                className="rounded-full bg-[#1A1715]/10 p-1 text-[#1A1715] disabled:opacity-40"
                                 disabled={pendingCapPct >= 100}
                               >
                                 <Plus className="h-3 w-3" />
@@ -1753,22 +1755,42 @@ export default function OnboardingPage() {
                             <span className="font-mono text-xs font-semibold text-[#1A1715]">{displayCap}%</span>
                           )}
                         </div>
-                        {isSelected && isEnabled && (
+                        {isEditingRow ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                cancelCapEdit();
+                              }}
+                              className="rounded-full bg-[#FEE2E2] p-1 text-[#B91C1C]"
+                              title="Cancel"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                confirmCapEdit();
+                              }}
+                              className="rounded-full bg-[#E84142] p-1 text-white"
+                              title="Apply"
+                            >
+                              <Check className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ) : isSelected && isEnabled ? (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (isEditingRow) {
-                                confirmCapEdit();
-                              } else {
-                                openCapEditor(protocolId);
-                              }
+                              openCapEditor(protocolId);
                             }}
                             className="rounded-full p-1 text-[#8A837C] hover:bg-[#1A1715]/5"
-                            title={isEditingRow ? "Apply" : "Edit max exposure"}
+                            title="Edit max exposure"
+                            disabled={editingCapProtocolId !== null && !isEditingRow}
                           >
-                            {isEditingRow ? <Check className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
+                            <Pencil className="h-3 w-3" />
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   );
