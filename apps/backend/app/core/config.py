@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (Aave/Benqi only)
     VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)
     UTILIZATION_THRESHOLD: float = 0.90  # 90% — exclude from new deposits
-    EXPLOIT_APY_MULTIPLIER: float = 2.0  # 2x yesterday avg + high utilization = exploit
+    EXPLOIT_APY_MULTIPLIER: float = 2.0  # Deprecated: retained for env compatibility (utilization-only stress trigger is active)
     UTILIZATION_POLL_INTERVAL: int = 30  # seconds between real-time utilization polls
     EMERGENCY_UTILIZATION_THRESHOLD: float = 0.92  # emergency targeted withdrawal threshold
     UTILIZATION_VELOCITY_THRESHOLD: float = 0.10  # 10% jump within a few polls triggers emergency

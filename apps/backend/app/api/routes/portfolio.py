@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -38,9 +39,16 @@ _ERC20_ABI = [
 
 _PROTOCOL_BALANCE_DUST_USDC = Decimal("0.01")
 _BALANCE_RECONCILE_EPSILON_USDC = Decimal("0.000001")
+_USDC_TRANSFER_TOPIC_PREFIX = "ddf252ad"
+_PRINCIPAL_RECONCILE_DRIFT_USDC = Decimal("0.50")
+_PRINCIPAL_RECONCILE_IMPROVEMENT_EPSILON_USDC = Decimal("0.01")
+_PRINCIPAL_RECONCILE_MAX_TX = 5000
+_PRINCIPAL_RECONCILE_PAGE_SIZE = 500
+_PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 
 # Short-lived in-memory cache to dampen duplicate dashboard polling.
 _portfolio_cache: dict[str, tuple[float, dict]] = {}
+_principal_reconcile_cooldowns: dict[str, float] = {}
 
 
 def _should_refresh_amount(existing_amount: Decimal, onchain_amount: Decimal) -> bool:
@@ -66,6 +74,163 @@ def _portfolio_cache_put(cache_key: str, response: PortfolioResponse, ttl_second
         time.monotonic() + ttl_seconds,
         response.model_dump(),
     )
+
+
+def _topic_to_address(topic_hex: str) -> str:
+    normalized = topic_hex.lower().replace("0x", "")
+    return f"0x{normalized[-40:]}"
+
+
+async def _reconcile_principal_tracking_from_chain(
+    db: Client,
+    account_id: str,
+    smart_address: str,
+    owner_address: str,
+) -> Decimal | None:
+    """Rebuild principal ledger from on-chain USDC transfers between owner and smart account.
+
+    This is a legacy recovery path for accounts that have stale/incomplete
+    historical tracking rows. It is throttled per account to avoid repeated
+    expensive receipt scans under dashboard polling.
+    """
+    cooldown_key = f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
+    now_mono = time.monotonic()
+    next_allowed = _principal_reconcile_cooldowns.get(cooldown_key, 0.0)
+    if now_mono < next_allowed:
+        return None
+    _principal_reconcile_cooldowns[cooldown_key] = (
+        now_mono + _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS
+    )
+
+    try:
+        tx_count_resp = (
+            db.table("rebalance_logs")
+            .select("id", count="exact")
+            .eq("account_id", account_id)
+            .eq("status", "executed")
+            .not_.is_("tx_hash", "null")
+            .execute()
+        )
+        tx_count = tx_count_resp.count or 0
+        if tx_count == 0:
+            return None
+        if tx_count > _PRINCIPAL_RECONCILE_MAX_TX:
+            logger.warning(
+                "Skipping principal reconciliation for %s: tx_count=%d exceeds limit=%d",
+                smart_address,
+                tx_count,
+                _PRINCIPAL_RECONCILE_MAX_TX,
+            )
+            return None
+    except Exception as exc:
+        logger.warning(
+            "Failed to load tx history for principal reconciliation (%s): %s",
+            smart_address,
+            exc,
+        )
+        return None
+
+    tx_hashes: list[str] = []
+    fetched = 0
+    while fetched < tx_count:
+        page_end = min(fetched + _PRINCIPAL_RECONCILE_PAGE_SIZE - 1, tx_count - 1)
+        try:
+            rows = (
+                db.table("rebalance_logs")
+                .select("tx_hash")
+                .eq("account_id", account_id)
+                .eq("status", "executed")
+                .not_.is_("tx_hash", "null")
+                .order("created_at", desc=False)
+                .range(fetched, page_end)
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to page tx history for principal reconciliation (%s): %s",
+                smart_address,
+                exc,
+            )
+            return None
+
+        page_hashes = [
+            str(row.get("tx_hash"))
+            for row in (rows.data or [])
+            if row.get("tx_hash")
+        ]
+        if not page_hashes:
+            break
+
+        tx_hashes.extend(page_hashes)
+        fetched += len(page_hashes)
+
+    if not tx_hashes:
+        return None
+
+    try:
+        settings = get_settings()
+        w3 = get_shared_async_web3()
+        usdc_address = settings.USDC_ADDRESS.lower()
+        smart_l = smart_address.lower()
+        owner_l = owner_address.lower()
+
+        cumulative_deposited = Decimal("0")
+        cumulative_withdrawn = Decimal("0")
+
+        for tx_hash in tx_hashes:
+            try:
+                receipt = await w3.eth.get_transaction_receipt(tx_hash)
+            except Exception:
+                continue
+
+            for entry in receipt.get("logs", []):
+                token_address = str(entry.get("address", "")).lower()
+                if token_address != usdc_address:
+                    continue
+
+                topics = [topic.hex().lower() for topic in entry.get("topics", [])]
+                if len(topics) < 3 or not topics[0].startswith(_USDC_TRANSFER_TOPIC_PREFIX):
+                    continue
+
+                source = _topic_to_address(topics[1])
+                destination = _topic_to_address(topics[2])
+                amount_raw = int(entry.get("data", b"0x00").hex(), 16)
+                amount_usdc = Decimal(str(amount_raw)) / Decimal("1000000")
+
+                if source == owner_l and destination == smart_l:
+                    cumulative_deposited += amount_usdc
+                elif source == smart_l and destination == owner_l:
+                    cumulative_withdrawn += amount_usdc
+
+        deposited_q = cumulative_deposited.quantize(Decimal("0.000001"))
+        withdrawn_q = cumulative_withdrawn.quantize(Decimal("0.000001"))
+
+        db.table("account_yield_tracking").upsert(
+            {
+                "account_id": account_id,
+                "cumulative_deposited": str(deposited_q),
+                "cumulative_net_withdrawn": str(withdrawn_q),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="account_id",
+        ).execute()
+
+        reconciled_net_principal = max(deposited_q - withdrawn_q, Decimal("0"))
+        logger.warning(
+            "Reconciled principal tracking for %s from chain transfers: deposited=%s withdrawn=%s net=%s",
+            smart_address,
+            deposited_q,
+            withdrawn_q,
+            reconciled_net_principal,
+        )
+        return reconciled_net_principal
+    except Exception as exc:
+        logger.warning(
+            "Principal reconciliation from chain failed for %s: %s",
+            smart_address,
+            exc,
+        )
+        return None
 
 
 async def _get_idle_usdc(address: str) -> Decimal:
@@ -186,6 +351,7 @@ async def get_portfolio(
 
     verify_account_ownership(_auth, acct.data[0], db=db)
     account_id = acct.data[0]["id"]
+    owner_address = str(acct.data[0].get("owner_address") or "")
 
     cache_ttl = max(0, int(get_settings().PORTFOLIO_CACHE_TTL_SECONDS))
     cache_key = f"{str(account_id)}:{address.lower()}"
@@ -324,6 +490,36 @@ async def get_portfolio(
 
     # Expose principal and yield consistently:
     #   current value = net principal + net earned
+    # Legacy fallback: if tracked principal drifts far above current value,
+    # rebuild principal from chain transfer history and persist it.
+    if (
+        tracked_net_principal is not None
+        and owner_address
+        and (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
+    ):
+        reconciled_principal = await _reconcile_principal_tracking_from_chain(
+            db,
+            account_id=str(account_id),
+            smart_address=address,
+            owner_address=owner_address,
+        )
+        if reconciled_principal is not None:
+            before_drift = abs(tracked_net_principal - total_current_value)
+            after_drift = abs(reconciled_principal - total_current_value)
+            if (
+                after_drift
+                + _PRINCIPAL_RECONCILE_IMPROVEMENT_EPSILON_USDC
+                < before_drift
+            ):
+                tracked_net_principal = reconciled_principal
+            else:
+                logger.warning(
+                    "Skipping reconciled principal for %s: before_drift=%s after_drift=%s",
+                    address,
+                    before_drift,
+                    after_drift,
+                )
+
     net_principal = tracked_net_principal if tracked_net_principal is not None else total_current_value
     total_yield = total_current_value - net_principal
 
