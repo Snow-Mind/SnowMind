@@ -807,6 +807,7 @@ class Rebalancer:
 
         # ── Helper: health-check a SINGLE protocol via its adapter ───
         _NO_TVL_CAP_PROTOCOLS = frozenset(("spark",))
+        protocol_utilizations: dict[str, Decimal | None] = {}
 
         async def _check_one(pid: str, position: Decimal) -> HealthCheckResult:
             """Fetch adapter health + run check_protocol_health for one protocol."""
@@ -829,6 +830,7 @@ class Rebalancer:
                     is_deposit_safe=True,
                     is_withdrawal_safe=True,
                 )
+            protocol_utilizations[pid] = proto_health.utilization
             return await check_protocol_health(
                 protocol_id=pid,
                 protocol_health=proto_health,
@@ -847,7 +849,14 @@ class Rebalancer:
             if pid in _NO_TVL_CAP_PROTOCOLS:
                 return total_usd
             tvl = tvl_by_protocol.get(pid, Decimal("0"))
-            return Decimal(str(self.settings.TVL_CAP_PCT)) * tvl
+            if tvl <= Decimal("0"):
+                return Decimal("0")
+            utilization = protocol_utilizations.get(pid)
+            if utilization is None:
+                utilization = Decimal("0")
+            utilization = max(Decimal("0"), min(utilization, Decimal("1")))
+            available_liquidity = tvl * (Decimal("1") - utilization)
+            return Decimal(str(self.settings.TVL_CAP_PCT)) * max(available_liquidity, Decimal("0"))
 
         # ── 5b. Check health of CURRENT positions ONLY ──────────────
         health_results: dict[str, HealthCheckResult] = {}
@@ -976,6 +985,7 @@ class Rebalancer:
             twap_apys=apy_by_protocol,
             protocol_tvls=tvl_by_protocol,
             total_balance=total_usd,
+            protocol_utilizations=protocol_utilizations,
             user_preferences={
                 pid: UserPreference(protocol_id=pid, enabled=True, max_pct=None)
                 for pid in allowed_rates

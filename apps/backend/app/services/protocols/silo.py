@@ -345,6 +345,31 @@ class SiloAdapter(BaseProtocolAdapter):
             details={},
         )
 
+    async def get_utilization(self) -> Decimal | None:
+        """Read utilization from vault totalAssets and idle USDC cash."""
+        vault = self._get_vault()
+        if not vault or not self.vault_address:
+            return None
+
+        total_assets_raw = await vault.functions.totalAssets().call()
+        total_assets = Decimal(str(total_assets_raw))
+        if total_assets <= 0:
+            return Decimal("0")
+
+        settings = get_settings()
+        w3 = self._get_w3()
+        usdc_contract = w3.eth.contract(
+            address=w3.to_checksum_address(settings.USDC_ADDRESS),
+            abi=_ERC20_BALANCE_ABI,
+        )
+        cash_raw = await usdc_contract.functions.balanceOf(
+            w3.to_checksum_address(self.vault_address)
+        ).call()
+
+        cash = Decimal(str(cash_raw))
+        utilization = (total_assets - cash) / total_assets
+        return max(Decimal("0"), min(utilization, Decimal("1")))
+
     # ── Snapshot helper ──────────────────────────────────────────────────
 
     async def get_convert_to_assets_value(self) -> int:

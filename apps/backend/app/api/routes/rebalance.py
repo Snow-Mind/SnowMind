@@ -759,6 +759,7 @@ async def dry_run_rebalance(request: Request, body: DryRunRequest):
     # Health checks for all protocols
     health_results: dict[str, HealthCheckResult] = {}
     health_info: dict[str, dict] = {}
+    protocol_utilizations: dict[str, Decimal | None] = {}
 
     for pid in spot_rates:
         try:
@@ -780,6 +781,8 @@ async def dry_run_rebalance(request: Request, body: DryRunRequest):
                 is_deposit_safe=True,
                 is_withdrawal_safe=True,
             )
+
+        protocol_utilizations[pid] = proto_health.utilization
 
         hr = await check_protocol_health(
             protocol_id=pid,
@@ -811,6 +814,7 @@ async def dry_run_rebalance(request: Request, body: DryRunRequest):
         twap_apys=apy_by_protocol,
         protocol_tvls=tvl_by_protocol,
         total_balance=total_usd,
+        protocol_utilizations=protocol_utilizations,
         user_preferences={
             pid: UserPreference(protocol_id=pid, enabled=True, max_pct=None)
             for pid in spot_rates

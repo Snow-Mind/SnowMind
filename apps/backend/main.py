@@ -187,11 +187,16 @@ async def on_startup() -> None:
     # Start the periodic rebalance scheduler (requires Supabase)
     if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY:
         from app.workers.scheduler import SnowMindScheduler, setup_graceful_shutdown
+        from app.workers.utilization_monitor import UtilizationMonitor
 
         scheduler = SnowMindScheduler()
         scheduler.start()
         setup_graceful_shutdown(scheduler)
         app.state.scheduler = scheduler
+
+        utilization_monitor = UtilizationMonitor()
+        await utilization_monitor.start()
+        app.state.utilization_monitor = utilization_monitor
     else:
         logger.warning(
             "Scheduler disabled — SUPABASE_URL / SUPABASE_SERVICE_KEY not set"
@@ -200,6 +205,10 @@ async def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
+    utilization_monitor = getattr(app.state, "utilization_monitor", None)
+    if utilization_monitor is not None:
+        await utilization_monitor.stop()
+
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler is not None:
         scheduler.stop()

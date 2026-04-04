@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.optimizer.health_checker import check_protocol_health
+from app.services.optimizer.health_checker import RebalanceFlag, check_protocol_health
 from app.services.protocols.base import ProtocolHealth, ProtocolStatus
 from app.services.protocols.euler_v2 import EulerV2Adapter
 
@@ -126,3 +126,62 @@ async def test_euler_health_uses_configured_utilization_threshold():
     assert health.is_deposit_safe is False
     assert health.utilization is not None
     assert health.utilization > Decimal("0.90")
+
+
+@pytest.mark.asyncio
+async def test_tvl_cap_uses_available_liquidity() -> None:
+    """TVL cap should use available liquidity (TVL * (1 - utilization))."""
+    protocol_health = ProtocolHealth(
+        protocol_id="benqi",
+        status=ProtocolStatus.HEALTHY,
+        is_deposit_safe=True,
+        is_withdrawal_safe=True,
+        utilization=Decimal("0.90"),
+    )
+
+    with patch("app.services.optimizer.health_checker.get_settings", return_value=_health_settings()):
+        result = await check_protocol_health(
+            protocol_id="benqi",
+            protocol_health=protocol_health,
+            current_apy=Decimal("0.04"),
+            twap_apy=Decimal("0.04"),
+            previous_apy=None,
+            yesterday_avg_apy=None,
+            daily_snapshots_7d=None,
+            current_position=Decimal("1000000"),
+            protocol_tvl=Decimal("10000000"),
+            circuit_breaker_failures=0,
+        )
+
+    # available_liquidity = 10m * (1 - 0.9) = 1m; position share = 100%
+    assert any("Liquidity cap exceeded" in reason for reason in result.exclusion_reasons)
+    assert result.flag == RebalanceFlag.FORCED_REBALANCE
+
+
+@pytest.mark.asyncio
+async def test_tvl_cap_falls_back_to_total_tvl_when_utilization_missing() -> None:
+    """utilization=None should preserve old total-TVL semantics."""
+    protocol_health = ProtocolHealth(
+        protocol_id="benqi",
+        status=ProtocolStatus.HEALTHY,
+        is_deposit_safe=True,
+        is_withdrawal_safe=True,
+        utilization=None,
+    )
+
+    with patch("app.services.optimizer.health_checker.get_settings", return_value=_health_settings()):
+        result = await check_protocol_health(
+            protocol_id="benqi",
+            protocol_health=protocol_health,
+            current_apy=Decimal("0.04"),
+            twap_apy=Decimal("0.04"),
+            previous_apy=None,
+            yesterday_avg_apy=None,
+            daily_snapshots_7d=None,
+            current_position=Decimal("500000"),
+            protocol_tvl=Decimal("10000000"),
+            circuit_breaker_failures=0,
+        )
+
+    # 500k / 10m = 5% < 7.5%, so cap should not trigger.
+    assert all("Liquidity cap exceeded" not in reason for reason in result.exclusion_reasons)

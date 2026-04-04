@@ -9,10 +9,10 @@ Aave/Benqi checks:
   - Reserve/comptroller pause flags
   - Utilization > 90% → HIGH_UTILIZATION (exclude from new deposits)
   - Velocity check: >25% APY change in 30 min → exclude
-  - Exploit detection: APY > 2× yesterday avg AND utilization > 90% → FORCED_REBALANCE
+    - Liquidity stress: utilization > 90% with active position → FORCED_REBALANCE
   - Sanity bound: TWAP APY > 25% → exclude
   - 7-day stability: >50% relative swing → exclude from new deposits
-  - TVL cap auto-withdraw: position > 15% of pool TVL → FORCED_REBALANCE
+    - TVL cap auto-withdraw: position > 7.5% of available liquidity → FORCED_REBALANCE
 
 Spark checks (ONLY these — all others are intentionally skipped):
   - vat.live() == 1 (MakerDAO global settlement)
@@ -143,30 +143,22 @@ async def check_protocol_health(
             )
             result.details["velocity_delta"] = str(delta)
 
-    # ── Exploit detection (step 11) ──────────────────────────────────
-    if (
-        yesterday_avg_apy is not None
-        and yesterday_avg_apy > 0
-        and protocol_health.utilization is not None
-    ):
-        apy_multiplier = twap_apy / yesterday_avg_apy
-        if (
-            apy_multiplier > Decimal(str(settings.EXPLOIT_APY_MULTIPLIER))
-            and protocol_health.utilization > Decimal(str(settings.UTILIZATION_THRESHOLD))
-        ):
-            result.is_healthy = False
+    # ── Liquidity stress detection (utilization-only) ─────────────────
+    if protocol_health.utilization is not None:
+        utilization_threshold = Decimal(str(settings.UTILIZATION_THRESHOLD))
+        if protocol_health.utilization > utilization_threshold:
             result.is_deposit_safe = False
-            result.flag = RebalanceFlag.FORCED_REBALANCE
             result.exclusion_reasons.append(
-                f"EXPLOIT SUSPECTED: APY {float(apy_multiplier):.1f}× yesterday + "
-                f"utilization {float(protocol_health.utilization * 100):.1f}%"
+                f"Liquidity stress: utilization {float(protocol_health.utilization * 100):.1f}% "
+                f"> {float(utilization_threshold * 100):.1f}%"
             )
             if current_position > 0:
+                result.is_healthy = False
+                result.flag = RebalanceFlag.FORCED_REBALANCE
                 logger.critical(
-                    "EXPLOIT SUSPECTED on %s — APY %.1fx yesterday avg, "
-                    "utilization %.1f%%. Flagging FORCED_REBALANCE.",
+                    "LIQUIDITY STRESS on %s — utilization %.1f%% with active position. "
+                    "Flagging FORCED_REBALANCE.",
                     protocol_id,
-                    float(apy_multiplier),
                     float(protocol_health.utilization * 100),
                 )
 
@@ -196,15 +188,26 @@ async def check_protocol_health(
                 )
                 # Does NOT force-exit existing positions
 
-    # ── TVL cap auto-withdraw (step 15) ──────────────────────────────
+    # ── Liquidity cap auto-withdraw (step 15) ─────────────────────────
     if protocol_tvl > 0 and current_position > 0:
-        current_share = current_position / protocol_tvl
+        utilization = protocol_health.utilization
+        if utilization is None:
+            utilization = Decimal("0")
+        utilization = max(Decimal("0"), min(utilization, Decimal("1")))
+
+        available_liquidity = protocol_tvl * (Decimal("1") - utilization)
+        if available_liquidity > 0:
+            current_share = current_position / available_liquidity
+        else:
+            # No liquidity means any non-zero position is effectively over-cap.
+            current_share = Decimal("1")
+
         if current_share > Decimal(str(settings.TVL_CAP_PCT)):
             result.is_deposit_safe = False
             result.flag = RebalanceFlag.FORCED_REBALANCE
             result.exclusion_reasons.append(
-                f"TVL cap exceeded: position is {float(current_share * 100):.1f}% "
-                f"of pool TVL (cap: {settings.TVL_CAP_PCT * 100}%)"
+                f"Liquidity cap exceeded: position is {float(current_share * 100):.1f}% "
+                f"of available liquidity (cap: {settings.TVL_CAP_PCT * 100}%)"
             )
 
     # ── Final healthy determination ──────────────────────────────────

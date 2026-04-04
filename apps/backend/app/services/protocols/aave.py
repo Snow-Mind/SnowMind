@@ -141,6 +141,7 @@ class AaveV3Adapter(BaseProtocolAdapter):
         settings = get_settings()
         self.pool_address = settings.AAVE_V3_POOL
         self.usdc_address = settings.USDC_ADDRESS
+        self._atoken_address_cache: str | None = None
 
     def _get_pool_contract(self) -> Any:
         """Get pool contract using current active RPC provider."""
@@ -165,6 +166,36 @@ class AaveV3Adapter(BaseProtocolAdapter):
         return await pool.functions.getReserveData(
             w3.to_checksum_address(self.usdc_address)
         ).call()
+
+    async def _get_atoken_address(self) -> str:
+        """Resolve and cache the reserve aToken address."""
+        if self._atoken_address_cache:
+            return self._atoken_address_cache
+        reserve_data = await self._get_reserve_data()
+        self._atoken_address_cache = reserve_data[8]
+        return self._atoken_address_cache
+
+    async def get_utilization(self) -> Decimal | None:
+        """Read utilization via cash and total supply with minimal RPC calls."""
+        atoken_address = await self._get_atoken_address()
+        atoken = self._get_erc20_contract(atoken_address)
+        usdc_contract = self._get_erc20_contract(self.usdc_address)
+        w3 = get_web3()
+
+        total_supply, usdc_cash = await asyncio.gather(
+            atoken.functions.totalSupply().call(),
+            usdc_contract.functions.balanceOf(
+                w3.to_checksum_address(atoken_address)
+            ).call(),
+        )
+
+        if total_supply <= 0:
+            return Decimal("0")
+
+        utilization = Decimal("1") - (
+            Decimal(str(usdc_cash)) / Decimal(str(total_supply))
+        )
+        return max(Decimal("0"), min(utilization, Decimal("1")))
 
     # ── Rate reading ────────────────────────────────────────────────────
 

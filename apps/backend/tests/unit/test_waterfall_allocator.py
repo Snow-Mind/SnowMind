@@ -159,6 +159,38 @@ def test_tvl_cap_limits_allocation():
     assert float(result.allocations["aave_v3"]) == pytest.approx(12500.0, abs=1.0)
 
 
+def test_available_liquidity_cap_limits_allocation():
+    """TVL cap should apply to available liquidity when utilization is provided."""
+    protocols = _make_protocols({
+        "small_pool": "0.06",
+        "aave_v3": "0.0375",
+    })
+    tvl = _make_tvl({
+        "small_pool": "10000000",  # $10m TVL
+        "aave_v3": "100000000",
+    })
+    utilizations = {
+        "small_pool": D("0.90"),  # only $1m available liquidity
+        "aave_v3": D("0.00"),
+    }
+    inp = OptimizerInput(
+        total_amount_usd=D("200000"),
+        protocols=protocols,
+    )
+    result = waterfall_allocate(
+        inp=inp,
+        tvl_by_protocol=tvl,
+        protocol_utilizations=utilizations,
+        tvl_cap_pct=D("0.075"),
+        max_exposure_pct=D("1.00"),
+        base_beat_margin=D("0.0001"),
+    )
+
+    # cap = 7.5% * ($10m * (1 - 90%)) = 7.5% * $1m = $75k
+    assert float(result.allocations["small_pool"]) == pytest.approx(75000.0, abs=1.0)
+    assert float(result.allocations["aave_v3"]) == pytest.approx(125000.0, abs=1.0)
+
+
 # ── Test 4: No protocol beats base layer → 100% to base layer ───────────────
 
 def test_no_protocol_beats_base_layer():

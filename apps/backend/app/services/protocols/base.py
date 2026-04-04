@@ -99,6 +99,14 @@ class BaseProtocolAdapter(ABC):
         """Backward-compatible alias retained for legacy consumers."""
         return await self.get_balance(user_address)
 
+    async def get_utilization(self) -> Decimal | None:
+        """Return protocol utilization when available.
+
+        Concrete adapters can override this with cheaper RPC paths.
+        """
+        health = await self.get_health()
+        return health.utilization
+
     @abstractmethod
     async def get_shares(self, user_address: str) -> int:
         """

@@ -7,11 +7,13 @@ Algorithm:
   1. Rank all healthy protocols by effective TWAP APY (highest first)
   2. For each in ranked order:
      - Spark: cap = min(remaining, user_max_cap) — no system TVL cap (fixed rate)
-     - All others (Aave, Benqi, Euler, Silo): cap = min(remaining, 15% × protocol_tvl, user_max_cap)
+         - All others (Aave, Benqi, Euler, Silo):
+             cap = min(remaining, 7.5% × available_liquidity, user_max_cap)
+             where available_liquidity = protocol_tvl × (1 - utilization)
   3. If remaining > 0 after all protocols: hold idle, alert ops
 
 User preferences (future):
-  - Per-protocol max_pct cap (0.0–1.0)
+    - Per-protocol max_pct cap (0.0-1.0)
   - Per-protocol enabled toggle
   - Most restrictive wins: min(system_tvl_cap, user_amount_cap)
 """
@@ -48,6 +50,7 @@ def get_effective_cap(
     protocol_id: str,
     total_balance: Decimal,
     protocol_tvl: Decimal,
+    protocol_utilization: Decimal | None,
     user_pref: UserPreference | None,
 ) -> Decimal:
     """
@@ -55,7 +58,7 @@ def get_effective_cap(
     and user preferences. Most restrictive wins.
 
     For Spark: no system TVL cap (fixed rate doesn't compress).
-    For Aave/Benqi: system cap = 15% of protocol TVL.
+    For non-Spark protocols: system cap = 7.5% of available liquidity.
     """
     settings = get_settings()
 
@@ -67,7 +70,10 @@ def get_effective_cap(
     if protocol_id == "spark":
         system_cap = total_balance  # No system cap for Spark
     else:
-        system_cap = Decimal(str(settings.TVL_CAP_PCT)) * protocol_tvl
+        utilization = protocol_utilization if protocol_utilization is not None else Decimal("0")
+        utilization = max(Decimal("0"), min(utilization, Decimal("1")))
+        available_liquidity = protocol_tvl * (Decimal("1") - utilization)
+        system_cap = Decimal(str(settings.TVL_CAP_PCT)) * max(available_liquidity, Decimal("0"))
 
     # User amount cap
     if user_pref and user_pref.max_pct is not None:
@@ -84,6 +90,7 @@ def compute_allocation(
     twap_apys: dict[str, Decimal],
     protocol_tvls: dict[str, Decimal],
     total_balance: Decimal,
+    protocol_utilizations: dict[str, Decimal | None] | None = None,
     user_preferences: dict[str, UserPreference] | None = None,
 ) -> AllocationResult:
     """
@@ -151,6 +158,7 @@ def compute_allocation(
             protocol_id=protocol_id,
             total_balance=total_balance,
             protocol_tvl=protocol_tvls.get(protocol_id, Decimal("0")),
+            protocol_utilization=(protocol_utilizations or {}).get(protocol_id),
             user_pref=user_pref,
         )
 

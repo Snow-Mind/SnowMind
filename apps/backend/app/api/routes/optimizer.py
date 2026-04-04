@@ -183,9 +183,11 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
         gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
     )
     tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
+    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl_by_protocol,
+        protocol_utilizations=protocol_utilizations,
         tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
         base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
@@ -653,9 +655,11 @@ async def run_optimizer_preview(
         gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
     )
     tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
+    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
     result = waterfall_allocate(
         inp=inp,
         tvl_by_protocol=tvl_by_protocol,
+        protocol_utilizations=protocol_utilizations,
         tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
         base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),

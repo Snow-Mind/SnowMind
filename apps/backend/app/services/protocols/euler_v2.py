@@ -370,6 +370,27 @@ class EulerV2Adapter(BaseProtocolAdapter):
             details={},
         )
 
+    async def get_utilization(self) -> Decimal | None:
+        """Read utilization from Euler vault accounting values."""
+        vault = self._get_vault()
+        if not vault:
+            return None
+
+        total_assets_raw = await vault.functions.totalAssets().call()
+        total_assets = Decimal(str(total_assets_raw))
+        if total_assets <= 0:
+            return Decimal("0")
+
+        try:
+            total_borrows_raw = await vault.functions.totalBorrows().call()
+            utilization = Decimal(str(total_borrows_raw)) / total_assets
+        except Exception:
+            cash_raw = await vault.functions.cash().call()
+            cash = Decimal(str(cash_raw))
+            utilization = (total_assets - cash) / total_assets
+
+        return max(Decimal("0"), min(utilization, Decimal("1")))
+
     # ── Calldata builders ─────────────────────────────────────────────────────
 
     def build_supply_calldata(

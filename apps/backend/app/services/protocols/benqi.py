@@ -220,6 +220,25 @@ class BenqiAdapter(BaseProtocolAdapter):
             fetched_at=time.time(),
         )
 
+    async def get_utilization(self) -> Decimal | None:
+        """Read utilization from Benqi pool accounting values."""
+        pool = self._get_pool_contract()
+        cash_raw, borrows_raw, reserves_raw = await asyncio.gather(
+            pool.functions.getCash().call(),
+            pool.functions.totalBorrows().call(),
+            pool.functions.totalReserves().call(),
+        )
+
+        cash = Decimal(str(cash_raw))
+        borrows = Decimal(str(borrows_raw))
+        reserves = Decimal(str(reserves_raw))
+        total_supply_underlying = cash + borrows - reserves
+        if total_supply_underlying <= 0:
+            return Decimal("0")
+
+        utilization = borrows / total_supply_underlying
+        return max(Decimal("0"), min(utilization, Decimal("1")))
+
     # ── Health checks ───────────────────────────────────────────────────
 
     async def get_health(self) -> ProtocolHealth:

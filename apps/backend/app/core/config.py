@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)
     UTILIZATION_THRESHOLD: float = 0.90  # 90% — exclude from new deposits
     EXPLOIT_APY_MULTIPLIER: float = 2.0  # 2x yesterday avg + high utilization = exploit
+    UTILIZATION_POLL_INTERVAL: int = 30  # seconds between real-time utilization polls
+    EMERGENCY_UTILIZATION_THRESHOLD: float = 0.92  # emergency targeted withdrawal threshold
+    UTILIZATION_VELOCITY_THRESHOLD: float = 0.10  # 10% jump within a few polls triggers emergency
+    UTILIZATION_CONFIRM_COUNT: int = 2  # consecutive successful high reads required
+    EMERGENCY_WITHDRAWAL_COOLDOWN: int = 300  # seconds per (account, protocol) trigger cooldown
     STABILITY_SWING_THRESHOLD: float = 0.50  # 50% relative swing in 7 days → skip
     MIN_PROTOCOL_TVL_USD: float = 100000.0   # $100K minimum TVL for Aave/Benqi
     CIRCUIT_BREAKER_THRESHOLD: int = 3   # Consecutive RPC failures before excluding

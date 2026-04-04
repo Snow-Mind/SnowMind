@@ -1,7 +1,7 @@
 """Waterfall allocator — priority-ordered fill with TVL caps and a base layer.
 
 Sorts protocols by APY descending, fills each up to
-min(user_exposure_cap, 7.5% of protocol TVL), and parks any remainder in
+min(user_exposure_cap, 7.5% of available liquidity), and parks any remainder in
 the base layer (Spark on mainnet) as the stable yield floor.
 
 Used by the /simulate endpoint. The live rebalancer uses allocator.py.
@@ -28,6 +28,7 @@ _DUST = Decimal("0.10")  # $0.10 dust threshold — filter sub-dime allocations
 def waterfall_allocate(
     inp: OptimizerInput,
     tvl_by_protocol: dict[str, Decimal],
+    protocol_utilizations: dict[str, Decimal | None] | None = None,
     tvl_cap_pct: Decimal = Decimal("0.075"),
     max_exposure_pct: Decimal = Decimal("1.00"),
     base_beat_margin: Decimal = Decimal("0.0001"),
@@ -38,7 +39,7 @@ def waterfall_allocate(
     Algorithm:
         1. Identify base layer's APY as the yield floor.
         2. Filter protocols that beat base layer by base_beat_margin, sort by APY desc.
-        3. For each protocol: cap = min(max_exposure * total, tvl * tvl_cap_pct).
+        3. For each protocol: cap = min(max_exposure * total, available_liquidity * tvl_cap_pct).
            Allocate min(remaining, cap).
         4. Park any leftover in the base layer.
         5. If nothing beats the base layer, allocate 100% to it.
@@ -46,6 +47,7 @@ def waterfall_allocate(
     Args:
         inp: Standard OptimizerInput (protocols, total_amount, current allocations, gas).
         tvl_by_protocol: Protocol ID → TVL in USD.
+        protocol_utilizations: Protocol ID → utilization ratio (0-1). None means unknown/0.
         tvl_cap_pct: Max fraction of a protocol's TVL we can own (default 7.5%).
         max_exposure_pct: Max fraction of total deposit in any single protocol.
         base_beat_margin: Minimum APY advantage over base layer to justify allocation.
@@ -78,7 +80,14 @@ def waterfall_allocate(
             break
 
         tvl = tvl_by_protocol.get(p.protocol_id, _ZERO)
-        tvl_cap = tvl * tvl_cap_pct if tvl > _ZERO else total  # skip TVL cap if unknown
+        if tvl > _ZERO:
+            raw_util = (protocol_utilizations or {}).get(p.protocol_id)
+            utilization = raw_util if raw_util is not None else _ZERO
+            utilization = max(_ZERO, min(utilization, Decimal("1")))
+            available_liquidity = tvl * (Decimal("1") - utilization)
+            tvl_cap = available_liquidity * tvl_cap_pct
+        else:
+            tvl_cap = total  # skip liquidity cap if TVL unknown
         exposure_cap = max_exposure_pct * total
         cap = min(exposure_cap, tvl_cap)
 
