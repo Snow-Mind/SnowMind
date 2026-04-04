@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     AVALANCHE_RPC_URL: str = "https://api.avax.network/ext/bc/C/rpc"  # emergency/public fallback
     INFURA_RPC_URL: str = ""  # Primary: "https://avalanche-mainnet.infura.io/v3/<KEY>"
     ALCHEMY_RPC_URL: str = ""  # Fallback: "https://avax-mainnet.g.alchemy.com/v2/<KEY>"
+    SNOWTRACE_API_KEY: str = ""  # Optional: explorer API key for transfer-history reconciliation
+    SNOWTRACE_API_URL: str = "https://api.snowtrace.io/api"
     AVALANCHE_CHAIN_ID: int = 43114
 
     # ── Bundler + Smart Account infra ────────────────────────

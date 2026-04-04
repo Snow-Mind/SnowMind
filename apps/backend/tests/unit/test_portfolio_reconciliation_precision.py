@@ -1,7 +1,6 @@
 """Unit tests for portfolio balance reconciliation precision and read failure behavior."""
 
 from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -115,59 +114,61 @@ class _FakeDB:
         raise AssertionError(f"Unexpected table: {name}")
 
 
-def _topic(value: str):
-    return SimpleNamespace(hex=lambda: value)
-
-
-def _data(amount_raw: int):
-    return SimpleNamespace(hex=lambda: hex(amount_raw))
-
-
-def _pad_topic(address: str) -> str:
-    return "0x" + ("0" * 24) + address.lower().replace("0x", "")
-
-
 @pytest.mark.asyncio
-async def test_reconcile_principal_tracking_from_chain_updates_tracking() -> None:
+async def test_reconcile_principal_tracking_prefers_snowtrace_when_available() -> None:
     portfolio._principal_reconcile_cooldowns.clear()
 
     smart = "0x6d6F6eE22f627f9406E4922970de12f9949be0A6"
     owner = "0x97950A98980a2Fc61ea7eb043bb7666845f77071"
     usdc = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
 
-    deposit_log = {
-        "address": usdc,
-        "topics": [
-            _topic("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"),
-            _topic(_pad_topic(owner)),
-            _topic(_pad_topic(smart)),
-        ],
-        "data": _data(2_000_000),
-    }
-    withdraw_log = {
-        "address": usdc,
-        "topics": [
-            _topic("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"),
-            _topic(_pad_topic(smart)),
-            _topic(_pad_topic(owner)),
-        ],
-        "data": _data(1_000_000),
-    }
-
-    fake_w3 = MagicMock()
-    fake_w3.eth.get_transaction_receipt = AsyncMock(
-        side_effect=[
-            {"logs": [deposit_log]},
-            {"logs": [withdraw_log]},
-        ]
-    )
-
     settings = MagicMock()
     settings.USDC_ADDRESS = usdc
+    settings.SNOWTRACE_API_KEY = "test-key"
+    settings.SNOWTRACE_API_URL = "https://api.snowtrace.io/api"
 
     db = _FakeDB()
     with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
-        "app.api.routes.portfolio.get_shared_async_web3", return_value=fake_w3
+        "app.api.routes.portfolio._collect_principal_from_snowtrace",
+        new=AsyncMock(return_value=(Decimal("3"), Decimal("1"))),
+    ), patch(
+        "app.api.routes.portfolio._collect_principal_from_rebalance_receipts",
+        new=AsyncMock(return_value=(Decimal("2"), Decimal("1"))),
+    ):
+        reconciled = await portfolio._reconcile_principal_tracking_from_chain(
+            db=db,
+            account_id="acct-1",
+            smart_address=smart,
+            owner_address=owner,
+        )
+
+    assert reconciled == Decimal("2.000000")
+    assert db.tracking_query.upsert_payload is not None
+    assert db.tracking_query.upsert_payload["cumulative_deposited"] == "3.000000"
+    assert db.tracking_query.upsert_payload["cumulative_net_withdrawn"] == "1.000000"
+    assert db.tracking_query.upsert_on_conflict == "account_id"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_principal_tracking_falls_back_to_receipts() -> None:
+    portfolio._principal_reconcile_cooldowns.clear()
+
+    smart = "0x6d6F6eE22f627f9406E4922970de12f9949be0A6"
+    owner = "0x97950A98980a2Fc61ea7eb043bb7666845f77071"
+    usdc = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    settings = MagicMock()
+    settings.USDC_ADDRESS = usdc
+    settings.SNOWTRACE_API_KEY = ""
+    settings.SNOWTRACE_API_URL = "https://api.snowtrace.io/api"
+
+    db = _FakeDB()
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio._collect_principal_from_snowtrace",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.api.routes.portfolio._collect_principal_from_rebalance_receipts",
+        new=AsyncMock(return_value=(Decimal("2"), Decimal("1"))),
     ):
         reconciled = await portfolio._reconcile_principal_tracking_from_chain(
             db=db,
@@ -180,4 +181,3 @@ async def test_reconcile_principal_tracking_from_chain_updates_tracking() -> Non
     assert db.tracking_query.upsert_payload is not None
     assert db.tracking_query.upsert_payload["cumulative_deposited"] == "2.000000"
     assert db.tracking_query.upsert_payload["cumulative_net_withdrawn"] == "1.000000"
-    assert db.tracking_query.upsert_on_conflict == "account_id"

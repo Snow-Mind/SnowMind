@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supabase import Client
 
@@ -45,6 +46,9 @@ _PRINCIPAL_RECONCILE_IMPROVEMENT_EPSILON_USDC = Decimal("0.01")
 _PRINCIPAL_RECONCILE_MAX_TX = 5000
 _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
 _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
+_SNOWTRACE_PAGE_SIZE = 1000
+_SNOWTRACE_MAX_PAGES = 20
+_SNOWTRACE_TIMEOUT_SECONDS = 20.0
 
 # Short-lived in-memory cache to dampen duplicate dashboard polling.
 _portfolio_cache: dict[str, tuple[float, dict]] = {}
@@ -81,27 +85,18 @@ def _topic_to_address(topic_hex: str) -> str:
     return f"0x{normalized[-40:]}"
 
 
-async def _reconcile_principal_tracking_from_chain(
+def _usdc_to_decimal(raw: str | int) -> Decimal:
+    return Decimal(str(raw)) / Decimal("1000000")
+
+
+async def _collect_principal_from_rebalance_receipts(
     db: Client,
     account_id: str,
     smart_address: str,
     owner_address: str,
-) -> Decimal | None:
-    """Rebuild principal ledger from on-chain USDC transfers between owner and smart account.
-
-    This is a legacy recovery path for accounts that have stale/incomplete
-    historical tracking rows. It is throttled per account to avoid repeated
-    expensive receipt scans under dashboard polling.
-    """
-    cooldown_key = f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
-    now_mono = time.monotonic()
-    next_allowed = _principal_reconcile_cooldowns.get(cooldown_key, 0.0)
-    if now_mono < next_allowed:
-        return None
-    _principal_reconcile_cooldowns[cooldown_key] = (
-        now_mono + _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS
-    )
-
+    usdc_address: str,
+) -> tuple[Decimal, Decimal] | None:
+    """Infer principal flow from executed tx receipts stored in rebalance logs."""
     try:
         tx_count_resp = (
             db.table("rebalance_logs")
@@ -116,7 +111,7 @@ async def _reconcile_principal_tracking_from_chain(
             return None
         if tx_count > _PRINCIPAL_RECONCILE_MAX_TX:
             logger.warning(
-                "Skipping principal reconciliation for %s: tx_count=%d exceeds limit=%d",
+                "Skipping receipt-based reconciliation for %s: tx_count=%d exceeds limit=%d",
                 smart_address,
                 tx_count,
                 _PRINCIPAL_RECONCILE_MAX_TX,
@@ -124,7 +119,7 @@ async def _reconcile_principal_tracking_from_chain(
             return None
     except Exception as exc:
         logger.warning(
-            "Failed to load tx history for principal reconciliation (%s): %s",
+            "Failed to load tx history for receipt reconciliation (%s): %s",
             smart_address,
             exc,
         )
@@ -147,7 +142,7 @@ async def _reconcile_principal_tracking_from_chain(
             )
         except Exception as exc:
             logger.warning(
-                "Failed to page tx history for principal reconciliation (%s): %s",
+                "Failed to page tx history for receipt reconciliation (%s): %s",
                 smart_address,
                 exc,
             )
@@ -167,58 +162,207 @@ async def _reconcile_principal_tracking_from_chain(
     if not tx_hashes:
         return None
 
-    try:
-        settings = get_settings()
-        w3 = get_shared_async_web3()
-        usdc_address = settings.USDC_ADDRESS.lower()
-        smart_l = smart_address.lower()
-        owner_l = owner_address.lower()
+    w3 = get_shared_async_web3()
+    smart_l = smart_address.lower()
+    owner_l = owner_address.lower()
+    usdc_l = usdc_address.lower()
 
-        cumulative_deposited = Decimal("0")
-        cumulative_withdrawn = Decimal("0")
+    cumulative_deposited = Decimal("0")
+    cumulative_withdrawn = Decimal("0")
 
-        for tx_hash in tx_hashes:
-            try:
-                receipt = await w3.eth.get_transaction_receipt(tx_hash)
-            except Exception:
+    for tx_hash in tx_hashes:
+        try:
+            receipt = await w3.eth.get_transaction_receipt(tx_hash)
+        except Exception:
+            continue
+
+        for entry in receipt.get("logs", []):
+            token_address = str(entry.get("address", "")).lower()
+            if token_address != usdc_l:
                 continue
 
-            for entry in receipt.get("logs", []):
-                token_address = str(entry.get("address", "")).lower()
-                if token_address != usdc_address:
-                    continue
+            topics = [topic.hex().lower() for topic in entry.get("topics", [])]
+            if len(topics) < 3 or not topics[0].startswith(_USDC_TRANSFER_TOPIC_PREFIX):
+                continue
 
-                topics = [topic.hex().lower() for topic in entry.get("topics", [])]
-                if len(topics) < 3 or not topics[0].startswith(_USDC_TRANSFER_TOPIC_PREFIX):
-                    continue
+            source = _topic_to_address(topics[1])
+            destination = _topic_to_address(topics[2])
+            amount_raw = int(entry.get("data", b"0x00").hex(), 16)
+            amount_usdc = _usdc_to_decimal(amount_raw)
 
-                source = _topic_to_address(topics[1])
-                destination = _topic_to_address(topics[2])
-                amount_raw = int(entry.get("data", b"0x00").hex(), 16)
-                amount_usdc = Decimal(str(amount_raw)) / Decimal("1000000")
+            if source == owner_l and destination == smart_l:
+                cumulative_deposited += amount_usdc
+            elif source == smart_l and destination == owner_l:
+                cumulative_withdrawn += amount_usdc
+
+    if cumulative_deposited <= Decimal("0") and cumulative_withdrawn <= Decimal("0"):
+        return None
+    return cumulative_deposited, cumulative_withdrawn
+
+
+async def _collect_principal_from_snowtrace(
+    smart_address: str,
+    owner_address: str,
+    usdc_address: str,
+) -> tuple[Decimal, Decimal] | None:
+    """Collect lifetime owner<->smart USDC transfers from Snowtrace API."""
+    settings = get_settings()
+    api_key = (settings.SNOWTRACE_API_KEY or "").strip()
+    if not api_key:
+        return None
+
+    smart_l = smart_address.lower()
+    owner_l = owner_address.lower()
+    contract_address = usdc_address.lower()
+    base_url = settings.SNOWTRACE_API_URL.strip()
+
+    cumulative_deposited = Decimal("0")
+    cumulative_withdrawn = Decimal("0")
+
+    async with httpx.AsyncClient(timeout=_SNOWTRACE_TIMEOUT_SECONDS) as client:
+        for page in range(1, _SNOWTRACE_MAX_PAGES + 1):
+            try:
+                response = await client.get(
+                    base_url,
+                    params={
+                        "module": "account",
+                        "action": "tokentx",
+                        "contractaddress": contract_address,
+                        "address": smart_l,
+                        "page": page,
+                        "offset": _SNOWTRACE_PAGE_SIZE,
+                        "sort": "asc",
+                        "apikey": api_key,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as exc:
+                logger.warning(
+                    "Snowtrace principal fetch failed for %s page=%d: %s",
+                    smart_address,
+                    page,
+                    exc,
+                )
+                return None
+
+            status = str(payload.get("status", "")).strip()
+            message = str(payload.get("message", "")).strip().lower()
+            rows = payload.get("result") or []
+            if status != "1":
+                if message in {"no transactions found", "notok"} and not rows:
+                    break
+                logger.warning(
+                    "Snowtrace returned non-success for %s page=%d: status=%s message=%s",
+                    smart_address,
+                    page,
+                    status,
+                    payload.get("message"),
+                )
+                return None
+
+            if not isinstance(rows, list) or not rows:
+                break
+
+            for row in rows:
+                source = str(row.get("from", "")).lower()
+                destination = str(row.get("to", "")).lower()
+                amount_raw = row.get("value", "0")
+                try:
+                    amount_usdc = _usdc_to_decimal(amount_raw)
+                except Exception:
+                    continue
 
                 if source == owner_l and destination == smart_l:
                     cumulative_deposited += amount_usdc
                 elif source == smart_l and destination == owner_l:
                     cumulative_withdrawn += amount_usdc
 
+            if len(rows) < _SNOWTRACE_PAGE_SIZE:
+                break
+
+            if page == _SNOWTRACE_MAX_PAGES:
+                logger.warning(
+                    "Snowtrace principal fetch hit page limit for %s; skipping partial reconciliation",
+                    smart_address,
+                )
+                return None
+
+    if cumulative_deposited <= Decimal("0") and cumulative_withdrawn <= Decimal("0"):
+        return None
+    return cumulative_deposited, cumulative_withdrawn
+
+
+async def _reconcile_principal_tracking_from_chain(
+    db: Client,
+    account_id: str,
+    smart_address: str,
+    owner_address: str,
+    persist: bool = True,
+) -> Decimal | None:
+    """Rebuild principal ledger from on-chain USDC transfers between owner and smart account.
+
+    This is a legacy recovery path for accounts that have stale/incomplete
+    historical tracking rows. It is throttled per account to avoid repeated
+    expensive receipt scans under dashboard polling.
+    """
+    cooldown_key = f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
+    now_mono = time.monotonic()
+    next_allowed = _principal_reconcile_cooldowns.get(cooldown_key, 0.0)
+    if now_mono < next_allowed:
+        return None
+    _principal_reconcile_cooldowns[cooldown_key] = (
+        now_mono + _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS
+    )
+
+    try:
+        settings = get_settings()
+        usdc_address = settings.USDC_ADDRESS
+
+        cumulative_deposited: Decimal | None = None
+        cumulative_withdrawn: Decimal | None = None
+        source_used = "receipt_logs"
+
+        snowtrace_totals = await _collect_principal_from_snowtrace(
+            smart_address=smart_address,
+            owner_address=owner_address,
+            usdc_address=usdc_address,
+        )
+        if snowtrace_totals is not None:
+            cumulative_deposited, cumulative_withdrawn = snowtrace_totals
+            source_used = "snowtrace"
+        else:
+            receipt_totals = await _collect_principal_from_rebalance_receipts(
+                db=db,
+                account_id=account_id,
+                smart_address=smart_address,
+                owner_address=owner_address,
+                usdc_address=usdc_address,
+            )
+            if receipt_totals is None:
+                return None
+            cumulative_deposited, cumulative_withdrawn = receipt_totals
+
         deposited_q = cumulative_deposited.quantize(Decimal("0.000001"))
         withdrawn_q = cumulative_withdrawn.quantize(Decimal("0.000001"))
 
-        db.table("account_yield_tracking").upsert(
-            {
-                "account_id": account_id,
-                "cumulative_deposited": str(deposited_q),
-                "cumulative_net_withdrawn": str(withdrawn_q),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="account_id",
-        ).execute()
+        if persist:
+            db.table("account_yield_tracking").upsert(
+                {
+                    "account_id": account_id,
+                    "cumulative_deposited": str(deposited_q),
+                    "cumulative_net_withdrawn": str(withdrawn_q),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="account_id",
+            ).execute()
 
         reconciled_net_principal = max(deposited_q - withdrawn_q, Decimal("0"))
         logger.warning(
-            "Reconciled principal tracking for %s from chain transfers: deposited=%s withdrawn=%s net=%s",
+            "Reconciled principal tracking for %s from %s (persist=%s): deposited=%s withdrawn=%s net=%s",
             smart_address,
+            source_used,
+            persist,
             deposited_q,
             withdrawn_q,
             reconciled_net_principal,
