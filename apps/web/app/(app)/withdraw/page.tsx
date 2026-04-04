@@ -28,6 +28,7 @@ import { EXPLORER, FEE_CONFIG } from '@/lib/constants'
 import { api, APIError } from '@/lib/api-client'
 import { signWithdrawalAuthorization } from '@/lib/withdrawal-auth'
 import { usePortfolioStore } from '@/stores/portfolio.store'
+import { usePortfolio } from '@/hooks/usePortfolio'
 
 type WithdrawalStep = 'input' | 'preview' | 'executing' | 'success' | 'error'
 
@@ -66,6 +67,14 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+function formatUsdcDisplay(value: number): string {
+  if (!Number.isFinite(value)) return '0.00'
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: value < 1 ? 6 : 2,
+    maximumFractionDigits: value < 1 ? 6 : 2,
+  })
+}
+
 export default function WithdrawPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -79,13 +88,18 @@ export default function WithdrawPage() {
 
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress)
   const totalDepositedUsd = usePortfolioStore((s) => s.totalDepositedUsd)
+  const totalYieldUsd = usePortfolioStore((s) => s.totalYieldUsd)
   const setAllocations = usePortfolioStore((s) => s.setAllocations)
   const setTotals = usePortfolioStore((s) => s.setTotals)
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated)
   const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount)
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
-  const balance = parseFloat(totalDepositedUsd || '0')
+  const { data: livePortfolio } = usePortfolio(smartAccountAddress || undefined)
+  const fallbackBalance = parseFloat(totalDepositedUsd || '0') + parseFloat(totalYieldUsd || '0')
+  const balance = livePortfolio
+    ? Math.max(Number(livePortfolio.totalDepositedUsd) + Number(livePortfolio.totalYieldUsd), 0)
+    : Math.max(fallbackBalance, 0)
 
   const handlePreview = useCallback(async () => {
     setIsLoading(true)
@@ -95,7 +109,7 @@ export default function WithdrawPage() {
 
       const requestedAmount = amount
       const effectiveFullWithdrawal = isFullWithdrawal || isEffectivelyFullWithdrawal(requestedAmount, balance)
-      const withdrawAmount = effectiveFullWithdrawal ? String(balance) : requestedAmount
+      const withdrawAmount = effectiveFullWithdrawal ? balance.toFixed(6) : requestedAmount
       if (!withdrawAmount || parseFloat(withdrawAmount) <= 0) {
         throw new Error('Please enter a valid amount')
       }
@@ -205,7 +219,7 @@ export default function WithdrawPage() {
             <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="text-xs text-white/40 mb-1">Available Balance</div>
               <div className="text-2xl font-bold font-mono text-white/90">
-                ${balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ${formatUsdcDisplay(balance)}
               </div>
               <div className="text-xs text-white/30 mt-1">USDC across all protocols</div>
             </div>
@@ -215,7 +229,7 @@ export default function WithdrawPage() {
               <div className="flex items-center justify-between mb-3">
                 <label className="text-sm text-white/60">Withdrawal Amount</label>
                 <button
-                  onClick={() => { setIsFullWithdrawal(true); setAmount(String(balance)) }}
+                  onClick={() => { setIsFullWithdrawal(true); setAmount(balance.toFixed(6)) }}
                   className="text-xs text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
                 >
                   Withdraw All
@@ -234,7 +248,7 @@ export default function WithdrawPage() {
                   placeholder="0.00"
                   min="0"
                   max={balance}
-                  step="0.01"
+                  step="0.000001"
                   className="w-full rounded-xl bg-white/[0.04] border border-white/[0.08] px-4 py-3 pl-9
                     text-lg font-mono text-white placeholder:text-white/20
                     focus:outline-none focus:border-emerald-500/40 focus:ring-1 focus:ring-emerald-500/20

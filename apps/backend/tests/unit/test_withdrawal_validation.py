@@ -1,7 +1,7 @@
 """Unit tests for withdrawal input validation hardening.
 
 Tests cover:
-    1. Dust threshold rejection (< $0.01)
+    1. Minimum amount rejection (< 0.000001 USDC)
     2. Maximum withdrawal rejection (> $10M)
     3. USDC precision enforcement (max 6 decimals)
     4. Invalid decimal strings
@@ -14,13 +14,13 @@ from pydantic import ValidationError
 
 
 def test_dust_amount_rejected():
-    """Withdrawal below $0.01 must be rejected."""
+    """Withdrawal below 1 micro-USDC must be rejected."""
     from app.api.routes.withdrawal import WithdrawalExecuteRequest
 
-    with pytest.raises(ValidationError, match="dust threshold"):
+    with pytest.raises(ValidationError, match="below minimum"):
         WithdrawalExecuteRequest(
             smartAccountAddress="0x1234567890abcdef1234567890abcdef12345678",
-            withdrawAmount="0.001",
+            withdrawAmount="0.0000001",
         )
 
 
@@ -69,14 +69,14 @@ def test_valid_amount_passes():
 
 
 def test_minimum_valid_amount():
-    """Exactly $0.01 should pass (equal to dust threshold)."""
+    """Exactly 1 micro-USDC should pass."""
     from app.api.routes.withdrawal import WithdrawalExecuteRequest
 
     req = WithdrawalExecuteRequest(
         smartAccountAddress="0x1234567890abcdef1234567890abcdef12345678",
-        withdrawAmount="0.01",
+        withdrawAmount="0.000001",
     )
-    assert req.withdraw_amount == "0.01"
+    assert req.withdraw_amount == "0.000001"
 
 
 def test_maximum_valid_amount():
@@ -94,10 +94,10 @@ def test_preview_request_same_validation():
     """WithdrawalPreviewRequest should have the same validation rules."""
     from app.api.routes.withdrawal import WithdrawalPreviewRequest
 
-    with pytest.raises(ValidationError, match="dust threshold"):
+    with pytest.raises(ValidationError, match="below minimum"):
         WithdrawalPreviewRequest(
             smartAccountAddress="0x1234567890abcdef1234567890abcdef12345678",
-            withdrawAmount="0.001",
+            withdrawAmount="0.0000001",
         )
 
     with pytest.raises(ValidationError, match="exceeds maximum"):
@@ -143,6 +143,20 @@ def test_explicit_full_withdrawal_always_uses_current_balance():
         requested_amount_usdc=Decimal("10"),
         current_balance_usdc=Decimal("100"),
         requested_full_withdrawal=True,
+    )
+
+    assert is_full is True
+    assert normalized_amount == Decimal("100")
+
+
+def test_requested_amount_at_or_above_balance_normalizes_to_full():
+    """Stale frontend amounts slightly above current balance should become full withdrawal."""
+    from app.api.routes.withdrawal import _resolve_withdrawal_intent
+
+    normalized_amount, is_full = _resolve_withdrawal_intent(
+        requested_amount_usdc=Decimal("100.000001"),
+        current_balance_usdc=Decimal("100"),
+        requested_full_withdrawal=False,
     )
 
     assert is_full is True

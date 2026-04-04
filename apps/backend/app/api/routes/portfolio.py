@@ -193,6 +193,23 @@ async def get_portfolio(
     if cached_response is not None:
         return cached_response
 
+    # Principal baseline from the same ledger used by withdrawal fee logic.
+    tracked_net_principal: Decimal | None = None
+    try:
+        tracking = (
+            db.table("account_yield_tracking")
+            .select("cumulative_deposited, cumulative_net_withdrawn")
+            .eq("account_id", account_id)
+            .limit(1)
+            .execute()
+        )
+        if tracking.data:
+            cumulative_deposited = Decimal(str(tracking.data[0].get("cumulative_deposited") or 0))
+            cumulative_withdrawn = Decimal(str(tracking.data[0].get("cumulative_net_withdrawn") or 0))
+            tracked_net_principal = max(cumulative_deposited - cumulative_withdrawn, Decimal("0"))
+    except Exception as exc:
+        logger.warning("Failed to read yield tracking for %s: %s", address, exc)
+
     # Fetch allocations
     allocs = (
         db.table("allocations")
@@ -202,13 +219,11 @@ async def get_portfolio(
     )
 
     allocations: list[AllocationResponse] = []
-    total_deposited = Decimal(0)
-    original_db_deposits = Decimal(0)  # Track original deposits for yield calc
+    total_current_value = Decimal(0)
     db_protocol_ids: set[str] = set()
     for row in allocs.data or []:
         amt = Decimal(str(row["amount_usdc"]))
-        total_deposited += amt
-        original_db_deposits += amt
+        total_current_value += amt
         db_protocol_ids.add(row["protocol_id"])
         allocations.append(
             AllocationResponse(
@@ -249,13 +264,10 @@ async def get_portfolio(
         if onchain_balance > _PROTOCOL_BALANCE_DUST_USDC:
             if existing:
                 if _should_refresh_amount(existing.amount_usdc, onchain_balance):
-                    total_deposited -= existing.amount_usdc
+                    total_current_value -= existing.amount_usdc
                     existing.amount_usdc = onchain_balance
-                    total_deposited += onchain_balance
+                    total_current_value += onchain_balance
             else:
-                # Discovered on-chain position not in DB — this is a deposit,
-                # not yield. Track it in original_db_deposits so yield calc
-                # shows correctly (yield = current_value - original_deposits).
                 allocations.append(
                     AllocationResponse(
                         protocol_id=pid,
@@ -265,12 +277,10 @@ async def get_portfolio(
                         current_apy=live_apys.get(pid, Decimal("0")),
                     )
                 )
-                total_deposited += onchain_balance
-                original_db_deposits += onchain_balance  # FIX: Don't count as yield
+                total_current_value += onchain_balance
         else:
             if existing and existing.amount_usdc > _PROTOCOL_BALANCE_DUST_USDC:
-                total_deposited -= existing.amount_usdc
-                original_db_deposits -= existing.amount_usdc
+                total_current_value -= existing.amount_usdc
                 existing.amount_usdc = Decimal("0")
 
     # Remove zero-balance allocations so they don't clutter the response
@@ -284,7 +294,7 @@ async def get_portfolio(
 
     # Add idle USDC if present
     if idle_usdc > Decimal("0.01"):
-        total_deposited += idle_usdc
+        total_current_value += idle_usdc
         allocations.append(
             AllocationResponse(
                 protocol_id="idle",
@@ -296,9 +306,9 @@ async def get_portfolio(
         )
 
     # Recalculate allocation_pct for all entries
-    if total_deposited > 0:
+    if total_current_value > 0:
         for alloc in allocations:
-            alloc.allocation_pct = alloc.amount_usdc / total_deposited
+            alloc.allocation_pct = alloc.amount_usdc / total_current_value
 
     # Last rebalance timestamp
     last_rb = (
@@ -312,14 +322,13 @@ async def get_portfolio(
     )
     last_ts = last_rb.data[0]["created_at"] if last_rb.data else None
 
-    # Yield = current protocol value (on-chain) minus original DB deposits
-    current_protocol_value = sum(
-        a.amount_usdc for a in allocations if a.protocol_id != "idle"
-    )
-    total_yield = max(current_protocol_value - original_db_deposits, Decimal(0))
+    # Expose principal and yield consistently:
+    #   current value = net principal + net earned
+    net_principal = tracked_net_principal if tracked_net_principal is not None else total_current_value
+    total_yield = total_current_value - net_principal
 
     response = PortfolioResponse(
-        total_deposited_usd=total_deposited,
+        total_deposited_usd=net_principal,
         total_yield_usd=total_yield,
         allocations=allocations,
         last_rebalance_at=last_ts,

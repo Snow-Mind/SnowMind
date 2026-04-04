@@ -1632,7 +1632,8 @@ export async function executeRebalance({
       timestamp: new Date().toISOString(),
     }))
 
-    if (!backendSignerMatchesOwner) {
+    const hasRecoverableEnableSig = typeof enableSig === "string" && enableSig.startsWith("0x") && enableSig.length > 2
+    if (hasRecoverableEnableSig && !backendSignerMatchesOwner) {
       console.log(JSON.stringify({
         level: "error",
         action: "enable_signature_MISMATCH",

@@ -34,8 +34,10 @@ logger = logging.getLogger("snowmind.api.withdrawal")
 
 router = APIRouter()
 
-# Minimum withdrawal: 0.01 USDC (below this is dust)
-_MIN_WITHDRAWAL_USDC = Decimal("0.01")
+# Minimum requestable withdrawal: 1 micro-USDC
+_MIN_WITHDRAWAL_REQUEST_USDC = Decimal("0.000001")
+# Treat tiny remainder as full withdrawal to avoid stranded dust state
+_FULL_WITHDRAWAL_DUST_USDC = Decimal("0.01")
 # Maximum withdrawal: $10M (sanity guard)
 _MAX_WITHDRAWAL_USDC = Decimal("10000000")
 _WITHDRAW_SIGNATURE_TTL_SECONDS = 300
@@ -57,8 +59,8 @@ class WithdrawalPreviewRequest(BaseModel):
             amt = Decimal(v)
         except Exception:
             raise ValueError("withdraw_amount must be a valid decimal string")
-        if amt < _MIN_WITHDRAWAL_USDC:
-            raise ValueError(f"withdraw_amount below dust threshold (${_MIN_WITHDRAWAL_USDC})")
+        if amt < _MIN_WITHDRAWAL_REQUEST_USDC:
+            raise ValueError(f"withdraw_amount below minimum (${_MIN_WITHDRAWAL_REQUEST_USDC})")
         if amt > _MAX_WITHDRAWAL_USDC:
             raise ValueError(f"withdraw_amount exceeds maximum (${_MAX_WITHDRAWAL_USDC})")
         # Validate USDC precision (max 6 decimal places)
@@ -98,8 +100,8 @@ class WithdrawalExecuteRequest(BaseModel):
             amt = Decimal(v)
         except Exception:
             raise ValueError("withdraw_amount must be a valid decimal string")
-        if amt < _MIN_WITHDRAWAL_USDC:
-            raise ValueError(f"withdraw_amount below dust threshold (${_MIN_WITHDRAWAL_USDC})")
+        if amt < _MIN_WITHDRAWAL_REQUEST_USDC:
+            raise ValueError(f"withdraw_amount below minimum (${_MIN_WITHDRAWAL_REQUEST_USDC})")
         if amt > _MAX_WITHDRAWAL_USDC:
             raise ValueError(f"withdraw_amount exceeds maximum (${_MAX_WITHDRAWAL_USDC})")
         # Validate USDC precision (max 6 decimal places)
@@ -197,14 +199,22 @@ def _resolve_withdrawal_intent(
     if requested_full_withdrawal:
         return current_balance_usdc, True
 
-    if requested_amount_usdc > current_balance_usdc:
-        return requested_amount_usdc, False
+    # Frontend snapshots can be stale by a few micros; normalize to full
+    # withdrawal when the user request is at/above current balance.
+    if requested_amount_usdc >= current_balance_usdc:
+        return current_balance_usdc, True
 
     remaining = current_balance_usdc - requested_amount_usdc
-    if remaining <= _MIN_WITHDRAWAL_USDC:
+    if remaining <= _FULL_WITHDRAWAL_DUST_USDC:
         return current_balance_usdc, True
 
     return requested_amount_usdc, False
+
+
+def _to_raw_usdc(amount_usdc: Decimal) -> int:
+    """Convert 6-decimal USDC amount to integer raw units exactly."""
+    normalized = amount_usdc.quantize(Decimal("0.000001"))
+    return int((normalized * Decimal("1e6")).to_integral_exact())
 
 
 def _build_withdrawal_authorization_message(
@@ -460,10 +470,15 @@ async def execute_withdrawal(
         except Exception as exc:
             logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
 
-        agent_fee_raw = int(fee_calc.agent_fee * Decimal("1e6"))  # Convert to 6-decimal raw
-        # withdrawAmount is what the user receives = requested amount minus fee
-        net_to_user = withdraw_amount - fee_calc.agent_fee
-        withdraw_raw = int(net_to_user * Decimal("1e6"))
+        agent_fee_raw = _to_raw_usdc(fee_calc.agent_fee)
+        # Always use quantized fee-calculator output to avoid micro truncation drift.
+        net_to_user = fee_calc.user_receives
+        withdraw_raw = _to_raw_usdc(net_to_user)
+        if withdraw_raw <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Net withdrawal amount rounds to zero after fees",
+            )
 
         payload = {
             "serializedPermission": session_key,

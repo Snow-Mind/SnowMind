@@ -1075,58 +1075,6 @@ function AgentDetailsModal({
       }
 
       throw new Error(result.message || "Withdrawal was not executed");
-    } catch (primaryError) {
-      console.warn("[AgentDetails] Backend withdrawal failed, falling back to wallet flow", primaryError);
-    }
-
-    if (!wallet) {
-      toast.error("Withdrawal fallback requires a connected wallet.");
-      setWithdrawStep("idle");
-      return;
-    }
-
-    try {
-      const publicClient = createPublicClient({ chain: CHAIN, transport: http(AVALANCHE_RPC_URL) });
-
-      // Read share balances from ALL protocols
-      const balances = await readAllProtocolBalances(publicClient, smartAccountAddress as `0x${string}`);
-
-      const { kernelClient } = await createSmartAccount(wallet);
-
-      // Step 1: Redeem from ALL protocols in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || (balances.aaveBalance ?? 0n) > 0n;
-      if (hasPositions) {
-        await emergencyWithdrawAll(
-          kernelClient,
-          smartAccountAddress as `0x${string}`,
-          CONTRACTS,
-          balances.qiBalance,
-          balances.sparkShares,
-          balances.eulerShares,
-          balances.siloSavusdShares,
-          balances.siloSusdpShares,
-          balances.aaveBalance ?? 0n,
-        );
-      }
-
-      // Step 2: Transfer ALL USDC to EOA
-      const usdcBalance = await publicClient.readContract({
-        address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf",
-        args: [smartAccountAddress as `0x${string}`],
-      });
-
-      if ((usdcBalance as bigint) > 0n) {
-        await kernelClient.sendTransaction({
-          calls: [{ to: CONTRACTS.USDC, value: 0n, data: encodeFunctionData({ abi: ERC20_TRANSFER_ONLY_ABI, functionName: "transfer", args: [wallet.address as `0x${string}`, usdcBalance as bigint] }) }],
-        });
-      }
-
-
-      // Step 3: Deactivate agent
-      setWithdrawStep("deactivating");
-      toast.success("Successfully withdrawn funds!");
-      await new Promise((r) => setTimeout(r, 1500));
-      await onDeactivate();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("User denied") || msg.includes("User rejected")) toast.error("Transaction cancelled.");

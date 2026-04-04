@@ -171,14 +171,23 @@ def record_withdrawal(
     try:
         existing = (
             db.table("account_yield_tracking")
-            .select("cumulative_net_withdrawn")
+            .select("cumulative_deposited, cumulative_net_withdrawn")
             .eq("account_id", account_id)
             .limit(1)
             .execute()
         )
         if not existing.data:
-            logger.error(
-                "No yield tracking row for %s during withdrawal",
+            # Legacy/self-heal path: if tracking row is missing, bootstrap from
+            # the observed pre-withdrawal balance so future accounting remains
+            # consistent and withdrawals are not lost from DB metrics.
+            assumed_deposited = fee_calc.current_balance
+            db.table("account_yield_tracking").insert({
+                "account_id": account_id,
+                "cumulative_deposited": str(assumed_deposited),
+                "cumulative_net_withdrawn": str(fee_calc.user_receives),
+            }).execute()
+            logger.warning(
+                "Yield tracking row missing for %s during withdrawal; bootstrapped with current balance",
                 account_id,
             )
             return

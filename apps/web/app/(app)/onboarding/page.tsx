@@ -1475,7 +1475,7 @@ export default function OnboardingPage() {
                       onClick={() => toggleProtocol(protocol.id, isEnabled)}
                     >
                       {/* Protocol info */}
-                      <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex min-w-0 items-start gap-3 md:order-1">
                         <Image
                           src={protocol.logoPath}
                           alt={protocol.name}
@@ -1514,7 +1514,7 @@ export default function OnboardingPage() {
                       </div>
 
                       {/* Toggle */}
-                      <div className="flex justify-center md:w-12">
+                      <div className="flex justify-center md:order-5 md:w-12">
                         <button
                           onClick={(e) => { e.stopPropagation(); toggleProtocol(protocol.id, isEnabled); }}
                           className={cn(
@@ -1534,7 +1534,7 @@ export default function OnboardingPage() {
                       </div>
 
                       {/* Risk Score (desktop) */}
-                      <div className="hidden justify-center md:flex md:w-14">
+                      <div className="hidden justify-center md:order-2 md:flex md:w-14">
                         <span className={cn(
                           "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
                           riskToneClass,
@@ -1544,12 +1544,12 @@ export default function OnboardingPage() {
                       </div>
 
                       {/* APY (desktop) */}
-                      <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:block">
+                      <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:order-3 md:block">
                         {apyLabel}
                       </span>
 
                       {/* TVL (desktop) */}
-                      <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:block">
+                      <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:order-4 md:block">
                         {tvlLabel}
                       </span>
 

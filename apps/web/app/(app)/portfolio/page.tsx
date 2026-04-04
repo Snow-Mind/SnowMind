@@ -24,14 +24,13 @@ import type { ProtocolAllocation } from "@snowmind/shared-types";
 function derivePositions(allocations: ProtocolAllocation[]) {
   return allocations.map((a) => {
     const meta = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
-    const deposited = Number(a.amountUsdc);
-    const yieldEarned = deposited * a.currentApy * (15 / 365); // estimated ~15 days
+    const currentValue = Number(a.amountUsdc);
     return {
       protocol: a.name || meta?.name || a.protocolId,
-      token: a.protocolId === "benqi" ? "qiUSDC" : "aUSDC",
-      deposited,
-      currentValue: deposited + yieldEarned,
-      yield: yieldEarned,
+      token: a.protocolId === "idle" ? "USDC" : (a.protocolId === "benqi" ? "qiUSDC" : "vault"),
+      deposited: currentValue,
+      currentValue,
+      yield: 0,
       apy: a.currentApy * 100,
       allocation: a.allocationPct * 100,
       color: meta?.color ?? "#8899AA",
@@ -64,9 +63,9 @@ export default function PortfolioPage() {
 
   const allocations = portfolio?.allocations ?? [];
   const positions = derivePositions(allocations);
-  const totalDeposited = portfolio ? Number(portfolio.totalDepositedUsd) : 0;
+  const netDeposited = portfolio ? Number(portfolio.totalDepositedUsd) : 0;
   const totalYield = portfolio ? Number(portfolio.totalYieldUsd) : 0;
-  const totalValue = positions.reduce((s, p) => s + p.currentValue, 0);
+  const totalValue = Math.max(netDeposited + totalYield, 0);
 
   const blendedApy =
     allocations.reduce((s, a) => s + a.currentApy * a.allocationPct, 0) * 100;
@@ -163,12 +162,12 @@ export default function PortfolioPage() {
         {[
           {
             label: "Total Value",
-            value: formatUsd(totalValue || totalDeposited),
+            value: formatUsd(totalValue),
             sub: (
               <div className="mt-1 flex items-center gap-1">
                 <ArrowUpRight className="h-3 w-3 text-mint" />
                 <span className="text-xs font-medium text-mint">
-                  +{formatUsd(totalYield)}
+                  {totalYield > 0 ? "+" : ""}{formatUsd(totalYield)}
                 </span>
                 <span className="text-xs text-muted-foreground">all time</span>
               </div>
@@ -310,7 +309,7 @@ export default function PortfolioPage() {
 
         {/* Allocation pie chart */}
         <div className="min-w-[320px]">
-          <AllocationChart allocations={allocations} totalDeposited={totalDeposited} />
+          <AllocationChart allocations={allocations} totalDeposited={totalValue} />
         </div>
       </div>
 

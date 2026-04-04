@@ -294,6 +294,36 @@ def test_record_withdrawal_updates_cumulative():
     assert call_args["cumulative_net_withdrawn"] == "695"
 
 
+def test_record_withdrawal_bootstraps_missing_tracking_row():
+    """Missing yield-tracking rows are bootstrapped from current balance."""
+    mock_db = MagicMock()
+    mock_db.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+    mock_db.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{}])
+
+    fee_calc = FeeCalculation(
+        withdraw_amount=D("500"),
+        current_balance=D("1000"),
+        net_principal=D("900"),
+        accrued_profit=D("100"),
+        attributable_profit=D("50"),
+        agent_fee=D("5"),
+        user_receives=D("495"),
+        new_net_principal=D("405"),
+        fee_exempt=False,
+        fee_rate=D("0.10"),
+    )
+
+    record_withdrawal(mock_db, "acct-1", fee_calc)
+
+    mock_db.table.return_value.insert.assert_called_once()
+    call_args = mock_db.table.return_value.insert.call_args[0][0]
+    assert call_args["account_id"] == "acct-1"
+    assert call_args["cumulative_deposited"] == "1000"
+    assert call_args["cumulative_net_withdrawn"] == "495"
+
+
 # ── 12. Exploit prevention: fee never exceeds withdrawal ────────────────────
 
 def test_fee_never_exceeds_withdrawal_amount():
