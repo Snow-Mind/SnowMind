@@ -21,6 +21,7 @@ import {
   ThumbsUp,
   Trash2,
   WandSparkles,
+  X,
 } from "lucide-react";
 import type { AssistantFeedbackValue, AssistantMessage } from "@snowmind/shared-types";
 
@@ -221,6 +222,23 @@ function makeMessage(role: "user" | "assistant", content: string): AssistantMess
   };
 }
 
+function compactApiErrorMessage(err: APIError, fallback: string): string {
+  if (err.status === 422) {
+    return "Request validation failed. Please retry.";
+  }
+
+  const normalized = err.message.trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (normalized.length > 180) {
+    return `${normalized.slice(0, 177)}...`;
+  }
+
+  return normalized;
+}
+
 export function FloatingAssistant() {
   const [isOpen, setIsOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -318,6 +336,11 @@ export function FloatingAssistant() {
     if (typeof window === "undefined") return;
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+        return;
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "j") {
         event.preventDefault();
         setIsOpen((prev) => !prev);
@@ -465,7 +488,7 @@ export function FloatingAssistant() {
     } catch (err) {
       let reason = "Assistant is temporarily unavailable.";
       if (err instanceof APIError) {
-        reason = err.message;
+        reason = compactApiErrorMessage(err, reason);
       }
       setError(reason);
       setMessages((prev) => [
@@ -642,7 +665,7 @@ export function FloatingAssistant() {
       setNotice(feedback === "up" ? "Marked as helpful." : "Marked as not helpful.");
     } catch (err) {
       if (err instanceof APIError) {
-        setError(err.message);
+        setError(compactApiErrorMessage(err, "Could not save feedback right now."));
       } else {
         setError("Could not save feedback right now.");
       }
@@ -650,6 +673,11 @@ export function FloatingAssistant() {
       setPendingFeedbackKey(null);
     }
   };
+
+  const statusMessage = error ?? notice;
+  const statusToneClass = error
+    ? "border-[#5A2F35] bg-[#251418] text-[#FFB9BA]"
+    : "border-[#303746] bg-[#151B25] text-white/65";
 
   const regenerateLatestAssistantReply = async () => {
     if (isSending || isLoadingHistory) return;
@@ -1019,8 +1047,29 @@ export function FloatingAssistant() {
                 <Sparkles className="h-3 w-3" />
                 Grounded context enabled
               </div>
-              {notice ? <p className="mb-1 text-[10px] text-white/55">{notice}</p> : null}
-              {error ? <p className="mb-1 text-[10px] text-[#FF9B9C]">{error}</p> : null}
+              <div className="mb-1 h-6">
+                {statusMessage ? (
+                  <div
+                    className={cn(
+                      "flex h-full items-center gap-1.5 rounded-md border px-2",
+                      statusToneClass,
+                    )}
+                  >
+                    <p className="truncate text-[10px]" title={statusMessage}>{statusMessage}</p>
+                    <button
+                      type="button"
+                      className="ml-auto inline-flex h-4 w-4 items-center justify-center rounded text-current/75 transition hover:bg-white/10 hover:text-current"
+                      onClick={() => {
+                        setError(null);
+                        setNotice(null);
+                      }}
+                      aria-label="Dismiss status message"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <div className="rounded-[16px] border border-[#2D3440] bg-[#141820] px-2.5 py-2 transition focus-within:border-[#E84142] focus-within:shadow-[0_0_0_1px_rgba(232,65,66,0.5)]">
                 <textarea
                   ref={composerRef}

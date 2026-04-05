@@ -145,7 +145,9 @@ class GeminiAssistantClient:
                         "11) Present risk as total score plus O/L/C/Y/A components. "
                         "Do not split risk into static vs dynamic subtotals unless the user explicitly asks.\n"
                         "12) End portfolio advice responses with this exact line: This is not financial advice.\n"
-                        "13) Never end in an incomplete sentence. Always finish the full answer cleanly."
+                        "13) Never end in an incomplete sentence. Always finish the full answer cleanly.\n"
+                        "14) When the question is about methodology, security, operations, or platform behavior, include at least one relevant docs reference under https://docs.snowmind.xyz/. "
+                        "If no specific page is certain, reference https://docs.snowmind.xyz/."
                     )
                 }
             ]

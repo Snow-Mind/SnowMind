@@ -47,7 +47,7 @@ _OLCYA_MEANINGS: tuple[str, ...] = (
 )
 
 
-class AssistantChatRequest(BaseModel):
+class AssistantChatRequest(CamelModel):
     session_id: str | None = Field(default=None, max_length=64)
     message: str = Field(min_length=1, max_length=4000)
 
@@ -97,7 +97,7 @@ class AssistantSessionListResponse(CamelModel):
     sessions: list[AssistantSessionSummaryResponse]
 
 
-class AssistantFeedbackRequest(BaseModel):
+class AssistantFeedbackRequest(CamelModel):
     session_id: str = Field(min_length=8, max_length=64)
     message_created_at: str = Field(min_length=8, max_length=64)
     message_content: str = Field(min_length=1, max_length=12000)

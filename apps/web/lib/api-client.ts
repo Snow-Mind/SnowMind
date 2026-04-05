@@ -97,6 +97,36 @@ function parseApiErrorMessage(rawBody: string): string {
     return "Unknown error";
   }
 
+  const extractFromValidationList = (value: unknown): string | null => {
+    if (!Array.isArray(value) || value.length === 0) {
+      return null;
+    }
+
+    for (const entry of value) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const obj = entry as Record<string, unknown>;
+      const msg = typeof obj.msg === "string" ? obj.msg.trim() : "";
+      if (!msg) {
+        continue;
+      }
+
+      const loc = Array.isArray(obj.loc)
+        ? obj.loc.filter((token): token is string | number => typeof token === "string" || typeof token === "number")
+        : [];
+
+      if (loc.length === 0) {
+        return msg;
+      }
+
+      return `${loc.join(".")}: ${msg}`;
+    }
+
+    return null;
+  };
+
   const extractFromObject = (value: unknown): string | null => {
     if (typeof value === "string") {
       const trimmed = value.trim();
@@ -112,6 +142,11 @@ function parseApiErrorMessage(rawBody: string): string {
     const error = obj.error;
 
     for (const candidate of [detail, message, error]) {
+      const validationMessage = extractFromValidationList(candidate);
+      if (validationMessage) {
+        return validationMessage;
+      }
+
       if (typeof candidate === "string" && candidate.trim()) {
         return candidate.trim();
       }
@@ -400,16 +435,31 @@ export const api = {
     ),
 
   // Assistant
-  chatAssistant: (data: AssistantChatRequest) =>
+  chatAssistant: ({ sessionId, message }: AssistantChatRequest) =>
     request<AssistantChatResponse>("/api/v1/assistant/chat", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+      }),
     }),
 
-  submitAssistantFeedback: (data: AssistantFeedbackRequest) =>
+  submitAssistantFeedback: ({
+    sessionId,
+    messageCreatedAt,
+    messageContent,
+    feedback,
+    note,
+  }: AssistantFeedbackRequest) =>
     request<AssistantFeedbackResponse>("/api/v1/assistant/feedback", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        session_id: sessionId,
+        message_created_at: messageCreatedAt,
+        message_content: messageContent,
+        feedback,
+        note,
+      }),
     }),
 
   getAssistantSession: (sessionId: string) =>

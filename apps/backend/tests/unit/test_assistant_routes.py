@@ -309,3 +309,22 @@ def test_feedback_request_rejects_invalid_timestamp() -> None:
             message_content="Response text",
             feedback="down",
         )
+
+
+def test_chat_request_accepts_camel_case_aliases() -> None:
+    payload = assistant_routes.AssistantChatRequest(
+        sessionId="sessionAAA1",
+        message="How is risk updated?",
+    )
+    assert payload.session_id == "sessionAAA1"
+
+
+def test_feedback_request_accepts_camel_case_aliases() -> None:
+    payload = assistant_routes.AssistantFeedbackRequest(
+        sessionId="sessionAAA1",
+        messageCreatedAt="2026-04-06T01:00:00+00:00",
+        messageContent="Response text",
+        feedback="up",
+    )
+    assert payload.session_id == "sessionAAA1"
+    assert payload.message_created_at == "2026-04-06T01:00:00+00:00"
