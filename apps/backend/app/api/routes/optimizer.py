@@ -21,6 +21,7 @@ from app.services.optimizer.milp_solver import (
     ProtocolInput,
 )
 from app.services.optimizer.waterfall_allocator import waterfall_allocate
+from app.services.optimizer.risk_report_explainer import RiskReportExplainer
 from app.services.optimizer.risk_scorer import RiskScorer, RiskScoreResult
 
 logger = logging.getLogger("snowmind")
@@ -29,6 +30,7 @@ router = APIRouter()  # Auth applied per-endpoint
 
 _rate_fetcher = RateFetcher()
 _risk_scorer = RiskScorer()
+_risk_report_explainer = RiskReportExplainer()
 _rates_cache: tuple[float, list[dict]] | None = None
 _timeseries_cache: tuple[float, list[dict]] | None = None
 
@@ -55,6 +57,19 @@ class ProtocolRateResponse(CamelModel):
     risk_breakdown: RiskBreakdownResponse | None = None
     utilization_rate: Decimal | None = None
     last_updated: float
+
+
+class RiskExplanationResponse(CamelModel):
+    protocol_id: str
+    protocol_name: str
+    risk_score: Decimal
+    risk_score_max: int = 9
+    risk_breakdown: RiskBreakdownResponse | None = None
+    explanation_notes: list[str]
+    framework_context: str
+    protocol_context: str
+    report_source: str | None = None
+    report_updated_at: str | None = None
 
 
 class AllocationItem(CamelModel):
@@ -136,6 +151,58 @@ def _resolve_rate_risk(
     if score is not None:
         return score.score, _risk_breakdown_response(score)
     return _risk_scorer.compute_risk_score(protocol_id), None
+
+
+def _build_risk_explanation_notes(protocol_id: str, score: RiskScoreResult | None) -> list[str]:
+    notes: list[str] = [
+        "Risk scores are informational only and do not drive rebalancing execution safety checks.",
+    ]
+
+    if protocol_id == "spark":
+        notes.append(
+            "Liquidity for Spark uses vault instant buffer plus PSM USDC liquidity (not supplied-minus-borrowed)."
+        )
+    else:
+        notes.append(
+            "Liquidity for lending protocols uses available withdrawable USDC (total supplied minus total borrowed)."
+        )
+
+    if score is None:
+        notes.append(
+            "No persisted daily snapshot was found yet; this response uses fallback scoring without category diagnostics."
+        )
+        return notes
+
+    notes.append(
+        (
+            f"Current total score is {score.score}/{score.score_max}. "
+            f"Static subtotal is {score.breakdown.oracle + score.breakdown.collateral + score.breakdown.architecture}/5 "
+            f"and dynamic subtotal is {score.breakdown.liquidity + score.breakdown.yield_profile}/4."
+        )
+    )
+
+    liquidity_note = {
+        3: "Liquidity scored 3/3 (> $10M available withdrawable liquidity).",
+        2: "Liquidity scored 2/3 (> $1M available withdrawable liquidity).",
+        1: "Liquidity scored 1/3 (> $500K available withdrawable liquidity).",
+        0: "Liquidity scored 0/3 (< $500K available withdrawable liquidity).",
+    }.get(score.breakdown.liquidity, "Liquidity score unavailable.")
+    notes.append(liquidity_note)
+
+    if score.sample_days < 7:
+        notes.append(
+            f"Yield profile defaults to 0/1 because only {score.sample_days} APY day(s) are available (minimum is 7)."
+        )
+    elif score.breakdown.yield_profile == 1:
+        notes.append(
+            "Yield profile scored 1/1 because 30-day APY volatility is below 30% of mean APY."
+        )
+    else:
+        notes.append(
+            "Yield profile scored 0/1 because 30-day APY volatility is at or above 30% of mean APY."
+        )
+
+    return notes
 
 
 # ── POST /simulate — zero-cost dry-run (no auth, no execution, no DB) ────────
@@ -376,6 +443,55 @@ async def get_all_rates(request: Request, db: Client = Depends(get_db)):
             [item.model_dump() for item in out],
         )
     return out
+
+
+@router.get("/risk/explanations/{protocol_id}", response_model=RiskExplanationResponse)
+@limiter.limit("60/minute")
+async def get_protocol_risk_explanation(
+    protocol_id: str,
+    request: Request,
+    db: Client = Depends(get_db),
+):
+    """Return report-grounded explanation context for a protocol risk score."""
+    normalized_protocol_id = (protocol_id or "").strip().lower()
+    adapter = ALL_ADAPTERS.get(normalized_protocol_id)
+    if adapter is None:
+        raise HTTPException(status_code=404, detail="Unknown protocol_id")
+
+    persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
+    score_result = persisted_scores.get(normalized_protocol_id)
+
+    if score_result is None:
+        live_rates = await _rate_fetcher.fetch_all_rates()
+        maybe_rate = live_rates.get(normalized_protocol_id)
+        if maybe_rate is not None:
+            computed = await _risk_scorer.compute_scores_from_rates(
+                db,
+                {normalized_protocol_id: maybe_rate},
+            )
+            score_result = computed.get(normalized_protocol_id)
+
+    risk_score = (
+        score_result.score
+        if score_result is not None
+        else _risk_scorer.compute_risk_score(normalized_protocol_id)
+    )
+    risk_breakdown = _risk_breakdown_response(score_result)
+
+    report_context = _risk_report_explainer.get_context(normalized_protocol_id)
+
+    return RiskExplanationResponse(
+        protocol_id=normalized_protocol_id,
+        protocol_name=adapter.name,
+        risk_score=risk_score,
+        risk_score_max=9,
+        risk_breakdown=risk_breakdown,
+        explanation_notes=_build_risk_explanation_notes(normalized_protocol_id, score_result),
+        framework_context=report_context.framework_markdown,
+        protocol_context=report_context.protocol_markdown,
+        report_source=report_context.report_source,
+        report_updated_at=report_context.report_updated_at,
+    )
 
 
 # ── GET /rates/30day-avg — 30-day average APY for each protocol ────────────────

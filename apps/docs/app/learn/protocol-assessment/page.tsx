@@ -3,7 +3,7 @@ import { Callout } from "@/components/callout";
 
 export const metadata: Metadata = {
   title: "Protocol Assessment",
-  description: "How SnowMind evaluates and scores the risk of each supported protocol using a transparent 10-point framework.",
+  description: "How SnowMind evaluates protocol risk using a transparent 9-point framework with daily dynamic updates.",
 };
 
 export default function ProtocolAssessmentPage() {
@@ -11,13 +11,18 @@ export default function ProtocolAssessmentPage() {
     <article className="prose max-w-none">
       <h1>Protocol Assessment</h1>
       <p className="lead">
-        SnowMind evaluates every protocol using a transparent 10-point risk scoring framework.
+        SnowMind evaluates every protocol using a transparent 9-point risk scoring framework.
         Scores help users assess risk at a glance and inform the AI assistant&apos;s explanations.
       </p>
 
       <Callout variant="info" title="Scores Are Informational">
         Scores are not used for rebalancing decisions — the optimizer has its own separate logic.
         This scoring is purely to help users decide which protocols to activate.
+      </Callout>
+
+      <Callout variant="warning" title="Daily Dynamic Updates">
+        Liquidity and Yield Profile are refreshed every 24 hours from on-chain data.
+        Oracle, Collateral, and Architecture are manual-review categories.
       </Callout>
 
       <h2>Hard Filters</h2>
@@ -54,211 +59,260 @@ export default function ProtocolAssessmentPage() {
         it does not appear on the protocol selection page.
       </p>
 
-      <h2>Scoring Categories (10 points max)</h2>
-
-      <h3>1. Protocol Safety (max 2 points)</h3>
-      <p>How secure and trustworthy is the protocol itself?</p>
+      <h2>Scoring Categories (9 points max)</h2>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
-              <th>Points</th>
-              <th>Details</th>
+              <th>Category</th>
+              <th>Max Points</th>
+              <th>Data Source</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Audited</td>
-              <td>1</td>
-              <td>At least 1 completed audit from a recognized firm</td>
+              <td>Oracle Quality</td>
+              <td>2</td>
+              <td>Manual review</td>
             </tr>
             <tr>
-              <td>No exploit history ever</td>
+              <td>Liquidity</td>
+              <td>3</td>
+              <td>On-chain (daily)</td>
+            </tr>
+            <tr>
+              <td>Collateral Quality</td>
+              <td>2</td>
+              <td>Manual review</td>
+            </tr>
+            <tr>
+              <td>Yield Profile</td>
               <td>1</td>
-              <td>Never exploited across any deployment or version</td>
+              <td>On-chain (daily)</td>
+            </tr>
+            <tr>
+              <td>Architecture</td>
+              <td>1</td>
+              <td>Manual review</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p>
-        Exploit history considers all versions. If v1 was exploited but v2 is a full rewrite,
-        the point is still lost — the team&apos;s track record matters.
-      </p>
-      <p>
-        Governance structure (DAO multisig vs EOA) is not scored separately but should be
-        noted when explaining a protocol&apos;s risk profile.
-      </p>
+
+      <h3>1. Oracle Quality (max 2 points)</h3>
+      <div className="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Points</th>
+              <th>Criteria</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2</td>
+              <td>
+                Industry-standard oracle (Chainlink, Chronicle, Pyth, Edge/Chaos Labs)
+                with on-chain verifiable configuration, or no external oracle dependency.
+              </td>
+            </tr>
+            <tr>
+              <td>1</td>
+              <td>
+                Reputable provider with additional trust assumptions (for example curator-controlled
+                selection or limited battle testing).
+              </td>
+            </tr>
+            <tr>
+              <td>0</td>
+              <td>
+                Custom or unverifiable oracle logic, weak fallback design, or low-liquidity TWAP dependence.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3>2. Liquidity (max 3 points)</h3>
-      <p>How much capital is in the protocol and how reliable is access to it? Checked every 24 hours.</p>
+      <p>
+        Liquidity reflects available withdrawable USDC, not protocol-wide headline TVL.
+      </p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>TVL &gt; $10M</td>
               <td>3</td>
-              <td>Large, established pool with deep liquidity</td>
+              <td>Available liquidity &gt; $10M</td>
             </tr>
             <tr>
-              <td>TVL &gt; $1M</td>
               <td>2</td>
-              <td>Moderate liquidity, sufficient for most deposit sizes</td>
+              <td>Available liquidity &gt; $1M</td>
             </tr>
             <tr>
-              <td>TVL &gt; $500K</td>
               <td>1</td>
-              <td>Smaller pool, limited capacity</td>
+              <td>Available liquidity &gt; $500K</td>
             </tr>
             <tr>
-              <td>TVL &lt; $500K</td>
               <td>0</td>
-              <td>Very small, deposits may significantly impact rates</td>
+              <td>Available liquidity &lt;= $500K</td>
             </tr>
           </tbody>
         </table>
       </div>
       <p>
-        TVL is measured as the total USDC deposited in the specific market/vault SnowMind
-        interacts with, not the protocol&apos;s overall TVL across all assets and chains.
+        Lending markets use supplied minus borrowed as available liquidity.
+        Spark uses vault instant buffer plus PSM USDC liquidity.
       </p>
 
       <h3>3. Collateral Quality (max 2 points)</h3>
-      <p>What assets are borrowers posting as collateral against the USDC that SnowMind lends?</p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Blue chip only or N/A</td>
               <td>2</td>
-              <td>Collateral is BTC, ETH, USDC, or other major assets</td>
+              <td>Blue-chip collateral or N/A for savings-vault style products</td>
             </tr>
             <tr>
-              <td>Mixed or yield-bearing stablecoins</td>
               <td>1</td>
-              <td>Includes yield-bearing assets like sUSDe, savUSD with additional depeg risk</td>
+              <td>Mixed quality, including yield-bearing assets with additional depeg/slashing risk</td>
             </tr>
             <tr>
-              <td>Exotic or synthetic only</td>
               <td>0</td>
-              <td>Entirely newer, less proven synthetic or algorithmic assets</td>
+              <td>Predominantly exotic, synthetic, or less-proven collateral</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3>4. Yield Profile (max 2 points)</h3>
-      <p>How sustainable and predictable is the yield? Checked every 24 hours.</p>
+      <h3>4. Yield Profile (max 1 point)</h3>
+      <p>
+        Yield profile is based on 30-day APY volatility from daily snapshots.
+      </p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Organic and stable</td>
-              <td>2</td>
-              <td>Yield from real borrower interest or protocol-set rates with low variance</td>
-            </tr>
-            <tr>
-              <td>Organic but volatile</td>
               <td>1</td>
-              <td>Real lending activity but fluctuates significantly</td>
+              <td>APY std dev is less than 30% of mean APY</td>
             </tr>
             <tr>
-              <td>Mostly incentive-driven</td>
               <td>0</td>
-              <td>Primarily from token incentives that can end at any time</td>
+              <td>APY std dev is 30% or more of mean APY</td>
             </tr>
           </tbody>
         </table>
       </div>
+      <p>
+        At least 7 days of APY data are required. Before that, Yield Profile defaults to 0.
+      </p>
 
       <h3>5. Architecture (max 1 point)</h3>
-      <p>How directly does SnowMind interact with the yield source?</p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Direct deposit</td>
               <td>1</td>
-              <td>USDC deposited directly into the lending pool or savings contract</td>
+              <td>Direct deposit to the yield source</td>
             </tr>
             <tr>
-              <td>Through curator or wrapper</td>
               <td>0</td>
-              <td>Additional layer (vault curator, meta-vault, savings wrapper)</td>
+              <td>Curator or wrapper layer between SnowMind and the yield source</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h2>Current Baseline Scores</h2>
+      <h2>Current Static Subtotals</h2>
       <p>
-        The current baseline scorecard used in product surfaces is shown below.
-        Higher is safer (10 = lowest relative risk).
+        Static subtotals are manual-review categories only (Oracle + Collateral + Architecture).
+        Dynamic categories (Liquidity + Yield Profile) are added daily in runtime API responses.
       </p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
               <th>Protocol</th>
-              <th>Total (/10)</th>
+              <th>Oracle</th>
+              <th>Collateral</th>
+              <th>Architecture</th>
+              <th>Static Total (/5)</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>Aave V3</td>
-              <td><strong>10</strong></td>
+              <td>2</td>
+              <td>1</td>
+              <td>1</td>
+              <td><strong>4</strong></td>
             </tr>
             <tr>
-              <td>Benqi Lending</td>
-              <td><strong>10</strong></td>
+              <td>Benqi</td>
+              <td>2</td>
+              <td>2</td>
+              <td>1</td>
+              <td><strong>5</strong></td>
             </tr>
             <tr>
-              <td>Spark Savings</td>
-              <td><strong>9</strong></td>
+              <td>Spark (spUSDC)</td>
+              <td>2</td>
+              <td>2</td>
+              <td>0</td>
+              <td><strong>4</strong></td>
+            </tr>
+            <tr>
+              <td>Euler V2 (9Summits)</td>
+              <td>1</td>
+              <td>1</td>
+              <td>0</td>
+              <td><strong>2</strong></td>
             </tr>
             <tr>
               <td>Silo (savUSD/USDC)</td>
-              <td><strong>8</strong></td>
-            </tr>
-            <tr>
-              <td>Euler (9Summits)</td>
-              <td><strong>6</strong></td>
+              <td>2</td>
+              <td>1</td>
+              <td>1</td>
+              <td><strong>4</strong></td>
             </tr>
             <tr>
               <td>Silo (sUSDp/USDC)</td>
-              <td><strong>6</strong></td>
+              <td>0</td>
+              <td>1</td>
+              <td>1</td>
+              <td><strong>2</strong></td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <p>
+        Runtime risk APIs return total score out of 9, category breakdown, and report-grounded
+        explanation context for assistant flows.
+      </p>
     </article>
   );
 }

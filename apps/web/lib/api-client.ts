@@ -9,6 +9,7 @@ import type {
   RegisterAccountRequest,
   RegisterAccountResponse,
   ProtocolRateResponse,
+  RiskExplanationResponse,
   Protocol30DayApyResponse,
   OptimizerPreviewResponse,
   AccountDetailResponse,
@@ -56,6 +57,7 @@ function isPublicPath(path: string): boolean {
   return (
     path === "/api/v1/health"
     || path.startsWith("/api/v1/optimizer/rates")
+    || path.startsWith("/api/v1/optimizer/risk/explanations")
     || path === "/api/v1/platform/tvl"
   );
 }
@@ -267,6 +269,11 @@ export const api = {
 
   get30DayAverageApy: () =>
     request<Protocol30DayApyResponse[]>("/api/v1/optimizer/rates/30day-avg"),
+
+  getProtocolRiskExplanation: (protocolId: string) =>
+    request<RiskExplanationResponse>(
+      `/api/v1/optimizer/risk/explanations/${encodeURIComponent(protocolId)}`,
+    ),
 
   // Optimizer
   runOptimizer: (address: string) =>

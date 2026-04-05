@@ -109,7 +109,6 @@ EULER_RATE_SCALE = Decimal("1e27")
 class EulerV2Adapter(BaseProtocolAdapter):
     protocol_id = "euler_v2"
     name = "Euler (9Summits)"
-    BASE_RISK_SCORE = 5.0  # "Euler v2: 5 (newer, add with caution)"
     is_active = True
 
     def __init__(self) -> None:

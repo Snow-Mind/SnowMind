@@ -292,7 +292,7 @@ Never stored in plaintext. Decrypted only in-memory when building a UserOperatio
 What it does: Decides where your USDC goes across 4 protocols.
 
 The logic is simple — think of filling buckets from top to bottom:
-Step 1:  Aave V3 is the "safe default" (base layer, risk score 2/10)
+Step 1:  Aave V3 is the default reference venue (risk is informational and scored on the dynamic /9 framework)
 
 Step 2:  Sort other protocols by APY, highest first
 

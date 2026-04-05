@@ -787,15 +787,21 @@ Optional but strongly recommended for production security:
 - Session keys grant scoped permissions per-protocol; Euler and Silo included in call policies
 - Platform deposit cap: $50K during guarded beta launch
 
-### Risk Scores (higher = safer, out of 10)
+### Risk Scores (informational, out of 9)
 
-| Protocol | Score | Rationale |
-|----------|-------|-----------|
-| Aave V3 | 10/10 | Battle-tested since 2020, $10B+ TVL globally |
-| Benqi | 9/10 | Established Avalanche-native since 2021 |
-| Spark | 9/10 | MakerDAO-backed governance |
-| Silo | 8/10 | Growing protocol, isolated markets reduce contagion |
-| Euler (9Summits) | 6/10 | Fresh V2 deployment, lower TVL, 9Summits-curated |
+Risk scoring uses the 9-point model from `report.md`:
+
+- Static/manual categories (Oracle + Collateral + Architecture) subtotal out of 5
+- Dynamic categories (Liquidity + Yield Profile) add up to 4 and refresh daily
+
+| Protocol | Static Subtotal (/5) | Dynamic Add-on (/4) | Runtime Total (/9) |
+|----------|-----------------------|---------------------|--------------------|
+| Aave V3 | 4 | Liquidity + Yield (daily) | Static + Dynamic |
+| Benqi | 5 | Liquidity + Yield (daily) | Static + Dynamic |
+| Spark | 4 | Liquidity + Yield (daily) | Static + Dynamic |
+| Euler (9Summits) | 2 | Liquidity + Yield (daily) | Static + Dynamic |
+| Silo (savUSD/USDC) | 4 | Liquidity + Yield (daily) | Static + Dynamic |
+| Silo (sUSDp/USDC) | 2 | Liquidity + Yield (daily) | Static + Dynamic |
 
 ### Referral Program Reference
 

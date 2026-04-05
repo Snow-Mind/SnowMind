@@ -24,7 +24,7 @@ const faqs = [
   },
   {
     q: "Which protocols does SnowMind support?",
-    a: "SnowMind supports a curated set of lending and yield protocols on Avalanche mainnet. The active set evolves over time as integrations are added or removed. We vet each integration for security, liquidity, and audit history using our 10-point risk scoring framework before enabling it.",
+    a: "SnowMind supports a curated set of lending and yield protocols on Avalanche mainnet. The active set evolves over time as integrations are added or removed. Each integration must pass hard filters (audit, exploit history, source verification), and then receives a 9-point informational risk score.",
   },
   {
     q: "How often does SnowMind rebalance?",
@@ -40,7 +40,7 @@ const faqs = [
   },
   {
     q: "How are protocol risk scores calculated?",
-    a: "Each protocol is scored out of 10 across five categories: Protocol Safety (3 pts), Liquidity (3 pts), Collateral Quality (2 pts), Yield Profile (2 pts), and Architecture (1 pt). See the Protocol Assessment page for full details.",
+    a: "Each protocol is scored out of 9 across five categories: Oracle Quality (2), Liquidity (3), Collateral Quality (2), Yield Profile (1), and Architecture (1). Liquidity and Yield Profile are dynamic and update daily from on-chain data. Scores are informational and do not control rebalancing execution.",
   },
 ];
 

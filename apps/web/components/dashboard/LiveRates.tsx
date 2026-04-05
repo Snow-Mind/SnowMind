@@ -14,6 +14,22 @@ interface LiveRatesProps {
   totalDepositedUsd?: number;
 }
 
+function formatRiskBreakdown(
+  breakdown:
+    | {
+      oracle: number;
+      liquidity: number;
+      collateral: number;
+      yieldProfile: number;
+      architecture: number;
+    }
+    | null
+    | undefined,
+): string | null {
+  if (!breakdown) return null;
+  return `O${breakdown.oracle} L${breakdown.liquidity} C${breakdown.collateral} Y${breakdown.yieldProfile} A${breakdown.architecture}`;
+}
+
 export default function LiveRates({ 
   activeProtocolIds = [],
   activeAllocationIds = [],
@@ -56,6 +72,7 @@ export default function LiveRates({
     const displayRiskScoreMax = Number.isFinite(r.riskScoreMax)
       ? Math.max(1, Math.round(r.riskScoreMax))
       : RISK_SCORE_MAX;
+    const breakdownLabel = formatRiskBreakdown(r.riskBreakdown);
 
     const isSelected = activeProtocolIds.includes(r.protocolId);
     const hasAllocation = activeAllocationIds.includes(r.protocolId);
@@ -92,6 +109,14 @@ export default function LiveRates({
             {!r.isComingSoon && (
               <span className="rounded-full bg-void-2 px-2 py-0.5 text-[10px] text-muted-foreground">
                 Risk {displayRiskScore}/{displayRiskScoreMax}
+              </span>
+            )}
+            {!r.isComingSoon && breakdownLabel && (
+              <span
+                className="rounded-full bg-void-2/60 px-2 py-0.5 text-[10px] text-muted-foreground"
+                title="Oracle / Liquidity / Collateral / Yield / Architecture"
+              >
+                {breakdownLabel}
               </span>
             )}
           </div>

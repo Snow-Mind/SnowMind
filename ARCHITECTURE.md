@@ -94,7 +94,7 @@ Euler and Silo vaults are fully supported: active in the optimizer and default-e
 - **Interface**: `supply(asset, amount, onBehalfOf, referralCode)` / `withdraw(asset, amount, to)`
 - **APY Source**: `getReserveData(USDC).currentLiquidityRate` → RAY (1e27) → annualized
 - **TVL Cap**: 7.5% of total USDC supplied (prevents market impact)
-- **Risk Score**: 10/10 — battle-tested since 2020, $10B+ TVL globally
+- **Risk Score**: Dynamic /9 model — static subtotal 4/5 (Oracle 2, Collateral 1, Architecture 1) plus daily Liquidity/Yield add-on (/4)
 - **Health checks**: Reserve flags (is_active, is_frozen, is_paused), utilization rate, exploit detection
 
 ### Benqi — Avalanche-Native Lending
@@ -103,7 +103,7 @@ Euler and Silo vaults are fully supported: active in the optimizer and default-e
 - **Interface**: `mint(amount)` / `redeem(qiTokenAmount)`
 - **APY Source**: `supplyRatePerTimestamp()` → annualized (use `exchangeRateStored()` for balance, NOT `exchangeRateCurrent()`)
 - **TVL Cap**: 7.5% of total USDC supplied
-- **Risk Score**: 10/10 — Avalanche-native since 2021, battle-tested, deep USDC liquidity
+- **Risk Score**: Dynamic /9 model — static subtotal 5/5 (Oracle 2, Collateral 2, Architecture 1) plus daily Liquidity/Yield add-on (/4)
 - **Health checks**: Comptroller pause flags (mintGuardianPaused, redeemGuardianPaused), utilization, exploit detection
 
 ### Spark — Fixed-Rate Savings Vault
@@ -114,7 +114,7 @@ Euler and Silo vaults are fully supported: active in the optimizer and default-e
 - **APY Source**: `convertToAssets(1e6)` delta vs 24h-ago snapshot × 365 (measured on Avalanche side)
 - **Effective APY**: `gross_apy × 0.90` — only 90% of deposit is deployed for yield (10% instant-redemption buffer per Spark V2). There is NO PSM deposit fee on Avalanche (PSM3 has no `tin()`).
 - **TVL Cap**: NONE — fixed rate does not compress under deposit pressure
-- **Risk Score**: 9/10 — MakerDAO-backed, well-audited governance
+- **Risk Score**: Dynamic /9 model — static subtotal 4/5 (Oracle 2, Collateral 2, Architecture 0) plus daily Liquidity/Yield add-on (/4)
 - **Health checks**: Two on-chain checks only:
   1. `spUSDC.totalAssets() == 0` → EMERGENCY status, vault is empty/broken
   2. `PSM3.totalAssets() < $1,000` → DEPOSITS_DISABLED, PSM liquidity too low
@@ -137,14 +137,14 @@ Spark on Avalanche uses PSM3 (`0x7566debc906C17338524a414343FA61bca26a843`), NOT
 - **Interface**: `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
 - **APY Source**: `convertToAssets(1e6)` delta vs 24h-ago snapshot × 365
 - **TVL Cap**: NONE — ERC-4626 vault, same as Spark
-- **Risk Score**: 6/10 — fresh V2 deployment, lower TVL, 9Summits-curated vault
+- **Risk Score**: Dynamic /9 model — static subtotal 2/5 (Oracle 1, Collateral 1, Architecture 0) plus daily Liquidity/Yield add-on (/4)
 - **Health checks**: ERC-4626 vault health, circuit breaker. Exempt from lending-specific checks (utilization, velocity, exploit detection) since it is a curated vault, not a lending pool.
 
 ### Silo — Isolated Lending Markets (Opt-In)
 - **Contracts**: savUSD/USDC `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` (market 142), sUSDp/USDC `0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca` (market 162)
 - **Type**: Isolated lending markets — each market has its own risk parameters
 - **Interface**: ERC-4626 compatible `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
-- **Risk Score**: 8/10 — growing protocol, isolated markets reduce contagion risk between assets
+- **Risk Score**: Dynamic /9 model — static subtotal savUSD 4/5, sUSDp 2/5, plus daily Liquidity/Yield add-on (/4)
 - **Status**: Fully active in optimizer; opt-in only (user must explicitly enable in onboarding UI)
 
 ---
@@ -184,14 +184,14 @@ Spark almost always ranks lower and absorbs overflow — giving it the same prac
 Every user selects which markets (protocols) the agent is allowed to use and chooses a diversification strategy during onboarding. This is the same flow for all deposit sizes — there is no $10K threshold.
 
 **Available Markets:**
-| Market | Default Enabled | Risk Score |
-|---|---|---|
-| Aave V3 | Yes | 10/10 |
-| Benqi | Yes | 10/10 |
-| Spark | Yes | 9/10 |
-| Euler V2 (9Summits) | Yes | 6/10 |
-| Silo savUSD/USDC | Yes | 8/10 |
-| Silo sUSDp/USDC | Yes | 8/10 |
+| Market | Default Enabled | Static Subtotal (/5) | Runtime Total |
+|---|---|---|---|
+| Aave V3 | Yes | 4 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Benqi | Yes | 5 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Spark | Yes | 4 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Euler V2 (9Summits) | Yes | 2 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Silo savUSD/USDC | Yes | 4 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Silo sUSDp/USDC | Yes | 2 | Dynamic /9 (adds daily Liquidity + Yield) |
 
 **Diversification Preferences:**
 | Preference | Behavior |

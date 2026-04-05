@@ -106,7 +106,6 @@ class SiloAdapter(BaseProtocolAdapter):
     # Subclasses override these
     protocol_id: str = ""
     name: str = ""
-    BASE_RISK_SCORE: float = 8.0  # Per ARCHITECTURE.md: Silo = 8/10
     is_active: bool = True
 
     def __init__(self, vault_address: str | None) -> None:
@@ -439,7 +438,6 @@ class SiloSavUSDAdapter(SiloAdapter):
     """savUSD/USDC Silo vault on Avalanche."""
     protocol_id = "silo_savusd_usdc"
     name = "Silo (savUSD/USDC)"
-    BASE_RISK_SCORE = 8.0
     is_active = True
 
     def __init__(self) -> None:
@@ -451,7 +449,6 @@ class SiloSUSDpAdapter(SiloAdapter):
     """sUSDp/USDC Silo vault on Avalanche."""
     protocol_id = "silo_susdp_usdc"
     name = "Silo (sUSDp/USDC)"
-    BASE_RISK_SCORE = 8.0
     is_active = True
 
     def __init__(self) -> None:

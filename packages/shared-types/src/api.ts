@@ -63,6 +63,25 @@ export interface ProtocolRateResponse {
   lastUpdated: number;
 }
 
+export interface RiskExplanationResponse {
+  protocolId: string;
+  protocolName: string;
+  riskScore: number;
+  riskScoreMax: number;
+  riskBreakdown?: {
+    oracle: number;
+    liquidity: number;
+    collateral: number;
+    yieldProfile: number;
+    architecture: number;
+  } | null;
+  explanationNotes: string[];
+  frameworkContext: string;
+  protocolContext: string;
+  reportSource?: string | null;
+  reportUpdatedAt?: string | null;
+}
+
 export interface Protocol30DayApyResponse {
   protocolId: ProtocolId;
   name: string;
