@@ -167,6 +167,7 @@ class Settings(BaseSettings):
     RECONCILIATION_ALERT_THRESHOLD_USD: float = 1.0  # $1 discrepancy triggers alert
 
     # ── Fees ──────────────────────────────────────────────
+    AGENT_FEE_ENABLED: bool = False      # Temporary freeze: keep fee code paths but do not charge
     AGENT_FEE_RATE: float = 0.10        # 10% of profit on withdrawal
     PROFIT_FEE_PCT: float = 0.10         # Deprecated alias for legacy paths
     TREASURY_ADDRESS: str = ""           # Gnosis Safe multisig for fee collection

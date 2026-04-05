@@ -5,7 +5,7 @@
  * 
  * Flow:
  * 1. User enters amount (or clicks "Withdraw All")
- * 2. Preview shows fee breakdown (proportional agent fee)
+ * 2. Preview shows withdrawal summary
  * 3. User confirms → backend builds + submits atomic UserOp
  * 4. Shows success with tx hash link to Snowtrace
  */
@@ -20,11 +20,10 @@ import {
   Loader2,
   ExternalLink,
   Shield,
-  Info,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWallets } from "@privy-io/react-auth";
-import { EXPLORER, FEE_CONFIG } from '@/lib/constants'
+import { EXPLORER } from '@/lib/constants'
 import { api, APIError } from '@/lib/api-client'
 import { signWithdrawalAuthorization } from '@/lib/withdrawal-auth'
 import { usePortfolioStore } from '@/stores/portfolio.store'
@@ -264,15 +263,6 @@ export default function WithdrawPage() {
               )}
             </div>
 
-            {/* Fee info */}
-            <div className="flex items-start gap-2 rounded-xl bg-white/[0.02] border border-white/[0.04] p-3">
-              <Info className="h-4 w-4 text-white/30 mt-0.5 shrink-0" />
-              <div className="text-xs text-white/40 leading-relaxed">
-                A {(FEE_CONFIG.rate * 100).toFixed(0)}% {FEE_CONFIG.label.toLowerCase()} is charged on any profit
-                earned. It&apos;s proportional — only on the yield portion of your withdrawal.
-              </div>
-            </div>
-
             {/* Error */}
             {error && (
               <div className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
@@ -292,7 +282,7 @@ export default function WithdrawPage() {
               {isLoading ? (
                 <span className="flex items-center justify-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Calculating fees...
+                  Preparing preview...
                 </span>
               ) : (
                 'Preview Withdrawal'
@@ -305,37 +295,18 @@ export default function WithdrawPage() {
         {step === 'preview' && preview && (
           <div className="space-y-5">
             <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 space-y-4">
-              <h3 className="text-sm font-semibold text-white/80 mb-4">Fee Breakdown</h3>
+              <h3 className="text-sm font-semibold text-white/80 mb-4">Withdrawal Summary</h3>
 
               <div className="space-y-3">
                 <div className="flex justify-between text-sm">
                   <span className="text-white/50">Withdrawal Amount</span>
                   <span className="font-mono text-white/90">${parseFloat(preview.withdrawAmount).toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/50">Accrued Profit</span>
-                  <span className="font-mono text-white/70">${parseFloat(preview.accruedProfit).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/50">Attributable Profit</span>
-                  <span className="font-mono text-white/70">${parseFloat(preview.attributableProfit).toFixed(2)}</span>
-                </div>
-
-                <div className="border-t border-white/[0.06] my-2" />
-
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/50">
-                    {preview.feeExempt ? 'Agent Fee (Beta — FREE)' : `Agent Fee (${(parseFloat(preview.feeRate) * 100).toFixed(0)}%)`}
-                  </span>
-                  <span className={`font-mono ${preview.feeExempt ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {preview.feeExempt ? 'Free' : `-$${parseFloat(preview.agentFee).toFixed(2)}`}
-                  </span>
-                </div>
 
                 <div className="border-t border-white/[0.06] my-2" />
 
                 <div className="flex justify-between text-base font-semibold">
-                  <span className="text-white/80">You Receive</span>
+                  <span className="text-white/80">You will receive</span>
                   <span className="font-mono text-emerald-400">${parseFloat(preview.userReceives).toFixed(2)}</span>
                 </div>
               </div>
@@ -398,12 +369,6 @@ export default function WithdrawPage() {
                 <span className="text-white/50">You Received</span>
                 <span className="font-mono font-semibold text-emerald-400">${parseFloat(result.userReceives).toFixed(2)} USDC</span>
               </div>
-              {parseFloat(result.agentFee) > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/50">Agent Fee</span>
-                  <span className="font-mono text-white/60">${parseFloat(result.agentFee).toFixed(2)}</span>
-                </div>
-              )}
               {result.txHash && (
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-white/50">Transaction</span>

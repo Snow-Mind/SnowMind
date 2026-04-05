@@ -1,8 +1,8 @@
 """
 Withdrawal API routes — partial and full withdrawal flows.
 
-Implements the fee calculation and atomic UserOp construction for withdrawals.
-Agent fee (10% of profit) is charged proportionally on EVERY withdrawal.
+Implements atomic UserOp construction for withdrawals. Agent fee plumbing is
+kept in place but currently disabled behind configuration.
 """
 
 import logging
@@ -209,7 +209,11 @@ def _compute_fee(
     account: dict,
     yield_tracking: dict | None,
 ) -> FeeCalculation:
-    """Compute agent fee for a withdrawal using the yield tracking data."""
+    """Compute withdrawal quote using yield tracking data.
+
+    Fee code remains available for future re-enable, but current policy freezes
+    fee charging (``AGENT_FEE_ENABLED=False``) so users receive full amount.
+    """
     # Net principal = cumulative_deposited - cumulative_net_withdrawn
     if yield_tracking:
         cumulative_deposited = Decimal(str(yield_tracking.get("cumulative_deposited", "0")))
@@ -219,13 +223,15 @@ def _compute_fee(
         # No tracking record — assume all is principal (no profit, no fee)
         net_principal = current_balance_usdc
 
-    fee_exempt = account.get("fee_exempt", False)
+    settings = get_settings()
+    fee_exempt = account.get("fee_exempt", False) or (not settings.AGENT_FEE_ENABLED)
 
     return calculate_agent_fee(
         withdraw_amount=withdraw_amount_usdc,
         current_balance=current_balance_usdc,
         net_principal=net_principal,
         fee_exempt=fee_exempt,
+        fee_rate=Decimal("0") if not settings.AGENT_FEE_ENABLED else None,
     )
 
 
@@ -412,11 +418,14 @@ async def execute_withdrawal(
     _verify_withdrawal_authorization(req, account)
 
     # ── Treasury address guard ──────────────────────────────────────────
-    if not settings.TREASURY_ADDRESS or settings.TREASURY_ADDRESS == "0x" + "0" * 40:
-        raise HTTPException(
-            status_code=500,
-            detail="Treasury address not configured — withdrawals disabled",
-        )
+    # Fee collection is currently disabled; keep this guard for when fees are
+    # re-enabled so misconfiguration cannot silently route funds incorrectly.
+    if settings.AGENT_FEE_ENABLED:
+        if not settings.TREASURY_ADDRESS or settings.TREASURY_ADDRESS == "0x" + "0" * 40:
+            raise HTTPException(
+                status_code=500,
+                detail="Treasury address not configured — withdrawals disabled",
+            )
 
     # ── Concurrent withdrawal lock ──────────────────────────────────────
     # Prevent double-submit: one in-flight withdrawal per account at a time.
@@ -513,7 +522,7 @@ async def execute_withdrawal(
         except Exception as exc:
             logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
 
-        agent_fee_raw = _to_raw_usdc(fee_calc.agent_fee)
+        agent_fee_raw = _to_raw_usdc(fee_calc.agent_fee) if settings.AGENT_FEE_ENABLED else 0
         # Always use quantized fee-calculator output to avoid micro truncation drift.
         net_to_user = fee_calc.user_receives
         withdraw_raw = _to_raw_usdc(net_to_user)

@@ -1027,7 +1027,6 @@ function AgentDetailsModal({
   const [withdrawPreview, setWithdrawPreview] = useState<{
     currentBalance: number;
     userReceives: number;
-    agentFee: number;
   } | null>(null);
 
   // Compute a robust fallback balance while preview is loading.
@@ -1067,12 +1066,10 @@ function AgentDetailsModal({
 
         const parsedCurrent = Number(data.currentBalance);
         const parsedReceives = Number(data.userReceives);
-        const parsedFee = Number(data.agentFee);
 
         setWithdrawPreview({
           currentBalance: Number.isFinite(parsedCurrent) ? parsedCurrent : fallbackTotalUsdc,
           userReceives: Number.isFinite(parsedReceives) ? parsedReceives : fallbackTotalUsdc,
-          agentFee: Number.isFinite(parsedFee) ? parsedFee : 0,
         });
       } catch (err) {
         if (cancelled) return;
@@ -1216,11 +1213,6 @@ function AgentDetailsModal({
                     : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
                 </span>
               </div>
-              {withdrawPreview && withdrawPreview.agentFee > 0 && (
-                <p className="mt-1 text-[10px] text-[#8A837C]">
-                  Net after ${(withdrawPreview.agentFee).toFixed(6)} agent fee
-                </p>
-              )}
               {previewError && (
                 <p className="mt-1 text-[10px] text-[#DC2626]">{previewError}</p>
               )}

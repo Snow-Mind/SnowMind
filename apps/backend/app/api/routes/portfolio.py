@@ -50,6 +50,8 @@ _PROTOCOL_BALANCE_DUST_USDC = Decimal("0.01")
 _BALANCE_RECONCILE_EPSILON_USDC = Decimal("0.000001")
 _USDC_TRANSFER_TOPIC_PREFIX = "ddf252ad"
 _PRINCIPAL_RECONCILE_DRIFT_USDC = Decimal("0.50")
+_PRINCIPAL_RECONCILE_UNDERCOUNT_DRIFT_USDC = Decimal("0.01")
+_PRINCIPAL_RECONCILE_UNDERCOUNT_LOOKBACK_MINUTES = 180
 _PRINCIPAL_RECONCILE_IMPROVEMENT_EPSILON_USDC = Decimal("0.01")
 _PRINCIPAL_RECONCILE_MAX_TX = 5000
 _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
@@ -690,13 +692,48 @@ async def get_portfolio(
 
     # Expose principal and yield consistently:
     #   current value = net principal + net earned
-    # Legacy fallback: if tracked principal drifts far above current value,
-    # rebuild principal from chain transfer history and persist it.
-    if (
-        tracked_net_principal is not None
-        and owner_address
-        and (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
-    ):
+    # Reconcile from chain transfer history when principal tracking drifts.
+    # Overcount trigger: tracked principal far above current value.
+    # Undercount trigger: tracked principal below current value shortly after
+    # a fresh owner->smart funding transfer (common onboarding drift signal).
+    reconcile_principal = False
+    if tracked_net_principal is not None and owner_address:
+        principal_overcount = (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
+        principal_undercount = (total_current_value - tracked_net_principal) > _PRINCIPAL_RECONCILE_UNDERCOUNT_DRIFT_USDC
+
+        recent_funding_transfer = False
+        if principal_undercount:
+            try:
+                latest_funding = (
+                    db.table("rebalance_logs")
+                    .select("created_at")
+                    .eq("account_id", account_id)
+                    .eq("status", "executed")
+                    .eq("from_protocol", "user_wallet")
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                if latest_funding.data:
+                    funding_at = datetime.fromisoformat(
+                        str(latest_funding.data[0]["created_at"]).replace("Z", "+00:00")
+                    )
+                    minutes_since_funding = (
+                        datetime.now(timezone.utc) - funding_at
+                    ).total_seconds() / 60
+                    recent_funding_transfer = (
+                        minutes_since_funding <= _PRINCIPAL_RECONCILE_UNDERCOUNT_LOOKBACK_MINUTES
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to evaluate funding-transfer principal drift trigger for %s: %s",
+                    address,
+                    exc,
+                )
+
+        reconcile_principal = principal_overcount or (principal_undercount and recent_funding_transfer)
+
+    if reconcile_principal:
         reconciled_principal = await _reconcile_principal_tracking_from_chain(
             db,
             account_id=str(account_id),

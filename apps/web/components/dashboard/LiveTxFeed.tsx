@@ -90,6 +90,48 @@ function topProtocol(allocations: Record<string, number>): string {
   return protocolLabel(protocolId);
 }
 
+function orderedAllocations(allocations: Record<string, number>): Array<[string, number]> {
+  return Object.entries(allocations).sort((a, b) => b[1] - a[1]);
+}
+
+function summarizeProtocolSet(allocations: Record<string, number>, maxVisible = 2): string {
+  const sorted = orderedAllocations(allocations);
+  if (sorted.length === 0) return "Rebalance";
+  if (sorted.length <= maxVisible) {
+    return sorted.map(([pid]) => protocolLabel(pid)).join(" + ");
+  }
+
+  const head = sorted.slice(0, maxVisible).map(([pid]) => protocolLabel(pid));
+  return `${head.join(" + ")} + ${sorted.length - maxVisible} more`;
+}
+
+function rebalanceOperationLabel(allocations: Record<string, number>): string {
+  const count = Object.keys(allocations).length;
+  if (count <= 1) return topProtocol(allocations);
+  return `${count} Markets`;
+}
+
+function movedAmountFromAllocationDiff(
+  previous: Record<string, number> | null,
+  next: Record<string, number>,
+): number | null {
+  if (!previous || Object.keys(previous).length === 0) return null;
+  if (Object.keys(next).length === 0) return null;
+
+  const keys = new Set<string>([...Object.keys(previous), ...Object.keys(next)]);
+  let sumAbsDiff = 0;
+
+  for (const key of keys) {
+    const prevAmt = previous[key] ?? 0;
+    const nextAmt = next[key] ?? 0;
+    sumAbsDiff += Math.abs(nextAmt - prevAmt);
+  }
+
+  const moved = sumAbsDiff / 2;
+  if (!Number.isFinite(moved) || moved <= 0) return null;
+  return moved;
+}
+
 function parseNumericAmount(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -336,6 +378,7 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   let previousPortfolioTotal = 0;
+  let previousAllocationState: Record<string, number> | null = null;
   const transactions: TransactionItem[] = [];
   const seenTxHashes = new Set<string>();
 
@@ -380,6 +423,9 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
       if (normalizedAmount != null && normalizedAmount > 0) {
         previousPortfolioTotal += normalizedAmount;
       }
+      if (allocationSum > 0) {
+        previousAllocationState = allocations;
+      }
       continue;
     }
 
@@ -400,6 +446,9 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
       if (normalizedAmount != null && normalizedAmount > 0) {
         previousPortfolioTotal = Math.max(previousPortfolioTotal - normalizedAmount, 0);
       }
+      if (allocationSum > 0) {
+        previousAllocationState = allocations;
+      }
       continue;
     }
 
@@ -409,15 +458,24 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
 
     const action: Exclude<ActionType, "monitoring"> = "rebalance";
     const deltaAmount = Math.abs(allocationSum - previousPortfolioTotal);
+    const allocationDiffAmount = movedAmountFromAllocationDiff(previousAllocationState, allocations);
+    const allocationCount = Object.keys(allocations).length;
+    const multiMarketRebalance = allocationCount > 1;
 
-    const amountValue = movedAmount ?? (deltaAmount > 0 ? deltaAmount : (allocationSum > 0 ? allocationSum : null));
+    const amountValue = movedAmount
+      ?? allocationDiffAmount
+      ?? (deltaAmount > 0 ? deltaAmount : null);
 
     transactions.push({
       entry,
       action,
-      operationProtocol: topProtocol(allocations),
-      sourceProtocol: derivedSourceProtocol,
-      destinationProtocol: derivedDestinationProtocol,
+      operationProtocol: multiMarketRebalance
+        ? rebalanceOperationLabel(allocations)
+        : topProtocol(allocations),
+      sourceProtocol: multiMarketRebalance ? "Multiple Markets" : derivedSourceProtocol,
+      destinationProtocol: multiMarketRebalance
+        ? summarizeProtocolSet(allocations)
+        : derivedDestinationProtocol,
       amountValue,
       amountLabel: formatAmountLabel(amountValue),
       allocations,
@@ -426,6 +484,7 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
 
     if (allocationSum > 0) {
       previousPortfolioTotal = allocationSum;
+      previousAllocationState = allocations;
     }
   }
 

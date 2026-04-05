@@ -1812,7 +1812,7 @@ class Rebalancer:
     ) -> tuple[str, dict]:
         """
         Emergency: withdraw ALL positions across every protocol in a single tx.
-        Includes 10% profit fee transfer to treasury in the same atomic batch.
+        Fee transfer plumbing is preserved but currently disabled by config.
         Revokes session keys after execution.
 
         Returns (tx_hash, fee_breakdown).
@@ -1858,7 +1858,7 @@ class Rebalancer:
         if not session_key:
             raise ValueError(f"No active session key for account {account_id}")
 
-        # Calculate 10% profit fee
+        # Calculate withdrawal accounting values.
         current_value = sum(current.values())
         idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
         total_value = current_value + idle_usdc
@@ -1869,12 +1869,34 @@ class Rebalancer:
             record_withdrawal_fee,
         )
 
+        agent_fee_enabled = bool(self.settings.AGENT_FEE_ENABLED)
         yield_info = get_yield_tracking(db, account_id)
+        deposited_total = Decimal(
+            str(
+                (yield_info or {}).get("cumulative_deposited")
+                if yield_info and (yield_info.get("cumulative_deposited") is not None)
+                else (yield_info or {}).get("total_deposited_usdc", total_value)
+            )
+        )
+        withdrawn_total = Decimal(
+            str(
+                (yield_info or {}).get("cumulative_net_withdrawn")
+                if yield_info and (yield_info.get("cumulative_net_withdrawn") is not None)
+                else (yield_info or {}).get("total_withdrawn_usdc", "0")
+            )
+        )
         fee_breakdown = calculate_withdrawal_fee(
             current_value_usd=total_value,
-            total_deposited_usdc=Decimal(str(yield_info["total_deposited_usdc"])) if yield_info else total_value,
-            total_withdrawn_usdc=Decimal(str(yield_info["total_withdrawn_usdc"])) if yield_info else Decimal("0"),
+            total_deposited_usdc=deposited_total,
+            total_withdrawn_usdc=withdrawn_total,
         )
+        if not agent_fee_enabled:
+            fee_breakdown = {
+                "profit_usd": fee_breakdown["profit_usd"],
+                "fee_usd": Decimal("0"),
+                "net_withdrawal_usd": total_value,
+                "fee_pct": Decimal("0"),
+            }
 
         # Include transfers in the atomic batch (Mark's approach:
         # withdraw from protocols + fee to treasury + remainder to user EOA in one UserOp)
@@ -1920,8 +1942,8 @@ class Rebalancer:
             user_transfer=user_transfer,
         )
 
-        # Record fee in DB
-        if fee_breakdown["fee_usd"] > Decimal("0"):
+        # Record fee in DB only when fee charging is enabled.
+        if agent_fee_enabled and fee_breakdown["fee_usd"] > Decimal("0"):
             record_withdrawal_fee(
                 db, account_id,
                 withdrawn_usdc=total_value,

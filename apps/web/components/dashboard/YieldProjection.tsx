@@ -6,7 +6,6 @@
  * Shows:
  * - Blended APY across all protocols (weighted by allocation)
  * - Projected returns at 1mo, 3mo, 6mo, 1yr
- * - "After 10% agent fee" annotation
  * - Visual APY comparison bars per protocol
  */
 
@@ -14,7 +13,6 @@ import { useMemo } from 'react'
 import { TrendingUp, Info, DollarSign } from 'lucide-react'
 import {
   PROTOCOL_CONFIG,
-  FEE_CONFIG,
   type ProtocolId,
 } from '@/lib/constants'
 
@@ -27,7 +25,7 @@ interface ProtocolApy {
 interface YieldProjectionProps {
   totalBalance: number
   protocolApys: ProtocolApy[]
-  isFeeExempt?: boolean      // True = beta user, no fee
+  isFeeExempt?: boolean
   isLoading?: boolean
 }
 
@@ -46,7 +44,6 @@ const PROJECTION_PERIODS: ProjectionPeriod[] = [
 export function YieldProjection({
   totalBalance,
   protocolApys,
-  isFeeExempt = false,
   isLoading = false,
 }: YieldProjectionProps) {
   // Calculate blended APY (weighted average)
@@ -59,18 +56,17 @@ export function YieldProjection({
     return weighted
   }, [totalBalance, protocolApys])
 
-  // Net APY after agent fee
+  // Fee charging is currently disabled, so display blended APY directly.
   const netApy = useMemo(() => {
-    if (isFeeExempt) return blendedApy
-    return blendedApy * (1 - FEE_CONFIG.rate)
-  }, [blendedApy, isFeeExempt])
+    return blendedApy
+  }, [blendedApy])
 
   // Projected returns
   const projections = useMemo(() => {
     return PROJECTION_PERIODS.map((period) => {
       const grossReturn = totalBalance * (Math.pow(1 + blendedApy, period.months / 12) - 1)
-      const fee = isFeeExempt ? 0 : grossReturn * FEE_CONFIG.rate
-      const netReturn = grossReturn - fee
+      const fee = 0
+      const netReturn = grossReturn
       return {
         ...period,
         grossReturn,
@@ -78,7 +74,7 @@ export function YieldProjection({
         netReturn,
       }
     })
-  }, [totalBalance, blendedApy, isFeeExempt])
+  }, [totalBalance, blendedApy])
 
   // Find max APY for bar scaling
   const maxApy = useMemo(() => {
@@ -112,30 +108,17 @@ export function YieldProjection({
           <div className="absolute right-0 top-6 z-50 hidden group-hover:block w-72 rounded-lg bg-zinc-800 border border-white/10 p-3 text-xs text-white/60 shadow-xl">
             Projections are estimates based on current APY rates.
             Actual returns may vary as rates fluctuate.
-            {!isFeeExempt && ' A 10% agent fee is deducted from profits on withdrawal.'}
           </div>
         </div>
       </div>
 
       {/* Blended APY */}
       <div className="mb-5">
-        <div className="text-xs text-white/40 mb-1">
-          Blended APY{!isFeeExempt && ' (after 10% agent fee)'}
-        </div>
+        <div className="text-xs text-white/40 mb-1">Blended APY</div>
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-bold tracking-tight text-emerald-400">
             {(netApy * 100).toFixed(2)}%
           </span>
-          {!isFeeExempt && (
-            <span className="text-xs text-white/30 line-through">
-              {(blendedApy * 100).toFixed(2)}%
-            </span>
-          )}
-          {isFeeExempt && (
-            <span className="text-xs font-medium text-emerald-400/60 bg-emerald-500/10 rounded-full px-2 py-0.5">
-              Fee: Free (beta)
-            </span>
-          )}
         </div>
       </div>
 
@@ -184,11 +167,6 @@ export function YieldProjection({
               <div className="text-sm font-semibold text-white/90 font-mono">
                 +${proj.netReturn.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
-              {!isFeeExempt && proj.fee > 0.01 && (
-                <div className="text-[10px] text-white/20 mt-0.5">
-                  Fee: ${proj.fee.toFixed(2)}
-                </div>
-              )}
             </div>
           ))}
         </div>

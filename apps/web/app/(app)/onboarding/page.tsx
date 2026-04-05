@@ -1543,7 +1543,7 @@ export default function OnboardingPage() {
                     <div
                       key={protocol.id}
                       className={cn(
-                        "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 px-3 py-3 transition-all cursor-pointer md:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] md:items-center",
+                        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer md:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]",
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
@@ -1656,7 +1656,7 @@ export default function OnboardingPage() {
                       </span>
 
                       {/* Toggle / row actions */}
-                      <div className="flex justify-center gap-1.5 md:order-5 md:w-20">
+                      <div className="flex items-center justify-center gap-1.5 self-center md:order-5 md:w-20">
                         {isEditingRow ? (
                           <>
                             <button
