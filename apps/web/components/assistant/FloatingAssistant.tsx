@@ -50,16 +50,16 @@ interface AssistantSessionSummaryLike {
 type StoredSessionSummary = AssistantSessionSummaryLike;
 
 const STARTER_PROMPTS: Array<{ kind: "search" | "spark" | "compass" | "wand"; label: string }> = [
-  { kind: "spark", label: "Explain today's dynamic risk snapshot." },
-  { kind: "search", label: "Why did Silo risk move compared to yesterday?" },
-  { kind: "compass", label: "How does static vs dynamic risk scoring work?" },
-  { kind: "wand", label: "What does stale risk snapshot mean and how is it handled?" },
+  { kind: "spark", label: "How is risk score being calculated?" },
+  { kind: "search", label: "Explain Aave's risk." },
+  { kind: "compass", label: "Propose a market strategy for a conservative portfolio." },
+  { kind: "wand", label: "How are liquidity and yield profile fetched on-chain each day?" },
 ];
 
 const QUICK_INSERT_PROMPTS: string[] = [
-  "Summarize my latest risk snapshot in 3 bullets.",
-  "Compare current risk versus yesterday for all active protocols.",
-  "Recommend a safer allocation with minimal APY impact.",
+  "Break down O/L/C/Y/A for each active market in a table.",
+  "Explain whether today's L and Y came from fresh on-chain data.",
+  "Recommend a conservative allocation with rationale and caveats.",
 ];
 
 function createSessionId(): string {

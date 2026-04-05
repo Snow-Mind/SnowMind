@@ -12,10 +12,10 @@ interface AssistantMarkdownProps {
 
 export function AssistantMarkdown({ content, className }: AssistantMarkdownProps) {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      className={cn("space-y-2 text-[12px] leading-[1.5]", className)}
-      components={{
+    <div className={cn("space-y-2 text-[12px] leading-[1.5]", className)}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
         p: ({ children }) => (
           <p className="my-2 whitespace-pre-wrap first:mt-0 last:mb-0">{children}</p>
         ),
@@ -77,9 +77,10 @@ export function AssistantMarkdown({ content, className }: AssistantMarkdownProps
           );
         },
         hr: () => <hr className="my-2 border-white/15" />,
-      }}
-    >
-      {content}
-    </ReactMarkdown>
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 }

@@ -215,6 +215,8 @@ def _build_dynamic_risk_snapshot_summary(db: Client) -> str:
     lines: list[str] = [
         f"Persisted snapshot protocols: {len(scores)}",
         f"Freshness threshold: {max_age_hours} hour(s)",
+        "Dynamic categories are L (Liquidity) and Y (Yield profile).",
+        "L and Y values are sourced from on-chain data and refreshed daily.",
     ]
 
     stale_count = 0
