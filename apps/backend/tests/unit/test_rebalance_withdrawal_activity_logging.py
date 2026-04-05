@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api.routes import rebalance
@@ -79,7 +80,7 @@ async def test_withdraw_all_logs_withdrawal_activity(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_partial_withdraw_logs_withdrawal_activity(monkeypatch) -> None:
+async def test_partial_withdraw_endpoint_is_deprecated(monkeypatch) -> None:
     db = _FakeDB()
 
     async def _fake_lookup_account(_db, _address, _auth):
@@ -87,11 +88,8 @@ async def test_partial_withdraw_logs_withdrawal_activity(monkeypatch) -> None:
 
     monkeypatch.setattr(rebalance, "_lookup_account", _fake_lookup_account)
 
-    with patch("app.services.optimizer.rebalancer.Rebalancer") as rebalancer_cls:
-        rebalancer_instance = rebalancer_cls.return_value
-        rebalancer_instance.execute_partial_withdrawal = AsyncMock(return_value="0xpartial")
-
-        result = await rebalance.partial_withdraw(
+    with pytest.raises(HTTPException) as exc_info:
+        await rebalance.partial_withdraw(
             request=_request(),
             address="0xdef",
             body=rebalance.PartialWithdrawRequest(amount_usdc="12.5", protocol_id="benqi"),
@@ -99,10 +97,6 @@ async def test_partial_withdraw_logs_withdrawal_activity(monkeypatch) -> None:
             _auth={"sub": "did:privy:test"},
         )
 
-    assert result["status"] == "executed"
-    assert len(db.rebalance_logs.inserted_rows) == 1
-    inserted = db.rebalance_logs.inserted_rows[0]
-    assert inserted["from_protocol"] == "withdrawal"
-    assert inserted["to_protocol"] == "user_eoa"
-    assert inserted["amount_moved"] == "12.500000"
-    assert inserted["tx_hash"] == "0xpartial"
+    assert exc_info.value.status_code == 410
+    assert "Legacy partial-withdraw endpoint is deprecated" in str(exc_info.value.detail)
+    assert len(db.rebalance_logs.inserted_rows) == 0
