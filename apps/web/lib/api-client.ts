@@ -19,6 +19,9 @@ import type {
   AllocationCapsUpdateResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
+  AssistantChatRequest,
+  AssistantChatResponse,
+  AssistantSessionResponse,
 } from "@snowmind/shared-types";
 
 // ── Error types ────────────────────────────────────────────
@@ -387,6 +390,18 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ allocationCaps }),
       },
+    ),
+
+  // Assistant
+  chatAssistant: (data: AssistantChatRequest) =>
+    request<AssistantChatResponse>("/api/v1/assistant/chat", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getAssistantSession: (sessionId: string) =>
+    request<AssistantSessionResponse>(
+      `/api/v1/assistant/sessions/${encodeURIComponent(sessionId)}`,
     ),
 
   // Withdrawals

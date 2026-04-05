@@ -72,6 +72,13 @@ class SnowMindScheduler:
             self._snapshot_daily_risk_scores, "cron",
             hour=2, minute=30, id="risk_snapshot",
         )
+        # Seed today's risk snapshot shortly after startup so dashboards can
+        # display dynamic scores immediately instead of waiting for 02:30 UTC.
+        self._scheduler.add_job(
+            self._seed_daily_risk_snapshot_if_needed, "date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=15),
+            id="risk_seed",
+        )
         self._scheduler.add_job(
             self._snapshot_platform_kpi, "cron",
             hour=1, minute=50, id="platform_kpi_snapshot",
@@ -551,6 +558,31 @@ class SnowMindScheduler:
             logger.info("Daily risk snapshot recorded for %d protocols", len(scores))
         except Exception as e:
             logger.error("Risk snapshot job failed: %s", e)
+
+    async def _seed_daily_risk_snapshot_if_needed(self) -> None:
+        """Write today's risk snapshot once at startup when missing.
+
+        This avoids an apparent "static" dashboard during the hours before the
+        scheduled 02:30 UTC daily snapshot runs.
+        """
+        try:
+            today = datetime.now(timezone.utc).date().isoformat()
+            existing = (
+                self.db.table("daily_risk_scores")
+                .select("id")
+                .eq("date", today)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if existing:
+                logger.info("Daily risk snapshot already present for %s; skipping seed", today)
+                return
+
+            logger.info("Daily risk snapshot missing for %s; seeding now", today)
+            await self._snapshot_daily_risk_scores()
+        except Exception as e:
+            logger.warning("Risk snapshot seed check failed: %s", e)
 
     async def _snapshot_platform_kpi(self) -> None:
         """Persist daily platform KPI snapshot if migration 014 is present."""

@@ -21,4 +21,8 @@ export type {
   AllocationCapsUpdateResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
+  AssistantMessage,
+  AssistantChatRequest,
+  AssistantChatResponse,
+  AssistantSessionResponse,
 } from "./api";

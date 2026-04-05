@@ -9,7 +9,7 @@ This score is informational for UI display and user guidance only.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Iterable
 
@@ -92,6 +92,8 @@ class RiskScoreResult:
     apy_mean: Decimal | None
     apy_stddev: Decimal | None
     sample_days: int
+    snapshot_date: date | None = None
+    snapshot_created_at: datetime | None = None
 
 
 class RiskScorer:
@@ -329,9 +331,43 @@ class RiskScorer:
                 apy_mean=self._to_decimal(row.get("apy_mean")),
                 apy_stddev=self._to_decimal(row.get("apy_stddev")),
                 sample_days=int(row.get("sample_days") or 0),
+                snapshot_date=self._to_date(row.get("date")),
+                snapshot_created_at=self._to_datetime(row.get("created_at")),
             )
 
         return latest
+
+    def is_snapshot_stale(
+        self,
+        score: RiskScoreResult,
+        *,
+        max_age_hours: int = 30,
+        now: datetime | None = None,
+    ) -> bool:
+        """Return True when a persisted score snapshot is too old.
+
+        Uses ``snapshot_created_at`` when available, else falls back to midnight
+        UTC of ``snapshot_date``. Missing timestamps are treated as stale.
+        """
+        if max_age_hours <= 0:
+            return False
+
+        ref_now = now or datetime.now(timezone.utc)
+        snapshot_time: datetime | None = score.snapshot_created_at
+        if snapshot_time is None and score.snapshot_date is not None:
+            snapshot_time = datetime.combine(
+                score.snapshot_date,
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            )
+        if snapshot_time is None:
+            return True
+
+        if snapshot_time.tzinfo is None:
+            snapshot_time = snapshot_time.replace(tzinfo=timezone.utc)
+
+        age_seconds = (ref_now - snapshot_time).total_seconds()
+        return age_seconds > (max_age_hours * 3600)
 
     def upsert_daily_scores(
         self,
@@ -403,4 +439,34 @@ class RiskScorer:
         try:
             return Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _to_date(value: object) -> date | None:
+        if value is None:
+            return None
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        try:
+            return datetime.fromisoformat(str(value)).date()
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _to_datetime(value: object) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except (ValueError, TypeError):
             return None

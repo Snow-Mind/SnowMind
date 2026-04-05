@@ -211,3 +211,27 @@ export interface AllocationCapsUpdateResponse {
   allocationCaps: Record<string, number> | null;
   updatedRows: number;
 }
+
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export interface AssistantChatRequest {
+  sessionId?: string;
+  message: string;
+}
+
+export interface AssistantChatResponse {
+  sessionId: string;
+  reply: string;
+  messages: AssistantMessage[];
+  model: string;
+  contextSources: string[];
+}
+
+export interface AssistantSessionResponse {
+  sessionId: string;
+  messages: AssistantMessage[];
+}

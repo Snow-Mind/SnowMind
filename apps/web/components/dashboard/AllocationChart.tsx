@@ -16,24 +16,28 @@ import type { ProtocolAllocation } from "@snowmind/shared-types";
 interface AllocationChartProps {
   allocations: ProtocolAllocation[];
   totalDeposited: number;
+  riskByProtocol?: Record<string, { riskScore: number; riskScoreMax: number }>;
 }
 
 export default function AllocationChart({
   allocations,
   totalDeposited,
+  riskByProtocol,
 }: AllocationChartProps) {
   const data = allocations.map((a) => {
     const isIdle = a.protocolId === "idle";
     const meta = isIdle
       ? IDLE_CONFIG
       : PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
+    const dynamicRisk = isIdle ? null : riskByProtocol?.[a.protocolId];
     return {
       name: a.name || meta?.name || a.protocolId,
       value: a.allocationPct * 100,
       amountUsd: Number(a.amountUsdc),
       apy: a.currentApy * 100,
       color: meta?.color ?? "#8899AA",
-      riskScore: meta?.riskScore ?? 0,
+      riskScore: dynamicRisk?.riskScore ?? meta?.riskScore ?? 0,
+      riskScoreMax: dynamicRisk?.riskScoreMax ?? RISK_SCORE_MAX,
       logoPath: !isIdle && 'logoPath' in (meta ?? {}) ? (meta as typeof PROTOCOL_CONFIG[keyof typeof PROTOCOL_CONFIG]).logoPath : null,
     };
   });
@@ -153,7 +157,7 @@ export default function AllocationChart({
                   style={{ backgroundColor: d.color }}
                 />
                 <span className="font-mono text-[10px] text-muted-foreground">
-                  {d.name}: {d.riskScore}/{RISK_SCORE_MAX}
+                  {d.name}: {d.riskScore}/{d.riskScoreMax}
                 </span>
               </div>
             ))}

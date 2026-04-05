@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -205,6 +206,24 @@ def _build_risk_explanation_notes(protocol_id: str, score: RiskScoreResult | Non
     return notes
 
 
+def _filter_fresh_persisted_scores(
+    persisted_scores: dict[str, RiskScoreResult],
+) -> tuple[dict[str, RiskScoreResult], list[str]]:
+    """Split persisted scores into fresh and stale snapshots."""
+    max_age_hours = max(1, int(get_settings().RISK_SCORE_MAX_AGE_HOURS))
+    now = datetime.now(timezone.utc)
+    fresh: dict[str, RiskScoreResult] = {}
+    stale_protocols: list[str] = []
+
+    for protocol_id, score in persisted_scores.items():
+        if _risk_scorer.is_snapshot_stale(score, max_age_hours=max_age_hours, now=now):
+            stale_protocols.append(protocol_id)
+            continue
+        fresh[protocol_id] = score
+
+    return fresh, stale_protocols
+
+
 # ── POST /simulate — zero-cost dry-run (no auth, no execution, no DB) ────────
 
 @router.post("/simulate", response_model=SimulateResponse)
@@ -372,6 +391,13 @@ async def get_all_rates(request: Request, db: Client = Depends(get_db)):
     rates = await _rate_fetcher.fetch_all_rates()
 
     persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
+    persisted_scores, stale_protocols = _filter_fresh_persisted_scores(persisted_scores)
+    if stale_protocols:
+        logger.info(
+            "Risk snapshot stale for %d protocol(s); recomputing on demand: %s",
+            len(stale_protocols),
+            ",".join(sorted(stale_protocols)),
+        )
     missing_score_inputs = {
         pid: rate
         for pid, rate in rates.items()
@@ -459,7 +485,14 @@ async def get_protocol_risk_explanation(
         raise HTTPException(status_code=404, detail="Unknown protocol_id")
 
     persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
+    persisted_scores, stale_protocols = _filter_fresh_persisted_scores(persisted_scores)
     score_result = persisted_scores.get(normalized_protocol_id)
+
+    if normalized_protocol_id in stale_protocols:
+        logger.info(
+            "Risk explanation requested with stale snapshot for %s; recomputing live",
+            normalized_protocol_id,
+        )
 
     if score_result is None:
         live_rates = await _rate_fetcher.fetch_all_rates()

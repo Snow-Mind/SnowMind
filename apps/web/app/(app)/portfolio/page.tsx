@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import Image from "next/image";
 import { ArrowUpRight, History, AlertCircle, RefreshCw, Layers } from "lucide-react";
 import { motion } from "framer-motion";
@@ -83,6 +84,17 @@ export default function PortfolioPage() {
         },
       ]
     : [];
+
+  const riskByProtocol = useMemo(() => {
+    const entries = (ratesData ?? []).map((r) => [
+      r.protocolId,
+      {
+        riskScore: Number(r.riskScore),
+        riskScoreMax: Number(r.riskScoreMax),
+      },
+    ] as const);
+    return Object.fromEntries(entries);
+  }, [ratesData]);
 
   if (error) {
     return (
@@ -309,7 +321,11 @@ export default function PortfolioPage() {
 
         {/* Allocation pie chart */}
         <div className="min-w-[320px]">
-          <AllocationChart allocations={allocations} totalDeposited={totalValue} />
+          <AllocationChart
+            allocations={allocations}
+            totalDeposited={totalValue}
+            riskByProtocol={riskByProtocol}
+          />
         </div>
       </div>
 

@@ -190,6 +190,13 @@ class Settings(BaseSettings):
     PORTFOLIO_CACHE_TTL_SECONDS: int = 8
     OPTIMIZER_RATES_CACHE_TTL_SECONDS: int = 20
     APY_TIMESERIES_CACHE_TTL_SECONDS: int = 60
+    RISK_SCORE_MAX_AGE_HOURS: int = 30
+
+    # ── AI Assistant ────────────────────────────────────────
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-flash-latest"
+    GEMINI_TIMEOUT_SECONDS: int = 20
+    ASSISTANT_MAX_HISTORY_MESSAGES: int = 20
 
     @field_validator("REBALANCE_CHECK_INTERVAL", mode="before")
     @classmethod

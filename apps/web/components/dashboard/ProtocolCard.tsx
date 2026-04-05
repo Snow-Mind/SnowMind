@@ -18,6 +18,8 @@ interface ProtocolCardProps {
   userAllocation: number      // USDC amount allocated to this protocol
   totalBalance: number        // Total USDC across all protocols
   tvlUsd?: number             // Protocol TVL in USD
+  riskScore?: number
+  riskScoreMax?: number
   isHighlighted?: boolean     // True if this protocol has the highest APY
   status?: 'healthy' | 'high_utilization' | 'paused' | 'emergency'
 }
@@ -28,6 +30,8 @@ export function ProtocolCard({
   userAllocation,
   totalBalance,
   tvlUsd,
+  riskScore,
+  riskScoreMax,
   isHighlighted = false,
   status = 'healthy',
 }: ProtocolCardProps) {
@@ -35,6 +39,12 @@ export function ProtocolCard({
   const [imageFailed, setImageFailed] = useState(false)
   const config = PROTOCOL_CONFIG[protocolId]
   const allocationPct = totalBalance > 0 ? (userAllocation / totalBalance) * 100 : 0
+  const displayRiskScore = Number.isFinite(riskScore)
+    ? Math.max(0, Math.round(riskScore as number))
+    : config.riskScore
+  const displayRiskScoreMax = Number.isFinite(riskScoreMax)
+    ? Math.max(1, Math.round(riskScoreMax as number))
+    : RISK_SCORE_MAX
 
   const statusColors = {
     healthy: 'text-emerald-400',
@@ -139,7 +149,7 @@ export function ProtocolCard({
         <div className="flex items-center justify-between border-t border-white/[0.06] pt-3">
           <div className="flex items-center gap-1.5 text-xs text-white/40">
             <Shield className="h-3 w-3" />
-            <span>Risk: {config.riskScore}/{RISK_SCORE_MAX}</span>
+            <span>Risk: {displayRiskScore}/{displayRiskScoreMax}</span>
           </div>
           {tvlUsd && (
             <div className="text-xs text-white/40">

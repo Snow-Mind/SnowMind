@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { NeuralSnowflakeLogo } from "@/components/snow/NeuralSnowflake";
 import { ChainGuard } from "@/components/ChainGuard";
+import { FloatingAssistant } from "@/components/assistant/FloatingAssistant";
 import { useAuth } from "@/hooks/useAuth";
 import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { usePortfolio } from "@/hooks/usePortfolio";
@@ -477,6 +478,8 @@ export default function AppLayout({
           onDeactivate={handleDeactivateAgent}
         />
       )}
+
+      <FloatingAssistant />
 
 
     </div>
