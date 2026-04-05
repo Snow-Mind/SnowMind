@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 from supabase import Client
 
 from app.core.config import get_settings
@@ -95,6 +95,28 @@ class AssistantSessionSummaryResponse(CamelModel):
 
 class AssistantSessionListResponse(CamelModel):
     sessions: list[AssistantSessionSummaryResponse]
+
+
+class AssistantSessionRenameRequest(CamelModel):
+    title: str = Field(min_length=1, max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def _normalize_title(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("title must not be empty")
+        return normalized
+
+
+class AssistantSessionRenameResponse(CamelModel):
+    session_id: str
+    title: str
+
+
+class AssistantSessionDeleteResponse(CamelModel):
+    session_id: str
+    deleted: bool
 
 
 class AssistantFeedbackRequest(CamelModel):
@@ -495,6 +517,60 @@ async def get_assistant_session(
     return AssistantSessionResponse(
         session_id=normalized_session_id,
         messages=_serialize_messages(history),
+    )
+
+
+@router.patch("/sessions/{session_id}", response_model=AssistantSessionRenameResponse)
+@limiter.limit("60/minute")
+async def rename_assistant_session(
+    session_id: str,
+    payload: AssistantSessionRenameRequest,
+    request: Request,
+    db: Client = Depends(get_db),
+    auth_claims: dict = Depends(require_privy_auth),
+):
+    """Persist a session title override for the authenticated user."""
+    del request
+
+    user_id = _extract_user_id(auth_claims)
+    normalized_session_id = _normalize_session_id(session_id, allow_generate=False)
+
+    normalized_title = _assistant_session_store.rename_session(
+        db,
+        privy_user_id=user_id,
+        session_id=normalized_session_id,
+        title=payload.title,
+    )
+
+    return AssistantSessionRenameResponse(
+        session_id=normalized_session_id,
+        title=normalized_title,
+    )
+
+
+@router.delete("/sessions/{session_id}", response_model=AssistantSessionDeleteResponse)
+@limiter.limit("60/minute")
+async def delete_assistant_session(
+    session_id: str,
+    request: Request,
+    db: Client = Depends(get_db),
+    auth_claims: dict = Depends(require_privy_auth),
+):
+    """Delete one assistant session and its associated feedback for the authenticated user."""
+    del request
+
+    user_id = _extract_user_id(auth_claims)
+    normalized_session_id = _normalize_session_id(session_id, allow_generate=False)
+
+    deleted = _assistant_session_store.delete_session(
+        db,
+        privy_user_id=user_id,
+        session_id=normalized_session_id,
+    )
+
+    return AssistantSessionDeleteResponse(
+        session_id=normalized_session_id,
+        deleted=deleted,
     )
 
 

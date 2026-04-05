@@ -20,6 +20,7 @@ class _FakeSessionStore:
     def __init__(self) -> None:
         self._messages: dict[tuple[str, str], list[AssistantStoredMessage]] = {}
         self._feedback: dict[str, list[AssistantFeedbackEntry]] = {}
+        self._titles: dict[tuple[str, str], str] = {}
 
     def append_message(
         self,
@@ -61,6 +62,7 @@ class _FakeSessionStore:
             if user_id != privy_user_id or not messages:
                 continue
             title = next((m.content for m in messages if m.role == "user"), messages[-1].content)
+            title = self._titles.get((privy_user_id, session_id), title)
             rows.append(
                 AssistantSessionSummary(
                     session_id=session_id,
@@ -102,6 +104,43 @@ class _FakeSessionStore:
         rows.insert(0, row)
         self._feedback[privy_user_id] = rows
         return row
+
+    def rename_session(
+        self,
+        _db,
+        *,
+        privy_user_id: str,
+        session_id: str,
+        title: str,
+    ) -> str:
+        normalized = " ".join(title.strip().split())
+        self._titles[(privy_user_id, session_id)] = normalized
+        return normalized
+
+    def delete_session(
+        self,
+        _db,
+        *,
+        privy_user_id: str,
+        session_id: str,
+    ) -> bool:
+        removed = False
+        key = (privy_user_id, session_id)
+        if key in self._messages:
+            del self._messages[key]
+            removed = True
+
+        if key in self._titles:
+            del self._titles[key]
+            removed = True
+
+        rows = self._feedback.get(privy_user_id, [])
+        filtered = [row for row in rows if row.session_id != session_id]
+        if len(filtered) != len(rows):
+            self._feedback[privy_user_id] = filtered
+            removed = True
+
+        return removed
 
     def list_recent_feedback(
         self,
@@ -328,3 +367,77 @@ def test_feedback_request_accepts_camel_case_aliases() -> None:
     )
     assert payload.session_id == "sessionAAA1"
     assert payload.message_created_at == "2026-04-06T01:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_rename_assistant_session_persists_override(monkeypatch) -> None:
+    fake_store = _FakeSessionStore()
+    monkeypatch.setattr(assistant_routes, "_assistant_session_store", fake_store)
+
+    fake_store.append_message(
+        SimpleNamespace(),
+        privy_user_id="did:privy:123",
+        session_id="sessionAAA1",
+        role="user",
+        content="Original title",
+    )
+
+    out = await assistant_routes.rename_assistant_session(
+        "sessionAAA1",
+        assistant_routes.AssistantSessionRenameRequest(title="Risk Review"),
+        _make_request("/api/v1/assistant/sessions/sessionAAA1"),
+        SimpleNamespace(),
+        {"sub": "did:privy:123"},
+    )
+
+    assert out.session_id == "sessionAAA1"
+    assert out.title == "Risk Review"
+
+    listed = await assistant_routes.list_assistant_sessions(
+        _make_request("/api/v1/assistant/sessions"),
+        20,
+        SimpleNamespace(),
+        {"sub": "did:privy:123"},
+    )
+    assert listed.sessions[0].title == "Risk Review"
+
+
+@pytest.mark.asyncio
+async def test_delete_assistant_session_removes_messages_and_feedback(monkeypatch) -> None:
+    fake_store = _FakeSessionStore()
+    monkeypatch.setattr(assistant_routes, "_assistant_session_store", fake_store)
+
+    fake_store.append_message(
+        SimpleNamespace(),
+        privy_user_id="did:privy:123",
+        session_id="sessionAAA1",
+        role="user",
+        content="message",
+    )
+    fake_store.record_feedback(
+        SimpleNamespace(),
+        privy_user_id="did:privy:123",
+        session_id="sessionAAA1",
+        assistant_created_at="2026-04-06T01:00:00+00:00",
+        feedback="up",
+        message_content="message",
+        note=None,
+    )
+
+    out = await assistant_routes.delete_assistant_session(
+        "sessionAAA1",
+        _make_request("/api/v1/assistant/sessions/sessionAAA1"),
+        SimpleNamespace(),
+        {"sub": "did:privy:123"},
+    )
+
+    assert out.session_id == "sessionAAA1"
+    assert out.deleted is True
+
+    listed = await assistant_routes.list_assistant_sessions(
+        _make_request("/api/v1/assistant/sessions"),
+        20,
+        SimpleNamespace(),
+        {"sub": "did:privy:123"},
+    )
+    assert listed.sessions == []

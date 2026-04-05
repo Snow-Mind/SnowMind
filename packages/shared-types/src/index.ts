@@ -30,4 +30,7 @@ export type {
   AssistantSessionResponse,
   AssistantSessionSummary,
   AssistantSessionListResponse,
+  AssistantSessionRenameRequest,
+  AssistantSessionRenameResponse,
+  AssistantSessionDeleteResponse,
 } from "./api";

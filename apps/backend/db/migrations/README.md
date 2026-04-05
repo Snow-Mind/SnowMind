@@ -19,6 +19,7 @@ Expected tables (after all migrations):
 - `account_yield_tracking`
 - `allocations`
 - `assistant_chat_messages`
+- `assistant_chat_sessions`
 - `assistant_message_feedback`
 - `daily_apy_snapshots`
 - `daily_risk_scores`
@@ -55,6 +56,7 @@ Expected tables (after all migrations):
 | 016 | `016_add_daily_risk_scores.sql` | Add daily risk score snapshots with static + dynamic category breakdowns |
 | 017 | `017_add_assistant_chat_messages.sql` | Add assistant chat message persistence for authenticated session history |
 | 018 | `018_add_assistant_message_feedback.sql` | Add assistant thumbs up/down feedback persistence for response quality tuning |
+| 019 | `019_add_assistant_chat_sessions.sql` | Add persistent assistant session metadata for rename/delete-backed conversation management |
 
 ## Creating a new migration
 

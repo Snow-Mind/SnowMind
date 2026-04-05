@@ -25,6 +25,9 @@ import type {
   AssistantFeedbackResponse,
   AssistantSessionListResponse,
   AssistantSessionResponse,
+  AssistantSessionRenameRequest,
+  AssistantSessionRenameResponse,
+  AssistantSessionDeleteResponse,
 } from "@snowmind/shared-types";
 
 // ── Error types ────────────────────────────────────────────
@@ -465,6 +468,26 @@ export const api = {
   getAssistantSession: (sessionId: string) =>
     request<AssistantSessionResponse>(
       `/api/v1/assistant/sessions/${encodeURIComponent(sessionId)}`,
+    ),
+
+  renameAssistantSession: (
+    sessionId: string,
+    payload: AssistantSessionRenameRequest,
+  ) =>
+    request<AssistantSessionRenameResponse>(
+      `/api/v1/assistant/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
+
+  deleteAssistantSession: (sessionId: string) =>
+    request<AssistantSessionDeleteResponse>(
+      `/api/v1/assistant/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "DELETE",
+      },
     ),
 
   getAssistantSessions: (limit = 20) =>

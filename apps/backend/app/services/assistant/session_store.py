@@ -51,9 +51,11 @@ class AssistantSessionStore:
     def __init__(self) -> None:
         self._force_memory_only = False
         self._feedback_memory_only = False
+        self._session_meta_memory_only = False
         self._memory_lock = Lock()
         self._memory_store: dict[tuple[str, str], list[AssistantStoredMessage]] = {}
         self._memory_feedback_store: dict[str, list[AssistantFeedbackEntry]] = {}
+        self._memory_session_titles: dict[tuple[str, str], str] = {}
 
     def append_message(
         self,
@@ -158,10 +160,125 @@ class AssistantSessionStore:
                 .execute()
                 .data
             )
-            return self._rows_to_session_summaries(rows or [], limit=safe_limit)
+            summaries = self._rows_to_session_summaries(rows or [], limit=safe_limit)
+            session_ids = [row.session_id for row in summaries]
+            custom_titles = self._list_custom_session_titles(
+                db,
+                privy_user_id=privy_user_id,
+                session_ids=session_ids,
+                limit=max(scan_limit, 200),
+            )
+
+            if not custom_titles:
+                return summaries
+
+            return [
+                AssistantSessionSummary(
+                    session_id=row.session_id,
+                    title=custom_titles.get(row.session_id, row.title),
+                    last_message_at=row.last_message_at,
+                )
+                for row in summaries
+            ]
         except Exception as exc:
             self._handle_db_error(exc)
             return self._list_recent_sessions_in_memory(privy_user_id, safe_limit)
+
+    def rename_session(
+        self,
+        db: Client,
+        *,
+        privy_user_id: str,
+        session_id: str,
+        title: str,
+    ) -> str:
+        """Persist a session title override and return the normalized title."""
+        normalized_title = self._title_from_content(title)
+
+        if self._session_meta_memory_only:
+            self._set_session_title_in_memory(privy_user_id, session_id, normalized_title)
+            return normalized_title
+
+        try:
+            payload = {
+                "privy_user_id": privy_user_id,
+                "session_id": session_id,
+                "title": normalized_title,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            rows = (
+                db.table("assistant_chat_sessions")
+                .upsert(payload, on_conflict="privy_user_id,session_id")
+                .execute()
+                .data
+            )
+            if rows and isinstance(rows[0], dict):
+                row_title = rows[0].get("title")
+                if isinstance(row_title, str) and row_title.strip():
+                    normalized_title = self._title_from_content(row_title)
+            return normalized_title
+        except Exception as exc:
+            self._handle_session_meta_error(exc)
+            self._set_session_title_in_memory(privy_user_id, session_id, normalized_title)
+            return normalized_title
+
+    def delete_session(
+        self,
+        db: Client,
+        *,
+        privy_user_id: str,
+        session_id: str,
+    ) -> bool:
+        """Delete one session's messages, feedback, and metadata for a user."""
+        removed_any = False
+
+        try:
+            message_rows = (
+                db.table("assistant_chat_messages")
+                .delete()
+                .eq("privy_user_id", privy_user_id)
+                .eq("session_id", session_id)
+                .execute()
+                .data
+            )
+            removed_any = removed_any or bool(message_rows)
+        except Exception as exc:
+            self._handle_db_error(exc)
+            if not self._force_memory_only:
+                raise
+
+        try:
+            feedback_rows = (
+                db.table("assistant_message_feedback")
+                .delete()
+                .eq("privy_user_id", privy_user_id)
+                .eq("session_id", session_id)
+                .execute()
+                .data
+            )
+            removed_any = removed_any or bool(feedback_rows)
+        except Exception as exc:
+            self._handle_feedback_error(exc)
+            if not self._feedback_memory_only:
+                raise
+
+        try:
+            session_rows = (
+                db.table("assistant_chat_sessions")
+                .delete()
+                .eq("privy_user_id", privy_user_id)
+                .eq("session_id", session_id)
+                .execute()
+                .data
+            )
+            removed_any = removed_any or bool(session_rows)
+        except Exception as exc:
+            self._handle_session_meta_error(exc)
+            if not self._session_meta_memory_only:
+                raise
+
+        memory_removed = self._delete_session_in_memory(privy_user_id, session_id)
+        return removed_any or memory_removed
 
     def record_feedback(
         self,
@@ -302,7 +419,7 @@ class AssistantSessionStore:
         summaries: list[AssistantSessionSummary] = []
         for session_id, history in matching_items:
             last = history[-1]
-            title = self._derive_title(history)
+            title = self._memory_session_titles.get((privy_user_id, session_id)) or self._derive_title(history)
             summaries.append(
                 AssistantSessionSummary(
                     session_id=session_id,
@@ -341,6 +458,95 @@ class AssistantSessionStore:
         with self._memory_lock:
             rows = list(self._memory_feedback_store.get(privy_user_id, []))
         return rows[:limit]
+
+    def _list_custom_session_titles(
+        self,
+        db: Client,
+        *,
+        privy_user_id: str,
+        session_ids: list[str],
+        limit: int,
+    ) -> dict[str, str]:
+        target_ids = {row.strip() for row in session_ids if row and row.strip()}
+        if not target_ids:
+            return {}
+
+        if self._session_meta_memory_only:
+            return self._list_custom_session_titles_in_memory(privy_user_id, target_ids)
+
+        try:
+            rows = (
+                db.table("assistant_chat_sessions")
+                .select("session_id,title")
+                .eq("privy_user_id", privy_user_id)
+                .order("updated_at", desc=True)
+                .limit(max(1, min(limit, 5000)))
+                .execute()
+                .data
+            )
+
+            titles: dict[str, str] = {}
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+
+                session_id_raw = row.get("session_id")
+                title_raw = row.get("title")
+                if not isinstance(session_id_raw, str) or not isinstance(title_raw, str):
+                    continue
+
+                session_id = session_id_raw.strip()
+                if session_id not in target_ids:
+                    continue
+
+                normalized_title = self._title_from_content(title_raw)
+                titles[session_id] = normalized_title
+
+            return titles
+        except Exception as exc:
+            self._handle_session_meta_error(exc)
+            return self._list_custom_session_titles_in_memory(privy_user_id, target_ids)
+
+    def _list_custom_session_titles_in_memory(
+        self,
+        privy_user_id: str,
+        session_ids: set[str],
+    ) -> dict[str, str]:
+        with self._memory_lock:
+            return {
+                session_id: title
+                for (user_id, session_id), title in self._memory_session_titles.items()
+                if user_id == privy_user_id and session_id in session_ids
+            }
+
+    def _set_session_title_in_memory(
+        self,
+        privy_user_id: str,
+        session_id: str,
+        title: str,
+    ) -> None:
+        with self._memory_lock:
+            self._memory_session_titles[(privy_user_id, session_id)] = self._title_from_content(title)
+
+    def _delete_session_in_memory(self, privy_user_id: str, session_id: str) -> bool:
+        removed = False
+        key = (privy_user_id, session_id)
+        with self._memory_lock:
+            if key in self._memory_store:
+                del self._memory_store[key]
+                removed = True
+
+            if key in self._memory_session_titles:
+                del self._memory_session_titles[key]
+                removed = True
+
+            rows = self._memory_feedback_store.get(privy_user_id, [])
+            filtered = [row for row in rows if row.session_id != session_id]
+            if len(filtered) != len(rows):
+                self._memory_feedback_store[privy_user_id] = filtered
+                removed = True
+
+        return removed
 
     def _rows_to_session_summaries(
         self,
@@ -449,6 +655,17 @@ class AssistantSessionStore:
             return
 
         logger.warning("Assistant feedback DB operation failed; using memory fallback for this request: %s", exc)
+
+    def _handle_session_meta_error(self, exc: Exception) -> None:
+        if self._is_missing_table_error(exc, "assistant_chat_sessions"):
+            if not self._session_meta_memory_only:
+                logger.warning(
+                    "assistant_chat_sessions table unavailable; storing session titles in memory"
+                )
+            self._session_meta_memory_only = True
+            return
+
+        logger.warning("Assistant session metadata DB operation failed; using fallback for this request: %s", exc)
 
     @staticmethod
     def _is_missing_table_error(exc: Exception, table_name: str) -> bool:

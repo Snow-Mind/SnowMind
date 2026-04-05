@@ -263,3 +263,17 @@ export interface AssistantSessionSummary {
 export interface AssistantSessionListResponse {
   sessions: AssistantSessionSummary[];
 }
+
+export interface AssistantSessionRenameRequest {
+  title: string;
+}
+
+export interface AssistantSessionRenameResponse {
+  sessionId: string;
+  title: string;
+}
+
+export interface AssistantSessionDeleteResponse {
+  sessionId: string;
+  deleted: boolean;
+}

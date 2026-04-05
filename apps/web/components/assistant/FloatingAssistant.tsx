@@ -244,6 +244,7 @@ export function FloatingAssistant() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<StoredSessionSummary[]>([]);
   const [isRenamingTitle, setIsRenamingTitle] = useState(false);
+  const [isMutatingSession, setIsMutatingSession] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [feedbackByMessageKey, setFeedbackByMessageKey] = useState<Record<string, AssistantFeedbackValue>>({});
@@ -329,6 +330,7 @@ export function FloatingAssistant() {
     setFeedbackByMessageKey({});
     setPendingFeedbackKey(null);
     setIsRenamingTitle(false);
+    setIsMutatingSession(false);
     setTitleDraft("");
   }, [sessionId]);
 
@@ -528,43 +530,85 @@ export function FloatingAssistant() {
     setIsRenamingTitle(true);
   };
 
-  const commitSessionRename = () => {
+  const commitSessionRename = async () => {
     if (!sessionId) return;
+    if (isMutatingSession) return;
+
     const trimmed = normalizeSessionTitle(titleDraft);
     const known = sessions.find((row) => row.sessionId === sessionId);
-    upsertSession({
-      sessionId,
-      title: trimmed,
-      lastMessageAt: known?.lastMessageAt ?? new Date().toISOString(),
-    });
-    setIsRenamingTitle(false);
-    setNotice("Conversation renamed.");
-  };
+    const currentTitle = normalizeSessionTitle(known?.title ?? activeSessionTitle);
 
-  const deleteCurrentConversation = () => {
-    if (!sessionId) return;
-    const currentSessionId = sessionId;
-    const remaining = sessions.filter((row) => row.sessionId !== currentSessionId);
-
-    setSessions(remaining);
-
-    if (remaining.length > 0) {
-      const target = remaining[0];
-      activateSession(target.sessionId, target.title, target.lastMessageAt);
-      setMessages([]);
-      setInput("");
-      setSessionFetchVersion((prev) => prev + 1);
-    } else {
-      const nextSessionId = createSessionId();
-      activateSession(nextSessionId, DEFAULT_SESSION_TITLE, new Date().toISOString());
-      setMessages([]);
-      setInput("");
-      setError(null);
+    if (trimmed === currentTitle) {
+      setIsRenamingTitle(false);
+      setTitleDraft("");
+      return;
     }
 
-    setIsRenamingTitle(false);
-    setTitleDraft("");
-    setNotice("Conversation deleted from local history.");
+    setIsMutatingSession(true);
+    setError(null);
+
+    try {
+      const response = await api.renameAssistantSession(sessionId, { title: trimmed });
+      const nextTitle = normalizeSessionTitle(response.title || trimmed);
+      upsertSession({
+        sessionId,
+        title: nextTitle,
+        lastMessageAt: known?.lastMessageAt ?? new Date().toISOString(),
+      });
+      setIsRenamingTitle(false);
+      setTitleDraft("");
+      setNotice("Conversation renamed.");
+    } catch (err) {
+      if (err instanceof APIError) {
+        setError(compactApiErrorMessage(err, "Could not rename conversation right now."));
+      } else {
+        setError("Could not rename conversation right now.");
+      }
+    } finally {
+      setIsMutatingSession(false);
+    }
+  };
+
+  const deleteCurrentConversation = async () => {
+    if (!sessionId) return;
+    if (isMutatingSession) return;
+
+    setIsMutatingSession(true);
+    setError(null);
+
+    const currentSessionId = sessionId;
+    try {
+      await api.deleteAssistantSession(currentSessionId);
+
+      const remaining = sessions.filter((row) => row.sessionId !== currentSessionId);
+      setSessions(remaining);
+
+      if (remaining.length > 0) {
+        const target = remaining[0];
+        activateSession(target.sessionId, target.title, target.lastMessageAt);
+        setMessages([]);
+        setInput("");
+        setSessionFetchVersion((prev) => prev + 1);
+      } else {
+        const nextSessionId = createSessionId();
+        activateSession(nextSessionId, DEFAULT_SESSION_TITLE, new Date().toISOString());
+        setMessages([]);
+        setInput("");
+        setError(null);
+      }
+
+      setIsRenamingTitle(false);
+      setTitleDraft("");
+      setNotice("Conversation deleted.");
+    } catch (err) {
+      if (err instanceof APIError) {
+        setError(compactApiErrorMessage(err, "Could not delete conversation right now."));
+      } else {
+        setError("Could not delete conversation right now.");
+      }
+    } finally {
+      setIsMutatingSession(false);
+    }
   };
 
   const insertPrompt = (prompt: string) => {
@@ -732,11 +776,13 @@ export function FloatingAssistant() {
                   <input
                     value={titleDraft}
                     onChange={(event) => setTitleDraft(event.target.value)}
-                    onBlur={commitSessionRename}
+                    onBlur={() => {
+                      void commitSessionRename();
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();
-                        commitSessionRename();
+                        void commitSessionRename();
                       }
                       if (event.key === "Escape") {
                         event.preventDefault();
@@ -745,6 +791,7 @@ export function FloatingAssistant() {
                       }
                     }}
                     autoFocus
+                    disabled={isMutatingSession}
                     className="w-[185px] rounded-md border border-[#394150] bg-[#171C25] px-2 py-1 text-[13px] font-medium text-white outline-none"
                   />
                 ) : (
@@ -859,13 +906,17 @@ export function FloatingAssistant() {
                 >
                   <DropdownMenuItem
                     onSelect={beginRenameCurrentSession}
+                    disabled={isMutatingSession || !sessionId}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
                     <SquarePen className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
                     Rename
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onSelect={deleteCurrentConversation}
+                    onSelect={() => {
+                      void deleteCurrentConversation();
+                    }}
+                    disabled={isMutatingSession || !sessionId}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
