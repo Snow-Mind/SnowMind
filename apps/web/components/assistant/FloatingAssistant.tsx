@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUpRight,
   Check,
   ChevronDown,
   Clock3,
@@ -9,16 +10,15 @@ import {
   Copy,
   Compass,
   Ellipsis,
-  ExternalLink,
   Loader2,
   Minus,
-  Pencil,
   Plus,
   Search,
   Send,
   Settings2,
-  Smile,
+  SmilePlus,
   Sparkles,
+  SquarePen,
   ThumbsDown,
   ThumbsUp,
   Trash2,
@@ -46,6 +46,8 @@ const SESSION_LABEL = "Ctrl+J";
 const DEFAULT_SESSION_TITLE = "New AI chat";
 const MAX_SESSION_ENTRIES = 24;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const HEADER_ICON_STROKE = 1.9;
+const MENU_ICON_STROKE = 1.85;
 
 type SessionIconKind = "neural" | "spark" | "compass";
 const SESSION_ICON_ORDER: SessionIconKind[] = ["neural", "spark", "compass"];
@@ -754,20 +756,20 @@ export function FloatingAssistant() {
   const messageActionButtonClass =
     "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[#2F3642] bg-[#131821] text-white/65 transition hover:border-[#4A5260] hover:bg-[#1A202B] hover:text-white disabled:cursor-not-allowed disabled:opacity-45";
   const headerActionButtonClass =
-    "inline-flex h-7 w-7 items-center justify-center rounded-md text-white/78 transition hover:bg-[#1D2430] hover:text-white";
+    "inline-flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-white/78 transition hover:bg-[#1D2430] hover:text-white";
 
   return (
     <>
       {isOpen && (
         <div
-          className="assistant-surface fixed bottom-[78px] right-4 z-40 h-[min(73vh,548px)] w-[min(92vw,360px)] overflow-hidden rounded-[26px] border border-[#2D3440] text-white shadow-[0_18px_40px_rgba(0,0,0,0.4)] sm:right-6"
+          className="assistant-surface fixed bottom-[74px] right-3 z-40 h-[min(78vh,572px)] w-[min(96vw,360px)] overflow-hidden rounded-[26px] border border-[#2D3440] text-white shadow-[0_18px_40px_rgba(0,0,0,0.4)] sm:bottom-[78px] sm:right-6 sm:h-[min(74vh,548px)] sm:w-[360px] lg:h-[548px] lg:w-[368px]"
           style={{
             background: "#111318",
           }}
         >
-          <div className="flex items-center justify-between border-b border-[#2D3440] px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full border border-[#374050] bg-[#171D27]">
+          <div className="flex items-center justify-between border-b border-[#2D3440] px-2.5 py-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="inline-flex h-[25px] w-[25px] items-center justify-center rounded-full border border-[#374050] bg-[#171D27]">
                 {renderSessionIcon(activeSessionIcon)}
               </span>
               <div className="min-w-0">
@@ -795,11 +797,11 @@ export function FloatingAssistant() {
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
-                        className="inline-flex max-w-[198px] items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13px] font-medium text-white transition hover:bg-[#1D2430]"
+                        className="inline-flex max-w-[204px] items-center gap-0.5 rounded-md px-1 py-0.5 text-left text-[13px] font-medium text-white transition hover:bg-[#1D2430]"
                         aria-label="Open session history"
                       >
                         <span className="truncate">{activeSessionTitle}</span>
-                        <ChevronDown className="h-3.5 w-3.5 text-white/60" />
+                        <ChevronDown className="h-3.5 w-3.5 text-white/60" strokeWidth={HEADER_ICON_STROKE} />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent
@@ -891,7 +893,7 @@ export function FloatingAssistant() {
                 className={headerActionButtonClass}
                 aria-label="Open assistant in new tab"
               >
-                <ExternalLink className="h-3.5 w-3.5" />
+                <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={HEADER_ICON_STROKE} />
               </button>
 
               <DropdownMenu>
@@ -901,7 +903,7 @@ export function FloatingAssistant() {
                     className={headerActionButtonClass}
                     aria-label="Conversation options"
                   >
-                    <Ellipsis className="h-3.5 w-3.5" />
+                    <Ellipsis className="h-3.5 w-3.5" strokeWidth={HEADER_ICON_STROKE} />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -913,21 +915,21 @@ export function FloatingAssistant() {
                     onSelect={beginRenameCurrentSession}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
-                    <Pencil className="h-3.5 w-3.5" />
+                    <SquarePen className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
                     Rename
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={cycleCurrentSessionIcon}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
-                    <Smile className="h-3.5 w-3.5" />
+                    <SmilePlus className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
                     Change icon
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={deleteCurrentConversation}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trash2 className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
                     Delete
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="bg-[#2F3642]" />
@@ -935,7 +937,7 @@ export function FloatingAssistant() {
                     onSelect={openAssistantInNewTab}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
                     Open in new tab
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -947,13 +949,13 @@ export function FloatingAssistant() {
                 className={headerActionButtonClass}
                 aria-label="Hide assistant"
               >
-                <Minus className="h-3.5 w-3.5" />
+                <Minus className="h-3.5 w-3.5" strokeWidth={HEADER_ICON_STROKE} />
               </button>
             </div>
           </div>
 
-          <div className="flex h-[calc(100%-58px)] flex-col overflow-hidden">
-            <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2.5">
+          <div className="flex h-[calc(100%-54px)] flex-col overflow-hidden">
+            <div className="flex-1 space-y-2 overflow-y-auto px-2.5 py-2.5 sm:px-3 sm:py-2.5">
               {isLoadingHistory ? (
                 <div className="flex items-center gap-2 text-[11px] text-white/65">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1109,14 +1111,14 @@ export function FloatingAssistant() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="border-t border-[#2D3440] bg-[#0F1218] px-2.5 pb-2.5 pt-2">
+            <div className="border-t border-[#2D3440] bg-[#0F1218] px-2.5 pb-2.5 pt-1.5">
               <div className="mb-1.5 inline-flex items-center gap-1 rounded-full border border-[#303746] bg-[#151B25] px-2 py-0.5 text-[9px] font-medium text-white/65">
                 <Sparkles className="h-3 w-3" />
                 Grounded context enabled
               </div>
               {notice ? <p className="mb-1 text-[10px] text-white/55">{notice}</p> : null}
               {error ? <p className="mb-1 text-[10px] text-[#FF9B9C]">{error}</p> : null}
-              <div className="rounded-[18px] border border-[#2D3440] bg-[#141820] px-2 py-1.5 transition focus-within:border-[#E84142] focus-within:shadow-[0_0_0_1px_rgba(232,65,66,0.5)]">
+              <div className="rounded-[16px] border border-[#2D3440] bg-[#141820] px-2.5 py-2 transition focus-within:border-[#E84142] focus-within:shadow-[0_0_0_1px_rgba(232,65,66,0.5)]">
                 <textarea
                   ref={composerRef}
                   value={input}
@@ -1128,9 +1130,9 @@ export function FloatingAssistant() {
                     }
                   }}
                   placeholder="Do anything with AI..."
-                  className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-1 py-1 text-[13px] text-white outline-none placeholder:text-white/42"
+                  className="min-h-[42px] max-h-28 w-full resize-none bg-transparent px-0.5 py-0.5 text-[13px] text-white outline-none placeholder:text-white/42"
                 />
-                <div className="mt-1 flex items-center justify-between">
+                <div className="mt-1.5 flex items-center justify-between">
                   <div className="flex items-center gap-1">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -1244,11 +1246,11 @@ export function FloatingAssistant() {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="group fixed bottom-5 right-4 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:right-6"
+        className="group fixed bottom-4 right-3 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:bottom-5 sm:right-6"
         aria-label={isOpen ? "Close SnowMind assistant" : "Open SnowMind assistant"}
       >
         {isOpen ? (
-          <Minus className="h-4 w-4" />
+          <Minus className="h-4 w-4" strokeWidth={HEADER_ICON_STROKE} />
         ) : (
           <NeuralSnowflakeLogo className="h-[22px] w-[22px]" />
         )}
