@@ -104,6 +104,7 @@ class GeminiAssistantClient:
         messages: list[AssistantStoredMessage],
         grounding_context: str,
         feedback_context: str,
+        response_style_hints: str,
     ) -> str:
         settings = get_settings()
         if not settings.GEMINI_API_KEY:
@@ -132,7 +133,12 @@ class GeminiAssistantClient:
                         "5) Use numbered steps for procedures.\n"
                         "6) If data is missing, state uncertainty explicitly instead of guessing.\n"
                         "7) Keep answers pragmatic: explain reasoning and concrete next actions.\n"
-                        "8) For financial/risk guidance, include a short safety caveat when uncertainty is present."
+                        "8) For financial/risk guidance, include a short safety caveat when uncertainty is present.\n"
+                        "9) If the user asks how risk score is calculated, include this markdown link exactly once: "
+                        "[Protocol Assessment](https://docs.snowmind.xyz/learn/protocol-assessment).\n"
+                        "10) For portfolio advice requests, keep output concise and portfolio-first: "
+                        "propose concrete markets with allocations, avoid long risk essays, and include one final line: "
+                        "This is not financial advice."
                     )
                 }
             ]
@@ -148,7 +154,9 @@ class GeminiAssistantClient:
                             "framework and plan details.\n\n"
                             f"{grounding_context}\n\n"
                             "Recent user quality feedback signals (prefer patterns that received thumbs up, avoid repeated patterns that got thumbs down):\n"
-                            f"{feedback_context}"
+                            f"{feedback_context}\n\n"
+                            "Response style directives for this specific user request:\n"
+                            f"{response_style_hints}"
                         )
                     }
                 ],

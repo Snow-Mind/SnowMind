@@ -114,18 +114,34 @@ class _FakeSessionStore:
 
 
 class _FakeAssistantClient:
-    async def generate_reply(self, *, messages, grounding_context: str, feedback_context: str) -> str:
+    async def generate_reply(
+        self,
+        *,
+        messages,
+        grounding_context: str,
+        feedback_context: str,
+        response_style_hints: str,
+    ) -> str:
         assert messages
         assert "Fresh snapshots" in grounding_context
         assert "feedback" in feedback_context.lower()
+        assert "directives" in response_style_hints.lower() or "link" in response_style_hints.lower()
         return "Risk scores combine static and dynamic components."
 
 
 class _FailingAssistantClient:
-    async def generate_reply(self, *, messages, grounding_context: str, feedback_context: str) -> str:
+    async def generate_reply(
+        self,
+        *,
+        messages,
+        grounding_context: str,
+        feedback_context: str,
+        response_style_hints: str,
+    ) -> str:
         del messages
         del grounding_context
         del feedback_context
+        del response_style_hints
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
 

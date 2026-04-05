@@ -76,6 +76,7 @@ async def test_gemini_client_uses_x_goog_api_key_header(monkeypatch) -> None:
         ],
         grounding_context="risk context",
         feedback_context="thumbs_up=1",
+        response_style_hints="Include protocol assessment link.",
     )
 
     assert out.startswith("Dynamic risk updates")
@@ -115,4 +116,5 @@ async def test_gemini_client_rejects_missing_api_key(monkeypatch) -> None:
             messages=[],
             grounding_context="context",
             feedback_context="none",
+            response_style_hints="none",
         )

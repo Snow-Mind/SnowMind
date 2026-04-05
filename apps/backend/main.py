@@ -48,6 +48,42 @@ app.add_middleware(
 )
 
 
+# ── Public timeseries preflight compatibility ──────────────
+@app.middleware("http")
+async def timeseries_preflight_compat(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Return stable CORS preflight responses for the public APY timeseries route.
+
+    Some clients send aggressive OPTIONS probes that can be rejected by generic
+    CORS middleware before route handlers are reached. This keeps the public
+    chart endpoint robust without widening auth-protected routes.
+    """
+    normalized_path = request.url.path.rstrip("/")
+    if request.method == "OPTIONS" and normalized_path == "/api/v1/optimizer/rates/timeseries":
+        origin = request.headers.get("origin") or "*"
+        requested_headers = request.headers.get(
+            "access-control-request-headers",
+            "Content-Type, Authorization",
+        )
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": requested_headers,
+                "Access-Control-Max-Age": "86400",
+                "Vary": "Origin",
+            },
+        )
+
+    response = await call_next(request)
+    if normalized_path == "/api/v1/optimizer/rates/timeseries":
+        origin = request.headers.get("origin")
+        if origin and "Access-Control-Allow-Origin" not in response.headers:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+    return response
+
+
 # ── Rate-limiting middleware (must be added BEFORE routing) ───
 app.middleware("http")(rate_limit_middleware)
 

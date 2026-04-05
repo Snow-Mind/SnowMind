@@ -753,19 +753,21 @@ export function FloatingAssistant() {
 
   const messageActionButtonClass =
     "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[#2F3642] bg-[#131821] text-white/65 transition hover:border-[#4A5260] hover:bg-[#1A202B] hover:text-white disabled:cursor-not-allowed disabled:opacity-45";
+  const headerActionButtonClass =
+    "inline-flex h-7 w-7 items-center justify-center rounded-md text-white/78 transition hover:bg-[#1D2430] hover:text-white";
 
   return (
     <>
       {isOpen && (
         <div
-          className="assistant-surface fixed bottom-[78px] right-4 z-40 h-[min(70vh,520px)] w-[min(88vw,338px)] overflow-hidden rounded-[22px] border border-[#2B313A] text-white shadow-[0_16px_36px_rgba(0,0,0,0.42)] sm:right-6"
+          className="assistant-surface fixed bottom-[78px] right-4 z-40 h-[min(73vh,548px)] w-[min(92vw,360px)] overflow-hidden rounded-[26px] border border-[#2D3440] text-white shadow-[0_18px_40px_rgba(0,0,0,0.4)] sm:right-6"
           style={{
             background: "#111318",
           }}
         >
-          <div className="flex items-center justify-between border-b border-[#2B313A] px-3.5 py-2.5">
+          <div className="flex items-center justify-between border-b border-[#2D3440] px-3 py-2">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#2F3642] bg-[#171C25]">
+              <span className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-full border border-[#374050] bg-[#171D27]">
                 {renderSessionIcon(activeSessionIcon)}
               </span>
               <div className="min-w-0">
@@ -793,7 +795,7 @@ export function FloatingAssistant() {
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
-                        className="inline-flex max-w-[185px] items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13px] font-medium text-white transition hover:bg-[#1C2230]"
+                        className="inline-flex max-w-[198px] items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13px] font-medium text-white transition hover:bg-[#1D2430]"
                         aria-label="Open session history"
                       >
                         <span className="truncate">{activeSessionTitle}</span>
@@ -886,7 +888,7 @@ export function FloatingAssistant() {
               <button
                 type="button"
                 onClick={openAssistantInNewTab}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#2F3642] bg-[#161B24] text-white/80 transition hover:bg-[#1D2430] hover:text-white"
+                className={headerActionButtonClass}
                 aria-label="Open assistant in new tab"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -896,7 +898,7 @@ export function FloatingAssistant() {
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#2F3642] bg-[#161B24] text-white/80 transition hover:bg-[#1D2430] hover:text-white"
+                    className={headerActionButtonClass}
                     aria-label="Conversation options"
                   >
                     <Ellipsis className="h-3.5 w-3.5" />
@@ -942,7 +944,7 @@ export function FloatingAssistant() {
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#2F3642] bg-[#161B24] text-white/80 transition hover:bg-[#1D2430] hover:text-white"
+                className={headerActionButtonClass}
                 aria-label="Hide assistant"
               >
                 <Minus className="h-3.5 w-3.5" />
@@ -950,8 +952,8 @@ export function FloatingAssistant() {
             </div>
           </div>
 
-          <div className="flex h-[calc(100%-61px)] flex-col overflow-hidden">
-            <div className="flex-1 space-y-2.5 overflow-y-auto px-3.5 py-3">
+          <div className="flex h-[calc(100%-58px)] flex-col overflow-hidden">
+            <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2.5">
               {isLoadingHistory ? (
                 <div className="flex items-center gap-2 text-[11px] text-white/65">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -961,13 +963,13 @@ export function FloatingAssistant() {
 
               {!isLoadingHistory && messages.length === 0 ? (
                 <div className="space-y-3">
-                  <div className="rounded-xl border border-[#2B313A] bg-[#151922] p-3.5">
+                  <div className="rounded-2xl border border-[#2D3440] bg-[#151922] p-3.5">
                     <div className="flex items-center gap-1.5">
                       <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#2F3642] bg-[#1A202B] text-white">
                         <NeuralSnowflakeLogo className="h-5 w-5" />
                       </span>
                     </div>
-                    <p className="mt-2.5 text-[22px] font-semibold leading-[1.15] tracking-tight text-white/95">
+                    <p className="mt-2.5 text-[21px] font-semibold leading-[1.15] tracking-tight text-white/95">
                       What should we optimize today?
                     </p>
                   </div>
@@ -1107,14 +1109,14 @@ export function FloatingAssistant() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="border-t border-[#2B313A] bg-[#0F1218] px-2.5 pb-2.5 pt-2">
+            <div className="border-t border-[#2D3440] bg-[#0F1218] px-2.5 pb-2.5 pt-2">
               <div className="mb-1.5 inline-flex items-center gap-1 rounded-full border border-[#303746] bg-[#151B25] px-2 py-0.5 text-[9px] font-medium text-white/65">
                 <Sparkles className="h-3 w-3" />
                 Grounded context enabled
               </div>
               {notice ? <p className="mb-1 text-[10px] text-white/55">{notice}</p> : null}
               {error ? <p className="mb-1 text-[10px] text-[#FF9B9C]">{error}</p> : null}
-              <div className="rounded-xl border border-[#2B313A] bg-[#141820] px-2 py-1.5">
+              <div className="rounded-[18px] border border-[#2D3440] bg-[#141820] px-2 py-1.5 transition focus-within:border-[#E84142] focus-within:shadow-[0_0_0_1px_rgba(232,65,66,0.5)]">
                 <textarea
                   ref={composerRef}
                   value={input}
@@ -1126,7 +1128,7 @@ export function FloatingAssistant() {
                     }
                   }}
                   placeholder="Do anything with AI..."
-                  className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-1 py-1 text-[13px] text-white outline-none placeholder:text-white/38"
+                  className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-1 py-1 text-[13px] text-white outline-none placeholder:text-white/42"
                 />
                 <div className="mt-1 flex items-center justify-between">
                   <div className="flex items-center gap-1">
@@ -1242,7 +1244,7 @@ export function FloatingAssistant() {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="group fixed bottom-5 right-4 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[14px] border border-[#2B313A] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:right-6"
+        className="group fixed bottom-5 right-4 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:right-6"
         aria-label={isOpen ? "Close SnowMind assistant" : "Open SnowMind assistant"}
       >
         {isOpen ? (

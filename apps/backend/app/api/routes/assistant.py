@@ -282,6 +282,56 @@ def _build_feedback_context(feedback_rows: list[AssistantFeedbackEntry]) -> str:
     return "\n".join(lines)
 
 
+def _build_response_style_hints(user_message: str) -> str:
+    normalized = (user_message or "").strip().lower()
+    if not normalized:
+        return "No additional style directives for this turn."
+
+    hints: list[str] = []
+
+    asks_risk_calculation = any(
+        token in normalized
+        for token in (
+            "how is risk score",
+            "how risk score",
+            "risk score calculated",
+            "risk score calculation",
+            "how is risk calculated",
+            "how risk is calculated",
+            "o/l/c/y/a",
+        )
+    )
+    if asks_risk_calculation:
+        hints.append(
+            "Include this markdown link exactly once in the response: "
+            "[Protocol Assessment](https://docs.snowmind.xyz/learn/protocol-assessment)."
+        )
+
+    asks_portfolio_advice = (
+        "portfolio" in normalized
+        and any(
+            token in normalized
+            for token in (
+                "advice",
+                "strategy",
+                "allocate",
+                "allocation",
+                "conservative",
+                "recommend",
+                "propose",
+            )
+        )
+    ) or "market strategy" in normalized
+    if asks_portfolio_advice:
+        hints.append(
+            "Respond concisely with a proposed portfolio only: list markets and allocations, "
+            "avoid long risk explanations unless explicitly requested, and end with: "
+            "This is not financial advice."
+        )
+
+    return "\n".join(hints) if hints else "No additional style directives for this turn."
+
+
 @router.post("/chat", response_model=AssistantChatResponse)
 @limiter.limit("30/minute")
 async def chat_with_assistant(
@@ -319,6 +369,7 @@ async def chat_with_assistant(
         limit=8,
     )
     feedback_context = _build_feedback_context(feedback_rows)
+    response_style_hints = _build_response_style_hints(payload.message)
 
     dynamic_summary = _build_dynamic_risk_snapshot_summary(db)
     grounding_context, context_sources = _assistant_knowledge_base.build_grounding_context(dynamic_summary)
@@ -328,6 +379,7 @@ async def chat_with_assistant(
             messages=history,
             grounding_context=grounding_context,
             feedback_context=feedback_context,
+            response_style_hints=response_style_hints,
         )
     except RuntimeError as exc:
         detail = str(exc)
