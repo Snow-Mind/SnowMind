@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.services.execution.session_key import is_session_key_expiry_valid
 from app.services.optimizer.rebalancer import Rebalancer
+from app.services.optimizer.risk_scorer import RiskScorer
 from app.services.optimizer.rate_fetcher import RateFetcher
 from app.services.protocols import ALL_ADAPTERS
 from app.services.monitoring import (
@@ -42,6 +43,7 @@ class SnowMindScheduler:
         self.settings   = get_settings()
         self.db: Client = get_supabase()
         self.rebalancer = Rebalancer()
+        self.risk_scorer = RiskScorer()
         self.instance   = uuid.uuid4().hex[:8]
         self._active    = asyncio.Event()
         self._active.set()
@@ -65,6 +67,10 @@ class SnowMindScheduler:
         self._scheduler.add_job(
             self._snapshot_daily_apy, "cron",
             hour=2, minute=0, id="apy_snapshot",
+        )
+        self._scheduler.add_job(
+            self._snapshot_daily_risk_scores, "cron",
+            hour=2, minute=30, id="risk_snapshot",
         )
         self._scheduler.add_job(
             self._snapshot_platform_kpi, "cron",
@@ -525,6 +531,26 @@ class SnowMindScheduler:
                 await fetcher_for_snapshots.save_vault_daily_snapshot(vault_pid)
             except Exception as e:
                 logger.error("%s daily snapshot failed: %s", vault_pid, e)
+
+    async def _snapshot_daily_risk_scores(self) -> None:
+        """Record one risk-score snapshot per protocol per day."""
+        try:
+            fetcher = RateFetcher()
+            rates = await fetcher.fetch_active_rates()
+            if not rates:
+                logger.warning("Risk snapshot: no rates available")
+                return
+
+            scores = await self.risk_scorer.compute_scores_from_rates(self.db, rates)
+            if not scores:
+                logger.warning("Risk snapshot: no scores computed")
+                return
+
+            today = datetime.now(timezone.utc).date().isoformat()
+            self.risk_scorer.upsert_daily_scores(self.db, scores, today)
+            logger.info("Daily risk snapshot recorded for %d protocols", len(scores))
+        except Exception as e:
+            logger.error("Risk snapshot job failed: %s", e)
 
     async def _snapshot_platform_kpi(self) -> None:
         """Persist daily platform KPI snapshot if migration 014 is present."""

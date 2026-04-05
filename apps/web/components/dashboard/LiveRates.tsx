@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Activity, RefreshCw, TrendingUp, Clock, Loader2, ExternalLink } from "lucide-react";
-import { PROTOCOL_CONFIG } from "@/lib/constants";
+import { PROTOCOL_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
@@ -53,6 +53,9 @@ export default function LiveRates({
     const displayRiskScore = Number.isFinite(r.riskScore)
       ? Math.round(r.riskScore)
       : meta.riskScore;
+    const displayRiskScoreMax = Number.isFinite(r.riskScoreMax)
+      ? Math.max(1, Math.round(r.riskScoreMax))
+      : RISK_SCORE_MAX;
 
     const isSelected = activeProtocolIds.includes(r.protocolId);
     const hasAllocation = activeAllocationIds.includes(r.protocolId);
@@ -88,7 +91,7 @@ export default function LiveRates({
             )}
             {!r.isComingSoon && (
               <span className="rounded-full bg-void-2 px-2 py-0.5 text-[10px] text-muted-foreground">
-                Risk {displayRiskScore}/10
+                Risk {displayRiskScore}/{displayRiskScoreMax}
               </span>
             )}
           </div>

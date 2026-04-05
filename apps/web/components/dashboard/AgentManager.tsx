@@ -9,7 +9,7 @@ import { toast } from "sonner";
 
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { PROTOCOL_CONFIG } from "@/lib/constants";
+import { PROTOCOL_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 
 const CANONICAL_PROTOCOL_IDS = [
@@ -296,6 +296,9 @@ export default function AgentManager({
             const displayRiskScore = rateData && Number.isFinite(rateData.riskScore)
               ? Math.round(rateData.riskScore)
               : protocol.riskScore;
+            const displayRiskScoreMax = rateData && Number.isFinite(rateData.riskScoreMax)
+              ? Math.max(1, Math.round(rateData.riskScoreMax))
+              : RISK_SCORE_MAX;
             const displayCap = protocolCaps[protocolId] ?? 100;
             const isEditingRow = editingCapProtocol === protocolId;
 
@@ -330,7 +333,7 @@ export default function AgentManager({
                         <span className="hidden sm:inline">{protocol.name}</span>
                       </p>
                       <span className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]">
-                        Risk {displayRiskScore}/10
+                        Risk {displayRiskScore}/{displayRiskScoreMax}
                       </span>
                       {!isEnabled && (
                         <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">

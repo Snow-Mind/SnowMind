@@ -105,6 +105,9 @@ export const EXPLORER = {
   contract: (addr: string) => `${explorerBase}/address/${addr}#code`,
 }
 
+// Risk scoring framework max (oracle + liquidity + collateral + yieldProfile + architecture).
+export const RISK_SCORE_MAX = 9;
+
 // ── Protocol metadata — drives ALL UI rendering ─────────────────────────────
 // Only 3 protocols for mainnet beta. Add new protocols by adding entries here.
 export const PROTOCOL_CONFIG = {
@@ -115,7 +118,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.AAVE_POOL,
-    riskScore: 10,     // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 = 10/10
+    riskScore: 4,      // Static subtotal: Oracle 2 + Collateral 1 + Architecture 1
     color: '#8381D9',
     bgColor: 'rgba(131, 129, 217, 0.12)',
     logoPath: '/protocols/aave-official.svg',
@@ -133,7 +136,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.AAVE_POOL,
-    riskScore: 10,     // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 = 10/10
+    riskScore: 4,      // Static subtotal: Oracle 2 + Collateral 1 + Architecture 1
     color: '#8381D9', // Aave brand purple
     bgColor: 'rgba(131, 129, 217, 0.12)',
     logoPath: '/protocols/aave-official.svg',
@@ -151,7 +154,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.BENQI_QIUSDC,
-    riskScore: 10,    // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 1 = 10/10
+    riskScore: 5,     // Static subtotal: Oracle 2 + Collateral 2 + Architecture 1
     color: '#2A72FF', // Benqi brand blue
     bgColor: 'rgba(42, 114, 255, 0.12)',
     logoPath: '/protocols/benqi-official.svg',
@@ -169,7 +172,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Savings',
     asset: 'USDC',
     contractAddress: CONTRACTS.SPARK_SPUSDC,
-    riskScore: 9,     // Safety 3 + Liquidity 3 + Collateral 2 + Yield 2 + Architecture 0 = 9/10
+    riskScore: 4,     // Static subtotal: Oracle 2 + Collateral 2 + Architecture 0
     color: '#FFB347', // Spark brand orange
     bgColor: 'rgba(255, 179, 71, 0.12)',
     logoPath: '/protocols/spark-official.svg',
@@ -187,7 +190,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.EULER_VAULT,
-    riskScore: 6,     // Safety 2 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 0 = 6/10
+    riskScore: 2,     // Static subtotal: Oracle 1 + Collateral 1 + Architecture 0
     color: '#4A6CF6',
     bgColor: 'rgba(74, 108, 246, 0.12)',
     logoPath: '/protocols/euler-official.svg',
@@ -205,7 +208,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.SILO_SAVUSD_VAULT,
-    riskScore: 8,     // Safety 3 + Liquidity 2 + Collateral 1 + Yield 1 + Architecture 1 = 8/10
+    riskScore: 4,     // Static subtotal: Oracle 2 + Collateral 1 + Architecture 1
     color: '#22C55E',
     bgColor: 'rgba(34, 197, 94, 0.12)',
     logoPath: '/protocols/silo-official.svg',
@@ -223,7 +226,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.SILO_SUSDP_VAULT,
-    riskScore: 6,     // Safety 2 + Liquidity 1 + Collateral 1 + Yield 1 + Architecture 1 = 6/10
+    riskScore: 2,     // Static subtotal: Oracle 0 + Collateral 1 + Architecture 1
     color: '#16A34A',
     bgColor: 'rgba(22, 163, 74, 0.12)',
     logoPath: '/protocols/silo-official.svg',

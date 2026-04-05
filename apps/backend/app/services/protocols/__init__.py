@@ -3,7 +3,6 @@
 import logging
 
 from .base import BaseProtocolAdapter
-from app.services.optimizer.risk_scorer import BASE_RISK_SCORES
 
 logger = logging.getLogger("snowmind.protocols")
 
@@ -53,13 +52,6 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
 
 ALL_ADAPTERS: dict[str, BaseProtocolAdapter] = _build_adapters()
 ACTIVE_ADAPTERS: dict[str, BaseProtocolAdapter] = ALL_ADAPTERS
-
-# Risk scores (higher = safer, out of 10).
-# Keep API/public map aligned with optimizer source-of-truth values.
-RISK_SCORES: dict[str, float] = {
-    pid: float(score)
-    for pid, score in BASE_RISK_SCORES.items()
-}
 
 
 def get_adapter(protocol_id: str) -> BaseProtocolAdapter:

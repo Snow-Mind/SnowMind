@@ -19,6 +19,7 @@ Expected tables (after all migrations):
 - `account_yield_tracking`
 - `allocations`
 - `daily_apy_snapshots`
+- `daily_risk_scores`
 - `protocol_health`
 - `rate_snapshots`
 - `rebalance_logs`
@@ -49,6 +50,7 @@ Expected tables (after all migrations):
 | 013 | `013_add_internal_request_nonces.sql` | Add persistent nonce table for execution-service replay protection across restarts |
 | 014 | `014_add_activity_indexes_and_platform_kpis.sql` | Add activity feed indexes, backfill funding activity rows, and enterprise KPI snapshot storage |
 | 015 | `015_add_session_key_allocation_caps.sql` | Add per-protocol max allocation caps (`allocation_caps`) to session keys |
+| 016 | `016_add_daily_risk_scores.sql` | Add daily risk score snapshots with static + dynamic category breakdowns |
 
 ## Creating a new migration
 

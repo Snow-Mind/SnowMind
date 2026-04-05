@@ -8,7 +8,7 @@ import {
   Tooltip,
 } from "recharts";
 import { PieChart as PieChartIcon } from "lucide-react";
-import { PROTOCOL_CONFIG, IDLE_CONFIG } from "@/lib/constants";
+import { PROTOCOL_CONFIG, IDLE_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
 import { formatUsd, formatPct } from "@/lib/format";
 import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
@@ -153,7 +153,7 @@ export default function AllocationChart({
                   style={{ backgroundColor: d.color }}
                 />
                 <span className="font-mono text-[10px] text-muted-foreground">
-                  {d.name}: {d.riskScore}/10
+                  {d.name}: {d.riskScore}/{RISK_SCORE_MAX}
                 </span>
               </div>
             ))}

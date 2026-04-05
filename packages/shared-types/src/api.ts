@@ -51,6 +51,14 @@ export interface ProtocolRateResponse {
   currentApy: number;
   tvlUsd: number;
   riskScore: number;
+  riskScoreMax: number;
+  riskBreakdown?: {
+    oracle: number;
+    liquidity: number;
+    collateral: number;
+    yieldProfile: number;
+    architecture: number;
+  } | null;
   utilizationRate: number | null;
   lastUpdated: number;
 }

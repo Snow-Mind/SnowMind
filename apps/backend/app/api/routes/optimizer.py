@@ -14,14 +14,14 @@ from app.core.limiter import limiter
 from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
-from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
+from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS
 from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
 from app.services.optimizer.milp_solver import (
     OptimizerInput,
     ProtocolInput,
 )
 from app.services.optimizer.waterfall_allocator import waterfall_allocate
-from app.services.optimizer.risk_scorer import RiskScorer
+from app.services.optimizer.risk_scorer import RiskScorer, RiskScoreResult
 
 logger = logging.getLogger("snowmind")
 
@@ -35,6 +35,14 @@ _timeseries_cache: tuple[float, list[dict]] | None = None
 
 # ── Response schemas ─────────────────────────────────────────────────────────
 
+class RiskBreakdownResponse(CamelModel):
+    oracle: int
+    liquidity: int
+    collateral: int
+    yield_profile: int
+    architecture: int
+
+
 class ProtocolRateResponse(CamelModel):
     protocol_id: str
     name: str
@@ -43,6 +51,8 @@ class ProtocolRateResponse(CamelModel):
     current_apy: Decimal
     tvl_usd: Decimal
     risk_score: Decimal
+    risk_score_max: int = 9
+    risk_breakdown: RiskBreakdownResponse | None = None
     utilization_rate: Decimal | None = None
     last_updated: float
 
@@ -105,6 +115,29 @@ class SimulateResponse(CamelModel):
     reasoning: list[str]
 
 
+def _risk_breakdown_response(score: RiskScoreResult | None) -> RiskBreakdownResponse | None:
+    if score is None:
+        return None
+    return RiskBreakdownResponse(
+        oracle=score.breakdown.oracle,
+        liquidity=score.breakdown.liquidity,
+        collateral=score.breakdown.collateral,
+        yield_profile=score.breakdown.yield_profile,
+        architecture=score.breakdown.architecture,
+    )
+
+
+def _resolve_rate_risk(
+    protocol_id: str,
+    persisted_scores: dict[str, RiskScoreResult],
+    computed_scores: dict[str, RiskScoreResult],
+) -> tuple[Decimal, RiskBreakdownResponse | None]:
+    score = persisted_scores.get(protocol_id) or computed_scores.get(protocol_id)
+    if score is not None:
+        return score.score, _risk_breakdown_response(score)
+    return _risk_scorer.compute_risk_score(protocol_id), None
+
+
 # ── POST /simulate — zero-cost dry-run (no auth, no execution, no DB) ────────
 
 @router.post("/simulate", response_model=SimulateResponse)
@@ -158,6 +191,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 
     # Build protocol inputs
     protocol_inputs: list[ProtocolInput] = []
+    risk_by_protocol: dict[str, Decimal] = {}
     for pid, rate in valid_rates.items():
         risk = _risk_scorer.compute_risk_score(
             pid,
@@ -168,6 +202,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
             ),
             protocol_apy=rate.apy,
         )
+        risk_by_protocol[pid] = risk
         protocol_inputs.append(
             ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
         )
@@ -207,7 +242,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
                 is_coming_soon=False,
                 current_apy=rate.apy,
                 tvl_usd=rate.tvl_usd,
-                risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
+                risk_score=risk_by_protocol.get(pid, _risk_scorer.compute_risk_score(pid)),
                 last_updated=rate.fetched_at,
             )
         )
@@ -254,7 +289,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 
 @router.get("/rates", response_model=list[ProtocolRateResponse])
 @limiter.limit("60/minute")
-async def get_all_rates(request: Request):
+async def get_all_rates(request: Request, db: Client = Depends(get_db)):
     """Fetch live on-chain rates from every known protocol adapter.
 
     Uses TWAP-smoothed APY when available for stable frontend display.
@@ -269,11 +304,28 @@ async def get_all_rates(request: Request):
 
     rates = await _rate_fetcher.fetch_all_rates()
 
+    persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
+    missing_score_inputs = {
+        pid: rate
+        for pid, rate in rates.items()
+        if pid not in persisted_scores
+    }
+    computed_scores = (
+        await _risk_scorer.compute_scores_from_rates(db, missing_score_inputs)
+        if missing_score_inputs
+        else {}
+    )
+
     out: list[ProtocolRateResponse] = []
     for pid, adapter in ALL_ADAPTERS.items():
         rate = rates.get(pid)
         is_active = pid in ACTIVE_ADAPTERS
         is_coming_soon = getattr(adapter, "is_active", True) is False
+        risk_score, risk_breakdown = _resolve_rate_risk(
+            pid,
+            persisted_scores,
+            computed_scores,
+        )
 
         # If live fetch failed, fall back to last-known-good TWAP snapshot
         if rate is None:
@@ -287,7 +339,8 @@ async def get_all_rates(request: Request):
                         is_coming_soon=is_coming_soon,
                         current_apy=cached.effective_apy,
                         tvl_usd=cached.tvl_usd,
-                        risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
+                        risk_score=risk_score,
+                        risk_breakdown=risk_breakdown,
                         last_updated=cached.fetched_at,
                     )
                 )
@@ -311,7 +364,8 @@ async def get_all_rates(request: Request):
                 is_coming_soon=is_coming_soon,
                 current_apy=display_apy,
                 tvl_usd=rate.tvl_usd if rate else Decimal("0"),
-                risk_score=Decimal(str(RISK_SCORES.get(pid, 5.0))),
+                risk_score=risk_score,
+                risk_breakdown=risk_breakdown,
                 utilization_rate=rate.utilization_rate if rate else None,
                 last_updated=rate.fetched_at if rate else time.time(),
             )

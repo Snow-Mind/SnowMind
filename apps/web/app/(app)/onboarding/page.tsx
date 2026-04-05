@@ -42,6 +42,7 @@ import {
   AVALANCHE_RPC_URL,
   AVALANCHE_RPC_URLS,
   PROTOCOL_CONFIG,
+  RISK_SCORE_MAX,
   CHAIN,
   type ProtocolId,
 } from "@/lib/constants";
@@ -1546,9 +1547,18 @@ export default function OnboardingPage() {
                     : "-";
                   const displayCap = allocationCaps[protocolId] ?? 100;
                   const isEditingRow = editingCapProtocolId === protocolId;
-                  const riskToneClass = protocol.riskScore >= 9
+                  const displayRiskScore = rateData && Number.isFinite(rateData.riskScore)
+                    ? Math.round(rateData.riskScore)
+                    : protocol.riskScore;
+                  const displayRiskScoreMax = rateData && Number.isFinite(rateData.riskScoreMax)
+                    ? Math.max(1, Math.round(rateData.riskScoreMax))
+                    : RISK_SCORE_MAX;
+                  const riskRatio = displayRiskScoreMax > 0
+                    ? displayRiskScore / displayRiskScoreMax
+                    : 0;
+                  const riskToneClass = riskRatio >= 0.75
                     ? "bg-[#059669]/10 text-[#059669]"
-                    : protocol.riskScore >= 7
+                    : riskRatio >= 0.5
                       ? "bg-[#D97706]/10 text-[#D97706]"
                       : "bg-[#DC2626]/10 text-[#DC2626]";
 
@@ -1584,7 +1594,7 @@ export default function OnboardingPage() {
                               <span className="hidden sm:inline">{protocol.name}</span>
                             </p>
                             <span className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]">
-                              Risk {protocol.riskScore}/10
+                              Risk {displayRiskScore}/{displayRiskScoreMax}
                             </span>
                             {!isEnabled && (
                               <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
@@ -1724,7 +1734,7 @@ export default function OnboardingPage() {
                             "mt-1 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold",
                             riskToneClass,
                           )}>
-                            {protocol.riskScore}/10
+                            {displayRiskScore}/{displayRiskScoreMax}
                           </span>
                         </div>
                         <div>

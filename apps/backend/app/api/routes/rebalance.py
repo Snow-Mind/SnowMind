@@ -723,8 +723,7 @@ async def dry_run_rebalance(request: Request, body: DryRunRequest):
 
     # Fetch live rates
     from app.services.optimizer.rate_fetcher import RateFetcher
-    from app.services.optimizer.risk_scorer import RiskScorer
-    from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS, RISK_SCORES
+    from app.services.protocols import ALL_ADAPTERS
     from app.services.protocols.base import ProtocolHealth, ProtocolStatus
     from app.services.optimizer.health_checker import check_protocol_health, HealthCheckResult, RebalanceFlag
     from app.services.optimizer.allocator import (
@@ -734,7 +733,6 @@ async def dry_run_rebalance(request: Request, body: DryRunRequest):
     )
 
     rate_fetcher = RateFetcher()
-    risk_scorer = RiskScorer()
 
     spot_rates = await rate_fetcher.fetch_all_rates()
     if not spot_rates:

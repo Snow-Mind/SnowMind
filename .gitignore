@@ -18,7 +18,8 @@ __pycache__/
 venv/
 .venv/
 .pytest_cache/
-
+riskscoreplan.md
+report.md
 # ── Build outputs ────────────────────────────────────────────
 dist/
 docs/AUDIT_AND_SCALE_RUNBOOK.md
