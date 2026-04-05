@@ -149,6 +149,69 @@ class TestAutoRebalanceExecution:
             assert scheduler.last_run_stats["errors"] == 0
 
     @pytest.mark.asyncio
+    async def test_scheduler_defers_accounts_until_deposit_tier_interval(self, rebalancer):
+        """Scheduler should skip optimizer run when account is not due by tier cadence."""
+
+        account_id = str(uuid4())
+        address = "0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556"
+
+        rebalancer.check_and_rebalance = AsyncMock(return_value={"status": "executed"})
+
+        with patch("app.workers.scheduler.get_settings") as gs, \
+             patch("app.workers.scheduler.get_supabase") as gdb, \
+             patch("app.workers.scheduler.check_paymaster_balance", new_callable=AsyncMock) as cpm, \
+             patch("app.workers.scheduler.scheduler_watchdog") as wd:
+
+            gs.return_value = MagicMock(REBALANCE_CHECK_INTERVAL=3600)
+            db = _make_db_mock()
+            gdb.return_value = db
+
+            cpm.return_value = Decimal("1.0")
+            wd.check = AsyncMock()
+            wd.record_tick = MagicMock()
+
+            scheduler = SnowMindScheduler.__new__(SnowMindScheduler)
+            scheduler.settings = gs.return_value
+            scheduler.db = db
+            scheduler.rebalancer = rebalancer
+            scheduler.instance = "test1234"
+            scheduler._active = asyncio.Event()
+            scheduler._active.set()
+
+            db.table("accounts").execute.return_value = MagicMock(data=[
+                {"id": account_id, "address": address},
+            ])
+
+            db.table("session_keys").execute.return_value = MagicMock(data=[
+                {
+                    "account_id": account_id,
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                }
+            ])
+
+            # $1,000 principal -> 12h cadence tier
+            db.table("account_yield_tracking").execute.return_value = MagicMock(data=[
+                {
+                    "cumulative_deposited": "1000",
+                    "cumulative_net_withdrawn": "0",
+                }
+            ])
+
+            # Last optimizer activity only 1 hour ago -> not due yet.
+            db.table("rebalance_logs").execute.return_value = MagicMock(data=[
+                {
+                    "created_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                }
+            ])
+
+            await scheduler._run_all_accounts()
+
+            rebalancer.check_and_rebalance.assert_not_called()
+            assert scheduler.last_run_stats["checked"] == 0
+            assert scheduler.last_run_stats["skipped"] == 1
+            assert scheduler.last_run_stats["cadence_deferred"] == 1
+
+    @pytest.mark.asyncio
     async def test_scheduler_retry_on_transient_error(self, rebalancer):
         """Verify retry with backoff on transient RPC errors."""
 

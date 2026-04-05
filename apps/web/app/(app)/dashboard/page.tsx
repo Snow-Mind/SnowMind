@@ -139,17 +139,32 @@ export default function DashboardPage() {
     data: rebalanceStatus,
     isLoading: rebalanceLoading,
     error: rebalanceStatusError,
-  } = useRebalanceStatus(address);
+  } = useRebalanceStatus(
+    address,
+    portfolio ? Number(portfolio.totalDepositedUsd) : 0,
+  );
 
   const {
     data: transactionHistoryData,
     error: transactionHistoryError,
-  } = useRebalanceHistory(historyAddress, transactionPage, HISTORY_PAGE_SIZE, true);
+  } = useRebalanceHistory(
+    historyAddress,
+    transactionPage,
+    HISTORY_PAGE_SIZE,
+    true,
+    portfolio ? Number(portfolio.totalDepositedUsd) : 0,
+  );
 
   const {
     data: historyData,
     error: rebalanceHistoryError,
-  } = useRebalanceHistory(historyAddress, logPage, HISTORY_PAGE_SIZE, false);
+  } = useRebalanceHistory(
+    historyAddress,
+    logPage,
+    HISTORY_PAGE_SIZE,
+    false,
+    portfolio ? Number(portfolio.totalDepositedUsd) : 0,
+  );
 
   // Fetch account detail to get allowedProtocols (selected markets during onboarding)
   const {

@@ -5,6 +5,7 @@ import logging
 import signal
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from supabase import Client
@@ -34,7 +35,7 @@ class SnowMindScheduler:
     - Protocol health circuit breaker
     """
 
-    LOCK_TTL = 400    # seconds — longer than check interval
+    LOCK_TTL = 400    # seconds — long enough for one full scheduler cycle
     MAX_RETRIES = 3
 
     def __init__(self) -> None:
@@ -244,8 +245,55 @@ class SnowMindScheduler:
             }
             return
 
+        now = datetime.now(timezone.utc)
+        due_accounts: list[dict] = []
+        cadence_deferred = 0
+
+        # Gate scheduler execution by account deposit tier so optimizer checks,
+        # health checks, and log volume all align to the same cadence.
+        for account in eligible_accounts:
+            account_id = str(account.get("id") or "")
+            if not account_id:
+                continue
+
+            net_principal_usd = self._get_account_net_principal(account_id)
+            min_gap = self.rebalancer._min_rebalance_gap(net_principal_usd)
+            last_optimizer_activity = self._get_last_optimizer_activity_at(account_id)
+
+            if last_optimizer_activity and (now - last_optimizer_activity) < min_gap:
+                cadence_deferred += 1
+                logger.debug(
+                    "Cadence gate deferred %s (principal=$%.2f, min_gap=%s, last=%s)",
+                    account_id,
+                    float(net_principal_usd),
+                    str(min_gap),
+                    last_optimizer_activity.isoformat(),
+                )
+                continue
+
+            due_accounts.append(account)
+
+        if cadence_deferred > 0:
+            logger.info(
+                "Deferred %d account(s) by deposit-tier cadence",
+                cadence_deferred,
+            )
+
+        if not due_accounts:
+            logger.info("No accounts due for optimizer run at this tick")
+            self.last_run_stats = {
+                "checked": 0,
+                "rebalanced": 0,
+                "skipped": cadence_deferred,
+                "errors": 0,
+                "no_session_key": skipped_no_key,
+                "cadence_deferred": cadence_deferred,
+            }
+            return
+
         logger.info(
-            "Processing %d eligible account(s) out of %d active",
+            "Processing %d due account(s) out of %d eligible (%d active)",
+            len(due_accounts),
             len(eligible_accounts),
             len(accounts.data),
         )
@@ -255,27 +303,99 @@ class SnowMindScheduler:
         # Process accounts sequentially with a stagger delay between them
         # to reduce sustained RPC / execution-service load on Railway.
         STAGGER_DELAY_SECONDS = 2
-        for i, account in enumerate(eligible_accounts):
+        for i, account in enumerate(due_accounts):
             result = await self._rebalance_with_retry(
                 account["id"], account["address"],
             )
             results.append(result)
             # Stagger: small delay between accounts (skip after last)
-            if i < len(eligible_accounts) - 1:
+            if i < len(due_accounts) - 1:
                 await asyncio.sleep(STAGGER_DELAY_SECONDS)
 
         stats = {
             "checked": len(results),
             "rebalanced": results.count("ok"),
-            "skipped": results.count("skip"),
+            "skipped": results.count("skip") + cadence_deferred,
             "errors": results.count("error"),
             "no_session_key": skipped_no_key,
+            "cadence_deferred": cadence_deferred,
         }
         self.last_run_stats = stats
         logger.info("Scheduler tick done — %s", stats)
 
         # ── Record healthy tick for watchdog ─────────────────────────
         scheduler_watchdog.record_tick()
+
+    def _get_account_net_principal(self, account_id: str) -> Decimal:
+        """Return net deposited amount for cadence tiering.
+
+        Primary source: ``account_yield_tracking`` principal ledger.
+        Fallback: live allocations sum when tracking row is missing.
+        """
+        try:
+            tracking = (
+                self.db.table("account_yield_tracking")
+                .select("cumulative_deposited, cumulative_net_withdrawn")
+                .eq("account_id", account_id)
+                .limit(1)
+                .execute()
+            )
+            if tracking.data:
+                deposited = Decimal(str(tracking.data[0].get("cumulative_deposited") or "0"))
+                withdrawn = Decimal(str(tracking.data[0].get("cumulative_net_withdrawn") or "0"))
+                return max(deposited - withdrawn, Decimal("0"))
+        except Exception as exc:
+            logger.warning(
+                "Failed to read principal tracking for %s: %s",
+                account_id,
+                exc,
+            )
+
+        try:
+            allocs = (
+                self.db.table("allocations")
+                .select("amount_usdc")
+                .eq("account_id", account_id)
+                .execute()
+            )
+            total = sum(
+                Decimal(str(row.get("amount_usdc") or "0"))
+                for row in (allocs.data or [])
+            )
+            return max(total, Decimal("0"))
+        except Exception as exc:
+            logger.warning(
+                "Failed to read allocation fallback for %s: %s",
+                account_id,
+                exc,
+            )
+            return Decimal("0")
+
+    def _get_last_optimizer_activity_at(self, account_id: str) -> datetime | None:
+        """Return latest optimizer activity timestamp for cadence gating."""
+        try:
+            last = (
+                self.db.table("rebalance_logs")
+                .select("created_at")
+                .eq("account_id", account_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not last.data:
+                return None
+
+            created_raw = str(last.data[0].get("created_at") or "")
+            if not created_raw:
+                return None
+            return datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+        except Exception as exc:
+            logger.warning(
+                "Failed to read last optimizer activity for %s: %s",
+                account_id,
+                exc,
+            )
+            return None
 
     # ── Retry logic ──────────────────────────────────────────────────────────
 

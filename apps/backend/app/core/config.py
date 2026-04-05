@@ -125,10 +125,10 @@ class Settings(BaseSettings):
     INTERNAL_SERVICE_KEY: str = ""  # Shared secret for backend ↔ executor auth
 
     # ── Scheduler ────────────────────────────────────────────
-    REBALANCE_CHECK_INTERVAL: int = 14400  # 4 hours (seconds)
+    REBALANCE_CHECK_INTERVAL: int = 3600  # 1 hour (seconds)
     # Legacy cooldown knob; accept fractional hours for backward compatibility
     # with existing envs that used 0.1 (6 minutes).
-    MIN_REBALANCE_INTERVAL_HOURS: float = 6.0
+    MIN_REBALANCE_INTERVAL_HOURS: float = 1.0
     SCHEDULER_LOCK_TTL_MINUTES: int = 35  # Lock expires after 35 min
 
     # ── Optimizer Thresholds ─────────────────────────────────
@@ -193,13 +193,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_production_rebalance_interval(self) -> "Settings":
-        """Fail-safe: never run production scheduler faster than every 4 hours."""
-        if not self.DEBUG and self.REBALANCE_CHECK_INTERVAL < 14_400:
+        """Fail-safe: never run production scheduler faster than every 1 hour."""
+        if not self.DEBUG and self.REBALANCE_CHECK_INTERVAL < 3_600:
             logger.warning(
-                "REBALANCE_CHECK_INTERVAL=%s is below production minimum; forcing 14400 seconds",
+                "REBALANCE_CHECK_INTERVAL=%s is below production minimum; forcing 3600 seconds",
                 self.REBALANCE_CHECK_INTERVAL,
             )
-            self.REBALANCE_CHECK_INTERVAL = 14_400
+            self.REBALANCE_CHECK_INTERVAL = 3_600
         return self
 
 

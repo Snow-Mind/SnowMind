@@ -14,10 +14,10 @@ function normalizeDepositUsd(value: number): number {
 export function getRebalanceIntervalHours(totalDepositedUsd: number): number {
   const depositUsd = normalizeDepositUsd(totalDepositedUsd);
 
-  if (depositUsd <= 100) return 24;
-  if (depositUsd <= 1000) return 12;
-  if (depositUsd <= 10000) return 8;
-  return 6;
+  if (depositUsd <= 3000) return 12;
+  if (depositUsd <= 10000) return 4;
+  if (depositUsd <= 100000) return 2;
+  return 1;
 }
 
 export function getRebalanceCadence(totalDepositedUsd: number): RebalanceCadence {
@@ -27,4 +27,13 @@ export function getRebalanceCadence(totalDepositedUsd: number): RebalanceCadence
     intervalMs: intervalHours * 60 * 60 * 1000,
     label: `${intervalHours}h`,
   };
+}
+
+export function getRebalancePollingIntervalMs(totalDepositedUsd: number): number {
+  const intervalHours = getRebalanceIntervalHours(totalDepositedUsd);
+
+  if (intervalHours >= 12) return 15 * 60 * 1000;
+  if (intervalHours >= 4) return 5 * 60 * 1000;
+  if (intervalHours >= 2) return 2 * 60 * 1000;
+  return 60 * 1000;
 }

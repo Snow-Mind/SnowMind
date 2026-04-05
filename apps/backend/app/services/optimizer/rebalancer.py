@@ -63,12 +63,12 @@ ERC20_BALANCE_ABI = [
 # racing and producing contradictory outcomes.
 _REBALANCE_EXECUTION_LOCKS: dict[str, asyncio.Lock] = {}
 
-# Deposit-size cooldown tiers (larger balances can rebalance more frequently).
-# Final min gap is max(tier_gap, scheduler_interval).
+# Deposit-size cadence tiers (larger balances rebalance more frequently).
+# Final min gap is still max(tier_gap, scheduler_interval).
 _REBALANCE_COOLDOWN_TIERS: tuple[tuple[Decimal, Decimal], ...] = (
-    (Decimal("100"), Decimal("24")),
-    (Decimal("1000"), Decimal("12")),
-    (Decimal("10000"), Decimal("8")),
+    (Decimal("3000"), Decimal("12")),
+    (Decimal("10000"), Decimal("4")),
+    (Decimal("100000"), Decimal("2")),
 )
 
 
@@ -151,11 +151,11 @@ class Rebalancer:
     def _min_rebalance_gap(self, total_usd: Decimal) -> timedelta:
         """Return minimum time between successful rebalances for this balance size.
 
-        Tiers are conservative by design:
-          - <= $100   : 24h
-          - <= $1,000 : 12h
-          - <= $10,000: 8h
-          - >  $10,000: MIN_REBALANCE_INTERVAL_HOURS (default 6h)
+                Deposit-based tiers:
+                    - <= $3,000   : 12h  (2/day)
+                    - <= $10,000  : 4h   (6/day)
+                    - <= $100,000 : 2h   (12/day)
+                    - >  $100,000 : MIN_REBALANCE_INTERVAL_HOURS (default 1h, 24/day)
 
         The scheduler interval still provides a lower bound so we never demand
         a cadence faster than the worker can actually run.
@@ -311,7 +311,7 @@ class Rebalancer:
           4. Get current allocations from DB
           5. Run waterfall allocator
           6. Check if rebalance is needed (delta + yield gate)
-          7. Check time since last rebalance (>= scheduler interval)
+          7. Check deposit-tier cadence gate
           8. If all conditions met â†’ execute
           9. Log result regardless
          10. Return log dict

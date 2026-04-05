@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from app.services.optimizer.rebalancer import Rebalancer
 
 
-def _mock_settings(rebalance_interval_seconds: int = 14_400, min_interval_hours: float = 6.0):
+def _mock_settings(rebalance_interval_seconds: int = 3_600, min_interval_hours: float = 1.0):
     settings = MagicMock()
     settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
     settings.AAVE_V3_POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
@@ -22,19 +22,20 @@ def _mock_settings(rebalance_interval_seconds: int = 14_400, min_interval_hours:
 
 def test_min_rebalance_gap_uses_balance_tiers():
     with patch("app.services.optimizer.rebalancer.get_settings") as gs:
-        gs.return_value = _mock_settings(rebalance_interval_seconds=14_400, min_interval_hours=6.0)
+        gs.return_value = _mock_settings(rebalance_interval_seconds=3_600, min_interval_hours=1.0)
         rebalancer = Rebalancer()
 
-        assert rebalancer._min_rebalance_gap(Decimal("50")) == timedelta(hours=24)
-        assert rebalancer._min_rebalance_gap(Decimal("500")) == timedelta(hours=12)
-        assert rebalancer._min_rebalance_gap(Decimal("5000")) == timedelta(hours=8)
-        assert rebalancer._min_rebalance_gap(Decimal("50000")) == timedelta(hours=6)
+        assert rebalancer._min_rebalance_gap(Decimal("50")) == timedelta(hours=12)
+        assert rebalancer._min_rebalance_gap(Decimal("3000")) == timedelta(hours=12)
+        assert rebalancer._min_rebalance_gap(Decimal("5000")) == timedelta(hours=4)
+        assert rebalancer._min_rebalance_gap(Decimal("50000")) == timedelta(hours=2)
+        assert rebalancer._min_rebalance_gap(Decimal("500000")) == timedelta(hours=1)
 
 
 def test_min_rebalance_gap_respects_scheduler_floor():
     with patch("app.services.optimizer.rebalancer.get_settings") as gs:
-        gs.return_value = _mock_settings(rebalance_interval_seconds=28_800, min_interval_hours=6.0)
+        gs.return_value = _mock_settings(rebalance_interval_seconds=28_800, min_interval_hours=1.0)
         rebalancer = Rebalancer()
 
-        # Tier would be 6h for this balance, but scheduler floor is 8h.
+        # Tier would be 2h for this balance, but scheduler floor is 8h.
         assert rebalancer._min_rebalance_gap(Decimal("50000")) == timedelta(hours=8)
