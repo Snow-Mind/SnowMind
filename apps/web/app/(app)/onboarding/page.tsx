@@ -149,22 +149,6 @@ function normalizeIncomingAllocationCaps(
   return caps;
 }
 
-function formatRiskBreakdown(
-  breakdown:
-    | {
-      oracle: number;
-      liquidity: number;
-      collateral: number;
-      yieldProfile: number;
-      architecture: number;
-    }
-    | null
-    | undefined,
-): string | null {
-  if (!breakdown) return null;
-  return `O${breakdown.oracle} L${breakdown.liquidity} C${breakdown.collateral} Y${breakdown.yieldProfile} A${breakdown.architecture}`;
-}
-
 const RECEIPT_CONFIRMATION_TIMEOUT_MS = 180_000;
 const RECEIPT_POLL_INTERVAL_MS = 3_000;
 const MIN_FUNDED_BALANCE_USDC = 0.01;
@@ -1509,6 +1493,7 @@ export default function OnboardingPage() {
 
               <p className="text-xs text-[#8A837C]">
                 Select markets your optimizer can use and set per-market max exposure.
+                Risk score is out of 9 (higher is safer).
               </p>
 
               {regrantOnlyMode && (
@@ -1569,7 +1554,6 @@ export default function OnboardingPage() {
                   const displayRiskScoreMax = rateData && Number.isFinite(rateData.riskScoreMax)
                     ? Math.max(1, Math.round(rateData.riskScoreMax))
                     : RISK_SCORE_MAX;
-                  const breakdownLabel = formatRiskBreakdown(rateData?.riskBreakdown);
                   const riskRatio = displayRiskScoreMax > 0
                     ? displayRiskScore / displayRiskScoreMax
                     : 0;
@@ -1610,17 +1594,12 @@ export default function OnboardingPage() {
                               <span className="sm:hidden">{protocol.shortName}</span>
                               <span className="hidden sm:inline">{protocol.name}</span>
                             </p>
-                            <span className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]">
+                            <span
+                              className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]"
+                              title="Risk score is out of 9. Higher is safer."
+                            >
                               Risk {displayRiskScore}/{displayRiskScoreMax}
                             </span>
-                            {breakdownLabel && (
-                              <span
-                                className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]"
-                                title="Oracle / Liquidity / Collateral / Yield / Architecture"
-                              >
-                                {breakdownLabel}
-                              </span>
-                            )}
                             {!isEnabled && (
                               <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
                                 Soon
