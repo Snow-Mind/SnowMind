@@ -9,7 +9,7 @@ import json
 import logging
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_ORIGINS = "https://app.snowmind.xyz,https://www.snowmind.xyz,https://snowmind.xyz"
@@ -190,6 +190,36 @@ class Settings(BaseSettings):
     PORTFOLIO_CACHE_TTL_SECONDS: int = 8
     OPTIMIZER_RATES_CACHE_TTL_SECONDS: int = 20
     APY_TIMESERIES_CACHE_TTL_SECONDS: int = 60
+
+    @field_validator("REBALANCE_CHECK_INTERVAL", mode="before")
+    @classmethod
+    def normalize_rebalance_check_interval(cls, value: object) -> object:
+        """Treat empty/invalid-like env payloads as default-safe interval.
+
+        Railway/hosted env dashboards sometimes leave variables present but
+        blank (``""``). Pydantic then raises int parsing errors at startup.
+        For this critical scheduler knob, blank should behave like unset.
+        """
+        if value is None:
+            return 3_600
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return 3_600
+
+            # Accept integer-looking and float-looking numeric strings.
+            try:
+                parsed = int(float(stripped))
+                return parsed if parsed > 0 else 3_600
+            except (TypeError, ValueError):
+                return value
+
+        if isinstance(value, (int, float)):
+            parsed = int(value)
+            return parsed if parsed > 0 else 3_600
+
+        return value
 
     @model_validator(mode="after")
     def enforce_production_rebalance_interval(self) -> "Settings":
