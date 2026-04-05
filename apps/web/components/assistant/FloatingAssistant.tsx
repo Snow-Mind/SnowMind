@@ -8,16 +8,21 @@ import {
   RotateCcw,
   Copy,
   Compass,
+  Ellipsis,
+  ExternalLink,
   Loader2,
+  Minus,
+  Pencil,
   Plus,
   Search,
   Send,
   Settings2,
+  Smile,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   WandSparkles,
-  X,
 } from "lucide-react";
 import type { AssistantFeedbackValue, AssistantMessage } from "@snowmind/shared-types";
 
@@ -36,10 +41,14 @@ import { cn } from "@/lib/utils";
 
 const SESSION_STORAGE_KEY = "snowmind_assistant_session_id";
 const SESSION_INDEX_STORAGE_KEY = "snowmind_assistant_session_index";
+const SESSION_ICON_STORAGE_KEY = "snowmind_assistant_session_icons";
 const SESSION_LABEL = "Ctrl+J";
 const DEFAULT_SESSION_TITLE = "New AI chat";
 const MAX_SESSION_ENTRIES = 24;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+type SessionIconKind = "neural" | "spark" | "compass";
+const SESSION_ICON_ORDER: SessionIconKind[] = ["neural", "spark", "compass"];
 
 interface AssistantSessionSummaryLike {
   sessionId: string;
@@ -59,7 +68,7 @@ const STARTER_PROMPTS: Array<{ kind: "search" | "spark" | "compass" | "wand"; la
 const QUICK_INSERT_PROMPTS: string[] = [
   "Break down O/L/C/Y/A for each active market in a table.",
   "Explain whether today's L and Y came from fresh on-chain data.",
-  "Recommend a conservative allocation with rationale and caveats.",
+  "Propose a concise conservative portfolio (markets + allocations only).",
 ];
 
 function createSessionId(): string {
@@ -208,6 +217,16 @@ function renderStarterIcon(kind: "search" | "spark" | "compass" | "wand") {
   return <WandSparkles className={cls} />;
 }
 
+function renderSessionIcon(kind: SessionIconKind) {
+  if (kind === "spark") {
+    return <Sparkles className="h-4 w-4 text-[#F5F5F7]" />;
+  }
+  if (kind === "compass") {
+    return <Compass className="h-4 w-4 text-[#F5F5F7]" />;
+  }
+  return <NeuralSnowflakeLogo className="h-4 w-4" />;
+}
+
 function makeMessage(role: "user" | "assistant", content: string): AssistantMessage {
   return {
     role,
@@ -220,6 +239,9 @@ export function FloatingAssistant() {
   const [isOpen, setIsOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<StoredSessionSummary[]>([]);
+  const [sessionIcons, setSessionIcons] = useState<Record<string, SessionIconKind>>({});
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [feedbackByMessageKey, setFeedbackByMessageKey] = useState<Record<string, AssistantFeedbackValue>>({});
   const [pendingFeedbackKey, setPendingFeedbackKey] = useState<string | null>(null);
@@ -238,6 +260,11 @@ export function FloatingAssistant() {
     if (!sessionId) return DEFAULT_SESSION_TITLE;
     return sessions.find((row) => row.sessionId === sessionId)?.title ?? DEFAULT_SESSION_TITLE;
   }, [sessionId, sessions]);
+
+  const activeSessionIcon = useMemo<SessionIconKind>(() => {
+    if (!sessionId) return "neural";
+    return sessionIcons[sessionId] ?? "neural";
+  }, [sessionId, sessionIcons]);
 
   const sessionGroups = useMemo(() => splitSessionsByDay(sessions), [sessions]);
 
@@ -301,8 +328,36 @@ export function FloatingAssistant() {
   }, [sessions]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const raw = window.localStorage.getItem(SESSION_ICON_STORAGE_KEY);
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const cleaned: Record<string, SessionIconKind> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!SESSION_ID_RE.test(key)) continue;
+        if (value === "neural" || value === "spark" || value === "compass") {
+          cleaned[key] = value;
+        }
+      }
+      setSessionIcons(cleaned);
+    } catch {
+      // Ignore malformed local state.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SESSION_ICON_STORAGE_KEY, JSON.stringify(sessionIcons));
+  }, [sessionIcons]);
+
+  useEffect(() => {
     setFeedbackByMessageKey({});
     setPendingFeedbackKey(null);
+    setIsRenamingTitle(false);
+    setTitleDraft("");
   }, [sessionId]);
 
   useEffect(() => {
@@ -490,6 +545,76 @@ export function FloatingAssistant() {
     activateSession(nextSessionId, nextTitle, knownSession?.lastMessageAt ?? new Date().toISOString());
   };
 
+  const openAssistantInNewTab = () => {
+    if (typeof window === "undefined") return;
+    window.open(window.location.href, "_blank", "noopener,noreferrer");
+    setNotice("Opened in new tab.");
+  };
+
+  const beginRenameCurrentSession = () => {
+    if (!sessionId) return;
+    setTitleDraft(activeSessionTitle);
+    setIsRenamingTitle(true);
+  };
+
+  const commitSessionRename = () => {
+    if (!sessionId) return;
+    const trimmed = normalizeSessionTitle(titleDraft);
+    const known = sessions.find((row) => row.sessionId === sessionId);
+    upsertSession({
+      sessionId,
+      title: trimmed,
+      lastMessageAt: known?.lastMessageAt ?? new Date().toISOString(),
+    });
+    setIsRenamingTitle(false);
+    setNotice("Conversation renamed.");
+  };
+
+  const cycleCurrentSessionIcon = () => {
+    if (!sessionId) return;
+    const current = sessionIcons[sessionId] ?? "neural";
+    const currentIndex = SESSION_ICON_ORDER.indexOf(current);
+    const nextIndex = (currentIndex + 1) % SESSION_ICON_ORDER.length;
+    const next = SESSION_ICON_ORDER[nextIndex];
+
+    setSessionIcons((prev) => ({
+      ...prev,
+      [sessionId]: next,
+    }));
+    setNotice("Conversation icon updated.");
+  };
+
+  const deleteCurrentConversation = () => {
+    if (!sessionId) return;
+    const currentSessionId = sessionId;
+    const remaining = sessions.filter((row) => row.sessionId !== currentSessionId);
+
+    setSessions(remaining);
+    setSessionIcons((prev) => {
+      const next = { ...prev };
+      delete next[currentSessionId];
+      return next;
+    });
+
+    if (remaining.length > 0) {
+      const target = remaining[0];
+      activateSession(target.sessionId, target.title, target.lastMessageAt);
+      setMessages([]);
+      setInput("");
+      setSessionFetchVersion((prev) => prev + 1);
+    } else {
+      const nextSessionId = createSessionId();
+      activateSession(nextSessionId, DEFAULT_SESSION_TITLE, new Date().toISOString());
+      setMessages([]);
+      setInput("");
+      setError(null);
+    }
+
+    setIsRenamingTitle(false);
+    setTitleDraft("");
+    setNotice("Conversation deleted from local history.");
+  };
+
   const insertPrompt = (prompt: string) => {
     setInput(prompt);
     setNotice("Prompt inserted.");
@@ -627,133 +752,200 @@ export function FloatingAssistant() {
   };
 
   const messageActionButtonClass =
-    "inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/12 bg-white/[0.03] text-white/60 transition hover:border-white/25 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-45";
+    "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[#2F3642] bg-[#131821] text-white/65 transition hover:border-[#4A5260] hover:bg-[#1A202B] hover:text-white disabled:cursor-not-allowed disabled:opacity-45";
 
   return (
     <>
       {isOpen && (
         <div
-          className="fixed bottom-[78px] right-4 z-40 h-[min(70vh,520px)] w-[min(88vw,338px)] overflow-hidden rounded-[22px] border border-white/10 text-white shadow-[0_20px_55px_rgba(0,0,0,0.42)] backdrop-blur-md sm:right-6"
+          className="assistant-surface fixed bottom-[78px] right-4 z-40 h-[min(70vh,520px)] w-[min(88vw,338px)] overflow-hidden rounded-[22px] border border-[#2B313A] text-white shadow-[0_16px_36px_rgba(0,0,0,0.42)] sm:right-6"
           style={{
-            background:
-              "radial-gradient(120% 120% at 100% 0%, rgba(232,65,66,0.14) 0%, rgba(232,65,66,0) 58%), linear-gradient(180deg, #171A20 0%, #111318 100%)",
+            background: "#111318",
           }}
         >
-          <div className="flex items-center justify-between border-b border-white/10 px-3.5 py-2.5">
+          <div className="flex items-center justify-between border-b border-[#2B313A] px-3.5 py-2.5">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/8 ring-1 ring-white/15">
-                <NeuralSnowflakeLogo className="h-4 w-4" />
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#2F3642] bg-[#171C25]">
+                {renderSessionIcon(activeSessionIcon)}
               </span>
               <div className="min-w-0">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="inline-flex max-w-[185px] items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13px] font-medium text-white/95 transition hover:bg-white/10"
-                      aria-label="Open session history"
-                    >
-                      <span className="truncate">{activeSessionTitle}</span>
-                      <ChevronDown className="h-3.5 w-3.5 text-white/60" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="start"
-                    sideOffset={10}
-                    className="w-[280px] rounded-xl border border-white/12 bg-[#151920] p-1.5 text-white shadow-[0_16px_48px_rgba(0,0,0,0.45)]"
-                  >
-                    <DropdownMenuLabel className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/45">
-                      Conversations
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator className="bg-white/10" />
-                    <DropdownMenuItem
-                      onSelect={startFreshConversation}
-                      className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      New conversation
-                    </DropdownMenuItem>
-                    {isLoadingSessionList ? (
-                      <DropdownMenuItem
-                        disabled
-                        className="rounded-md px-2 py-1.5 text-[12px] text-white/60"
+                {isRenamingTitle ? (
+                  <input
+                    value={titleDraft}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onBlur={commitSessionRename}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitSessionRename();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setIsRenamingTitle(false);
+                        setTitleDraft("");
+                      }
+                    }}
+                    autoFocus
+                    className="w-[185px] rounded-md border border-[#394150] bg-[#171C25] px-2 py-1 text-[13px] font-medium text-white outline-none"
+                  />
+                ) : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex max-w-[185px] items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13px] font-medium text-white transition hover:bg-[#1C2230]"
+                        aria-label="Open session history"
                       >
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        Syncing sessions...
+                        <span className="truncate">{activeSessionTitle}</span>
+                        <ChevronDown className="h-3.5 w-3.5 text-white/60" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      sideOffset={10}
+                      className="w-[280px] rounded-xl border border-[#2F3642] bg-[#10151D] p-1.5 text-white"
+                    >
+                      <DropdownMenuLabel className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/45">
+                        Conversations
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator className="bg-[#2F3642]" />
+                      <DropdownMenuItem
+                        onSelect={startFreshConversation}
+                        className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        New conversation
                       </DropdownMenuItem>
-                    ) : null}
+                      {isLoadingSessionList ? (
+                        <DropdownMenuItem
+                          disabled
+                          className="rounded-md px-2 py-1.5 text-[12px] text-white/60"
+                        >
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Syncing sessions...
+                        </DropdownMenuItem>
+                      ) : null}
 
-                    {sessionGroups.today.length > 0 ? (
-                      <>
-                        <DropdownMenuSeparator className="bg-white/10" />
-                        <DropdownMenuLabel className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
-                          Today
-                        </DropdownMenuLabel>
-                        {sessionGroups.today.map((row) => (
-                          <DropdownMenuItem
-                            key={row.sessionId}
-                            onSelect={() => openStoredSession(row.sessionId)}
-                            className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
-                          >
-                            <span className="truncate">{row.title}</span>
-                            <span className="ml-auto text-[10px] text-white/45">
-                              {formatSessionTimestamp(row.lastMessageAt)}
-                            </span>
-                            {row.sessionId === sessionId ? (
-                              <Check className="h-3.5 w-3.5 text-[#F15C5D]" />
-                            ) : (
-                              <Clock3 className="h-3 w-3 text-white/35" />
-                            )}
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    ) : null}
+                      {sessionGroups.today.length > 0 ? (
+                        <>
+                          <DropdownMenuSeparator className="bg-[#2F3642]" />
+                          <DropdownMenuLabel className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
+                            Today
+                          </DropdownMenuLabel>
+                          {sessionGroups.today.map((row) => (
+                            <DropdownMenuItem
+                              key={row.sessionId}
+                              onSelect={() => openStoredSession(row.sessionId)}
+                              className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                            >
+                              <span className="truncate">{row.title}</span>
+                              <span className="ml-auto text-[10px] text-white/45">
+                                {formatSessionTimestamp(row.lastMessageAt)}
+                              </span>
+                              {row.sessionId === sessionId ? (
+                                <Check className="h-3.5 w-3.5 text-[#F15C5D]" />
+                              ) : (
+                                <Clock3 className="h-3 w-3 text-white/35" />
+                              )}
+                            </DropdownMenuItem>
+                          ))}
+                        </>
+                      ) : null}
 
-                    {sessionGroups.older.length > 0 ? (
-                      <>
-                        <DropdownMenuSeparator className="bg-white/10" />
-                        <DropdownMenuLabel className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
-                          Older
-                        </DropdownMenuLabel>
-                        {sessionGroups.older.map((row) => (
-                          <DropdownMenuItem
-                            key={row.sessionId}
-                            onSelect={() => openStoredSession(row.sessionId)}
-                            className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
-                          >
-                            <span className="truncate">{row.title}</span>
-                            <span className="ml-auto text-[10px] text-white/45">
-                              {formatSessionTimestamp(row.lastMessageAt)}
-                            </span>
-                            {row.sessionId === sessionId ? (
-                              <Check className="h-3.5 w-3.5 text-[#F15C5D]" />
-                            ) : (
-                              <Clock3 className="h-3 w-3 text-white/35" />
-                            )}
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <p className="text-[10px] text-white/45">Grounded on report.md + riskscoreplan.md</p>
+                      {sessionGroups.older.length > 0 ? (
+                        <>
+                          <DropdownMenuSeparator className="bg-[#2F3642]" />
+                          <DropdownMenuLabel className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
+                            Older
+                          </DropdownMenuLabel>
+                          {sessionGroups.older.map((row) => (
+                            <DropdownMenuItem
+                              key={row.sessionId}
+                              onSelect={() => openStoredSession(row.sessionId)}
+                              className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                            >
+                              <span className="truncate">{row.title}</span>
+                              <span className="ml-auto text-[10px] text-white/45">
+                                {formatSessionTimestamp(row.lastMessageAt)}
+                              </span>
+                              {row.sessionId === sessionId ? (
+                                <Check className="h-3.5 w-3.5 text-[#F15C5D]" />
+                              ) : (
+                                <Clock3 className="h-3 w-3 text-white/35" />
+                              )}
+                            </DropdownMenuItem>
+                          ))}
+                        </>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={startFreshConversation}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-white/5 text-white/75 transition hover:bg-white/10 hover:text-white"
-                aria-label="Start new assistant conversation"
+                onClick={openAssistantInNewTab}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#2F3642] bg-[#161B24] text-white/80 transition hover:bg-[#1D2430] hover:text-white"
+                aria-label="Open assistant in new tab"
               >
-                <Plus className="h-3.5 w-3.5" />
+                <ExternalLink className="h-3.5 w-3.5" />
               </button>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#2F3642] bg-[#161B24] text-white/80 transition hover:bg-[#1D2430] hover:text-white"
+                    aria-label="Conversation options"
+                  >
+                    <Ellipsis className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  sideOffset={8}
+                  className="w-[220px] rounded-xl border border-[#2F3642] bg-[#10151D] p-1.5 text-white"
+                >
+                  <DropdownMenuItem
+                    onSelect={beginRenameCurrentSession}
+                    className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={cycleCurrentSessionIcon}
+                    className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                  >
+                    <Smile className="h-3.5 w-3.5" />
+                    Change icon
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={deleteCurrentConversation}
+                    className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="bg-[#2F3642]" />
+                  <DropdownMenuItem
+                    onSelect={openAssistantInNewTab}
+                    className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open in new tab
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-white/5 text-white/75 transition hover:bg-white/10 hover:text-white"
-                aria-label="Close assistant"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#2F3642] bg-[#161B24] text-white/80 transition hover:bg-[#1D2430] hover:text-white"
+                aria-label="Hide assistant"
               >
-                <X className="h-3.5 w-3.5" />
+                <Minus className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
@@ -769,9 +961,9 @@ export function FloatingAssistant() {
 
               {!isLoadingHistory && messages.length === 0 ? (
                 <div className="space-y-3">
-                  <div className="rounded-xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(232,65,66,0.12)_0%,rgba(255,255,255,0.02)_68%)] p-3.5">
+                  <div className="rounded-xl border border-[#2B313A] bg-[#151922] p-3.5">
                     <div className="flex items-center gap-1.5">
-                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#121316]">
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#2F3642] bg-[#1A202B] text-white">
                         <NeuralSnowflakeLogo className="h-5 w-5" />
                       </span>
                     </div>
@@ -788,7 +980,7 @@ export function FloatingAssistant() {
                           void submitMessage(prompt.label);
                         }}
                         disabled={isLoadingHistory || isSending}
-                        className="flex w-full items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left text-[12px] text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:opacity-50"
+                        className="flex w-full items-center gap-2 rounded-lg border border-[#2B313A] bg-[#131821] px-2.5 py-2 text-left text-[12px] text-white/82 transition hover:border-[#3A424F] hover:bg-[#1A202B] disabled:opacity-50"
                       >
                         {renderStarterIcon(prompt.kind)}
                         <span>{prompt.label}</span>
@@ -815,8 +1007,8 @@ export function FloatingAssistant() {
                       className={cn(
                         "rounded-xl px-3 py-2 text-[12px] leading-[1.45]",
                         !isAssistant
-                          ? "rounded-br-md bg-[linear-gradient(135deg,#E84142_0%,#D83A3B_100%)] text-white shadow-[0_6px_18px_rgba(232,65,66,0.22)]"
-                          : "rounded-bl-md border border-white/10 bg-white/[0.04] text-white/90",
+                          ? "rounded-br-md bg-[#E84142] text-white"
+                          : "rounded-bl-md border border-[#2B313A] bg-[#151922] text-white/92",
                       )}
                     >
                       {isAssistant ? (
@@ -906,7 +1098,7 @@ export function FloatingAssistant() {
               })}
 
               {isSending ? (
-                <div className="mr-auto inline-flex items-center gap-2 rounded-xl rounded-bl-md border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-white/70">
+                <div className="mr-auto inline-flex items-center gap-2 rounded-xl rounded-bl-md border border-[#2B313A] bg-[#151922] px-3 py-2 text-[11px] text-white/72">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   {isRegenerating ? "Regenerating response..." : "Thinking with Gemini..."}
                 </div>
@@ -915,14 +1107,14 @@ export function FloatingAssistant() {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="border-t border-white/10 bg-[#101217]/90 px-2.5 pb-2.5 pt-2">
-              <div className="mb-1.5 inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[9px] font-medium text-white/60">
+            <div className="border-t border-[#2B313A] bg-[#0F1218] px-2.5 pb-2.5 pt-2">
+              <div className="mb-1.5 inline-flex items-center gap-1 rounded-full border border-[#303746] bg-[#151B25] px-2 py-0.5 text-[9px] font-medium text-white/65">
                 <Sparkles className="h-3 w-3" />
                 Grounded context enabled
               </div>
               {notice ? <p className="mb-1 text-[10px] text-white/55">{notice}</p> : null}
               {error ? <p className="mb-1 text-[10px] text-[#FF9B9C]">{error}</p> : null}
-              <div className="rounded-xl border border-white/12 bg-[#1B1D24] px-2 py-1.5">
+              <div className="rounded-xl border border-[#2B313A] bg-[#141820] px-2 py-1.5">
                 <textarea
                   ref={composerRef}
                   value={input}
@@ -934,7 +1126,7 @@ export function FloatingAssistant() {
                     }
                   }}
                   placeholder="Do anything with AI..."
-                  className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-1 py-1 text-[13px] text-white outline-none placeholder:text-white/35"
+                  className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-1 py-1 text-[13px] text-white outline-none placeholder:text-white/38"
                 />
                 <div className="mt-1 flex items-center justify-between">
                   <div className="flex items-center gap-1">
@@ -942,7 +1134,7 @@ export function FloatingAssistant() {
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-white/55 transition hover:bg-white/10 hover:text-white"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-white/65 transition hover:bg-[#1D2430] hover:text-white"
                           aria-label="Insert action"
                         >
                           <Plus className="h-4 w-4" />
@@ -952,17 +1144,17 @@ export function FloatingAssistant() {
                         side="top"
                         align="start"
                         sideOffset={8}
-                        className="w-[260px] rounded-xl border border-white/12 bg-[#151920] p-1.5 text-white"
+                        className="w-[260px] rounded-xl border border-[#2F3642] bg-[#10151D] p-1.5 text-white"
                       >
                         <DropdownMenuLabel className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/45">
                           Insert Prompt
                         </DropdownMenuLabel>
-                        <DropdownMenuSeparator className="bg-white/10" />
+                        <DropdownMenuSeparator className="bg-[#2F3642]" />
                         {QUICK_INSERT_PROMPTS.map((prompt) => (
                           <DropdownMenuItem
                             key={prompt}
                             onSelect={() => insertPrompt(prompt)}
-                            className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
+                            className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                           >
                             <span className="whitespace-normal">{prompt}</span>
                           </DropdownMenuItem>
@@ -974,7 +1166,7 @@ export function FloatingAssistant() {
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-white/55 transition hover:bg-white/10 hover:text-white"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-white/65 transition hover:bg-[#1D2430] hover:text-white"
                           aria-label="Assistant settings"
                         >
                           <Settings2 className="h-4 w-4" />
@@ -984,15 +1176,15 @@ export function FloatingAssistant() {
                         side="top"
                         align="start"
                         sideOffset={8}
-                        className="w-[230px] rounded-xl border border-white/12 bg-[#151920] p-1.5 text-white"
+                        className="w-[230px] rounded-xl border border-[#2F3642] bg-[#10151D] p-1.5 text-white"
                       >
                         <DropdownMenuLabel className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/45">
                           Assistant Actions
                         </DropdownMenuLabel>
-                        <DropdownMenuSeparator className="bg-white/10" />
+                        <DropdownMenuSeparator className="bg-[#2F3642]" />
                         <DropdownMenuItem
                           onSelect={refreshCurrentSession}
-                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
+                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                         >
                           <Loader2 className="h-3.5 w-3.5" />
                           Refresh current session
@@ -1001,7 +1193,7 @@ export function FloatingAssistant() {
                           onSelect={() => {
                             void copyCurrentSessionId();
                           }}
-                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
+                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                         >
                           <Copy className="h-3.5 w-3.5" />
                           Copy session id
@@ -1010,15 +1202,15 @@ export function FloatingAssistant() {
                           onSelect={() => {
                             void copyLatestAssistantReply();
                           }}
-                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
+                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                         >
                           <Copy className="h-3.5 w-3.5" />
                           Copy latest reply
                         </DropdownMenuItem>
-                        <DropdownMenuSeparator className="bg-white/10" />
+                        <DropdownMenuSeparator className="bg-[#2F3642]" />
                         <DropdownMenuItem
                           onSelect={startFreshConversation}
-                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-white/10 focus:text-white"
+                          className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                         >
                           <Plus className="h-3.5 w-3.5" />
                           Start new conversation
@@ -1034,7 +1226,7 @@ export function FloatingAssistant() {
                         void submitMessage();
                       }}
                       disabled={!input.trim() || isSending || isLoadingHistory || !sessionId}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#2F3642] bg-[#171C25] text-white transition hover:bg-[#1D2430] disabled:cursor-not-allowed disabled:opacity-45"
                       aria-label="Send message"
                     >
                       <Send className="h-3.5 w-3.5" />
@@ -1050,21 +1242,17 @@ export function FloatingAssistant() {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="group fixed bottom-5 right-4 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[18px] border border-[#F15C5D]/30 text-white shadow-[0_12px_28px_rgba(16,17,22,0.42)] transition hover:-translate-y-0.5 hover:border-[#F15C5D]/55 sm:right-6"
-        style={{
-          background:
-            "radial-gradient(120% 120% at 90% 100%, rgba(232,65,66,0.34) 0%, rgba(232,65,66,0) 58%), linear-gradient(160deg, #1F2229 0%, #12141A 100%)",
-        }}
+        className="group fixed bottom-5 right-4 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[14px] border border-[#2B313A] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:right-6"
         aria-label={isOpen ? "Close SnowMind assistant" : "Open SnowMind assistant"}
       >
         {isOpen ? (
-          <X className="h-4 w-4" />
+          <Minus className="h-4 w-4" />
         ) : (
-          <NeuralSnowflakeLogo className="h-[22px] w-[22px] animate-[spin_5.8s_linear_infinite]" />
+          <NeuralSnowflakeLogo className="h-[22px] w-[22px]" />
         )}
         <span
           className={cn(
-            "pointer-events-none absolute -left-[178px] top-1/2 hidden -translate-y-1/2 items-center gap-2 rounded-full border border-white/10 bg-[#191B20] px-3 py-1 text-[10px] text-white/80 shadow-lg transition-all duration-200 md:inline-flex",
+            "pointer-events-none absolute -left-[178px] top-1/2 hidden -translate-y-1/2 items-center gap-2 rounded-full border border-[#2F3642] bg-[#131821] px-3 py-1 text-[10px] text-white/80 shadow-lg transition-all duration-200 md:inline-flex",
             isOpen
               ? "opacity-0"
               : "translate-x-2 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-visible:translate-x-0 group-focus-visible:opacity-100",

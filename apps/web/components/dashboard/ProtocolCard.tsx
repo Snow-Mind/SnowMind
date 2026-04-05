@@ -39,11 +39,13 @@ export function ProtocolCard({
   const [imageFailed, setImageFailed] = useState(false)
   const config = PROTOCOL_CONFIG[protocolId]
   const allocationPct = totalBalance > 0 ? (userAllocation / totalBalance) * 100 : 0
-  const displayRiskScore = Number.isFinite(riskScore)
-    ? Math.max(0, Math.round(riskScore as number))
+  const parsedRiskScore = Number(riskScore)
+  const parsedRiskScoreMax = Number(riskScoreMax)
+  const displayRiskScore = Number.isFinite(parsedRiskScore)
+    ? Math.max(0, Math.round(parsedRiskScore))
     : config.riskScore
-  const displayRiskScoreMax = Number.isFinite(riskScoreMax)
-    ? Math.max(1, Math.round(riskScoreMax as number))
+  const displayRiskScoreMax = Number.isFinite(parsedRiskScoreMax)
+    ? Math.max(1, Math.round(parsedRiskScoreMax))
     : RISK_SCORE_MAX
 
   const statusColors = {

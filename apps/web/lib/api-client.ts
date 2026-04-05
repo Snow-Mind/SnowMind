@@ -200,13 +200,17 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
     );
   }
 
+  const method = options?.method?.toUpperCase() ?? "GET";
+  const hasJsonBody = options?.body !== undefined && options?.body !== null
+    && method !== "GET"
+    && method !== "HEAD";
+
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
     ...(requiresAuth && token && { Authorization: `Bearer ${token}` }),
     ...(options?.headers as Record<string, string>),
   };
 
-  const method = options?.method?.toUpperCase() ?? "GET";
   const isIdempotent = method === "GET" || method === "HEAD";
   const canRetry = isIdempotent || options?.retryable === true;
   const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
