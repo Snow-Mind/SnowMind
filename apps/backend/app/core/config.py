@@ -193,10 +193,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_production_rebalance_interval(self) -> "Settings":
-        """Fail-safe: never run production scheduler faster than every 1 hour."""
-        if not self.DEBUG and self.REBALANCE_CHECK_INTERVAL < 3_600:
+        """Production cadence is fixed to hourly scheduler ticks.
+
+        Deposit tiers are applied per account in scheduler/rebalancer logic.
+        Keeping a fixed 1h global tick avoids environment drift where a stale
+        REBALANCE_CHECK_INTERVAL blocks higher-frequency tiers.
+        """
+        if not self.DEBUG and self.REBALANCE_CHECK_INTERVAL != 3_600:
             logger.warning(
-                "REBALANCE_CHECK_INTERVAL=%s is below production minimum; forcing 3600 seconds",
+                "REBALANCE_CHECK_INTERVAL=%s is not the production standard; forcing 3600 seconds",
                 self.REBALANCE_CHECK_INTERVAL,
             )
             self.REBALANCE_CHECK_INTERVAL = 3_600

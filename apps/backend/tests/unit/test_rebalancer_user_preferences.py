@@ -31,3 +31,17 @@ def test_build_user_preferences_clamps_invalid_cap_values() -> None:
 
     assert prefs["aave_v3"].max_pct == Decimal("1")
     assert prefs["spark"].max_pct == Decimal("0")
+
+
+def test_build_user_preferences_ignores_malformed_cap_values() -> None:
+    prefs = _build_user_preferences(
+        {"aave_v3", "spark"},
+        allocation_caps={
+            "aave_v3": "not-a-number",  # type: ignore[dict-item]
+            "spark": True,               # type: ignore[dict-item]
+        },
+    )
+
+    # Malformed caps should be ignored (treated as unbounded), not crash rebalance.
+    assert prefs["aave_v3"].max_pct is None
+    assert prefs["spark"].max_pct is None

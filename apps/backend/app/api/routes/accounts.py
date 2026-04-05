@@ -127,6 +127,65 @@ def _normalize_allocation_caps(
     return normalized
 
 
+def _resolve_scope_protocols(protocols: list[str] | None) -> list[str]:
+    """Return a normalized protocol scope, defaulting to all supported markets."""
+    normalized = _normalize_allowed_protocols(protocols)
+    if normalized:
+        return normalized
+    return list(_DEFAULT_ALLOWED_PROTOCOLS)
+
+
+def _scope_allocation_caps(
+    caps: dict[str, int] | None,
+    allowed_protocols: list[str] | None,
+) -> dict[str, int] | None:
+    """Keep only cap entries that belong to the provided allowed protocol scope."""
+    if caps is None:
+        return None
+
+    allowed_set = set(_resolve_scope_protocols(allowed_protocols))
+    scoped = {
+        pid: max(0, min(int(value), 100))
+        for pid, value in caps.items()
+        if pid in allowed_set
+    }
+    return scoped or None
+
+
+def _effective_cap_total_pct(
+    caps: dict[str, int] | None,
+    allowed_protocols: list[str] | None,
+) -> int:
+    """Return aggregate effective cap total over the current allowed scope.
+
+    Missing protocol caps are treated as 100% (unbounded for that protocol).
+    This helps detect user configurations that can leave funds intentionally idle
+    when combined caps across selected markets are below 100%.
+    """
+    total = 0
+    for pid in _resolve_scope_protocols(allowed_protocols):
+        if caps is None:
+            cap_value = 100
+        else:
+            cap_value = int(caps.get(pid, 100))
+        total += max(0, min(cap_value, 100))
+    return total
+
+
+def _has_deployable_cap(
+    caps: dict[str, int] | None,
+    allowed_protocols: list[str] | None,
+) -> bool:
+    """Return True when at least one allowed protocol can receive deposits."""
+    for pid in _resolve_scope_protocols(allowed_protocols):
+        if caps is None:
+            return True
+        cap_value = int(caps.get(pid, 100))
+        if cap_value > 0:
+            return True
+    return False
+
+
 def _resolve_allowed_protocols(
     db: Client,
     account_id: str,
@@ -993,7 +1052,7 @@ async def update_allowed_protocols(
 
     active_keys = (
         db.table("session_keys")
-        .select("id")
+        .select("id, allocation_caps")
         .eq("account_id", account_id)
         .eq("is_active", True)
         .execute()
@@ -1038,10 +1097,35 @@ async def update_allowed_protocols(
             ),
         )
 
+    scoped_caps: dict[str, int] | None = None
+    try:
+        if active_keys.data:
+            existing_caps = _normalize_allocation_caps(
+                active_keys.data[0].get("allocation_caps"),
+                strict=False,
+            )
+            scoped_caps = _scope_allocation_caps(existing_caps, normalized)
+    except Exception as exc:
+        logger.warning(
+            "Failed to scope existing allocation caps for %s: %s",
+            address,
+            exc,
+        )
+
+    if not _has_deployable_cap(scoped_caps, normalized):
+        raise HTTPException(
+            status_code=400,
+            detail="At least one selected market must have a cap above 0%",
+        )
+
+    effective_total_pct = _effective_cap_total_pct(scoped_caps, normalized)
+    idle_remainder_possible = effective_total_pct < 100
+
     try:
         db.table("session_keys").update(
             {
                 "allowed_protocols": normalized,
+                "allocation_caps": scoped_caps,
             }
         ).eq("account_id", account_id).eq("is_active", True).execute()
     except Exception as exc:
@@ -1061,6 +1145,9 @@ async def update_allowed_protocols(
 
     return {
         "allowedProtocols": normalized,
+        "allocationCaps": scoped_caps,
+        "effectiveCapTotalPct": effective_total_pct,
+        "idleRemainderPossible": idle_remainder_possible,
         "updatedRows": active_count,
     }
 
@@ -1101,7 +1188,7 @@ async def update_allocation_caps(
 
     active_keys = (
         db.table("session_keys")
-        .select("id")
+        .select("id, allowed_protocols")
         .eq("account_id", account_id)
         .eq("is_active", True)
         .execute()
@@ -1113,10 +1200,42 @@ async def update_allocation_caps(
             detail="No active session key found. Re-grant session key first",
         )
 
+    allowed_scope: list[str] = []
+    for row in active_keys.data or []:
+        for pid in _normalize_allowed_protocols(row.get("allowed_protocols")):
+            if pid not in allowed_scope:
+                allowed_scope.append(pid)
+    if not allowed_scope:
+        allowed_scope = list(_DEFAULT_ALLOWED_PROTOCOLS)
+
+    if normalized_caps is not None:
+        out_of_scope = [
+            pid for pid in normalized_caps.keys()
+            if pid not in set(allowed_scope)
+        ]
+        if out_of_scope:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "allocationCaps includes protocols outside selected market scope: "
+                    + ", ".join(sorted(out_of_scope))
+                ),
+            )
+
+    scoped_caps = _scope_allocation_caps(normalized_caps, allowed_scope)
+    if not _has_deployable_cap(scoped_caps, allowed_scope):
+        raise HTTPException(
+            status_code=400,
+            detail="At least one selected market must have a cap above 0%",
+        )
+
+    effective_total_pct = _effective_cap_total_pct(scoped_caps, allowed_scope)
+    idle_remainder_possible = effective_total_pct < 100
+
     try:
         db.table("session_keys").update(
             {
-                "allocation_caps": normalized_caps,
+                "allocation_caps": scoped_caps,
             }
         ).eq("account_id", account_id).eq("is_active", True).execute()
     except Exception as exc:
@@ -1135,7 +1254,10 @@ async def update_allocation_caps(
     asyncio.create_task(_trigger_initial_rebalance(account_id, address))
 
     return {
-        "allocationCaps": normalized_caps,
+        "allocationCaps": scoped_caps,
+        "effectiveCapTotalPct": effective_total_pct,
+        "idleRemainderPossible": idle_remainder_possible,
+        "allowedProtocols": allowed_scope,
         "updatedRows": active_count,
     }
 

@@ -490,6 +490,13 @@ export default function OnboardingPage() {
   })();
 
   const selectedCount = selectedProtocols.size;
+  const selectedCapTotal = MARKET_PROTOCOL_IDS
+    .filter((pid) => selectedProtocols.has(pid))
+    .reduce((sum, pid) => sum + (allocationCaps[pid] ?? 100), 0);
+  const selectedCoveragePct = Math.min(selectedCapTotal, 100);
+  const hasDeployableSelectedProtocol = MARKET_PROTOCOL_IDS.some(
+    (pid) => selectedProtocols.has(pid) && (allocationCaps[pid] ?? 100) > 0,
+  );
   const yearlyEarning = effectiveDepositAmount >= 1 ? effectiveDepositAmount * (bestApy / 100) : 0;
 
   const hasAuthError = accountDetailError instanceof APIError && accountDetailError.status === 401;
@@ -1806,12 +1813,34 @@ export default function OnboardingPage() {
                 </button>
                 <button
                   onClick={() => setFormStep(regrantOnlyMode ? "activate" : "deposit")}
-                  disabled={selectedCount === 0}
+                  disabled={selectedCount === 0 || !hasDeployableSelectedProtocol}
                   className="flex w-full flex-1 items-center justify-center gap-2 rounded-xl bg-[#E84142] py-3 text-sm font-semibold text-white transition-all hover:bg-[#D63031] disabled:opacity-50"
                 >
                   {regrantOnlyMode ? "Continue to Re-grant" : "Continue"}
                   <ArrowRight className="h-4 w-4" />
                 </button>
+              </div>
+
+              <div className="rounded-lg border border-[#E8E2DA] bg-[#F8F4EF] px-3 py-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#8A837C]">Combined max-cap coverage</span>
+                  <span className="font-mono text-sm font-semibold text-[#1A1715]">{selectedCoveragePct}%</span>
+                </div>
+                {selectedCapTotal < 100 && selectedCount > 0 && (
+                  <p className="mt-1 text-[11px] text-[#B45309]">
+                    Selected caps are below 100%; up to {100 - selectedCapTotal}% can stay idle.
+                  </p>
+                )}
+                {selectedCapTotal > 100 && selectedCount > 0 && (
+                  <p className="mt-1 text-[11px] text-[#8A837C]">
+                    Totals above 100% are valid since caps are per-market maximums, not fixed weights.
+                  </p>
+                )}
+                {!hasDeployableSelectedProtocol && selectedCount > 0 && (
+                  <p className="mt-1 text-[11px] text-[#B91C1C]">
+                    All selected markets are capped at 0%. Increase one cap to continue.
+                  </p>
+                )}
               </div>
             </motion.div>
           )}

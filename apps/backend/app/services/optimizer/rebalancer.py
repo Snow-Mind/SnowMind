@@ -114,8 +114,20 @@ def _build_user_preferences(
 
         max_pct: Decimal | None = None
         if cap_value is not None:
-            bounded = max(0, min(int(cap_value), 100))
-            max_pct = Decimal(str(bounded)) / Decimal("100")
+            try:
+                # Defensive parsing: protect rebalances from malformed DB cap payloads.
+                if isinstance(cap_value, bool):
+                    raise ValueError("boolean cap values are invalid")
+                parsed_cap = int(str(cap_value).strip())
+                bounded = max(0, min(parsed_cap, 100))
+                max_pct = Decimal(str(bounded)) / Decimal("100")
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "Ignoring invalid allocation cap for %s: %r (%s)",
+                    pid,
+                    cap_value,
+                    exc,
+                )
 
         preferences[pid] = UserPreference(
             protocol_id=pid,
