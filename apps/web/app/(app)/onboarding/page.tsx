@@ -54,7 +54,7 @@ import {
   withRetry,
 } from "@/lib/zerodev";
 import { cn } from "@/lib/utils";
-import type { DiversificationPreference } from "@snowmind/shared-types";
+import type { DiversificationPreference, ProtocolRateResponse } from "@snowmind/shared-types";
 
 const ERC20_ABI = [
   {
@@ -469,7 +469,7 @@ export default function OnboardingPage() {
   // Get live protocol rates for APY display
   const { data: protocolRates } = useProtocolRates();
   const rateByProtocol = useMemo(() => {
-    const map = new Map<ProtocolId, (typeof protocolRates)[number]>();
+    const map = new Map<ProtocolId, ProtocolRateResponse>();
     for (const row of protocolRates ?? []) {
       map.set(canonicalRateProtocolId(row.protocolId), row);
     }

@@ -11,6 +11,7 @@ import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { PROTOCOL_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
+import type { ProtocolRateResponse } from "@snowmind/shared-types";
 
 const CANONICAL_PROTOCOL_IDS = [
   "aave_v3",
@@ -116,7 +117,7 @@ export default function AgentManager({
   const queryClient = useQueryClient();
   const { data: protocolRates } = useProtocolRates();
   const rateByProtocol = useMemo(() => {
-    const map = new Map<CanonicalProtocolId, (typeof protocolRates)[number]>();
+    const map = new Map<CanonicalProtocolId, ProtocolRateResponse>();
     for (const row of protocolRates ?? []) {
       map.set(canonicalRateProtocolId(row.protocolId), row);
     }
