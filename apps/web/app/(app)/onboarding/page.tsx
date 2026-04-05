@@ -1233,9 +1233,15 @@ export default function OnboardingPage() {
   ];
 
   const stepIndex = steps.findIndex((s) => s.id === formStep);
+  const isStrategyStep = formStep === "strategy";
 
   return (
-    <div className="mx-auto w-full max-w-lg px-3 py-8 sm:px-0 sm:py-10">
+    <div
+      className={cn(
+        "mx-auto w-full px-3 py-8 sm:px-0 sm:py-10",
+        isStrategyStep ? "max-w-4xl" : "max-w-lg",
+      )}
+    >
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
@@ -1516,12 +1522,12 @@ export default function OnboardingPage() {
                 </div>
 
                 {/* Desktop table header */}
-                <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-2 bg-[#F5F0EB] px-3 py-2 md:grid">
+                <div className="hidden grid-cols-[minmax(0,1.6fr)_120px_80px_90px_90px] items-center gap-2 bg-[#F5F0EB] px-3 py-2 md:grid">
                   <span className="text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Protocol</span>
-                  <span className="w-28 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Max Exposure</span>
-                  <span className="w-16 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">APY</span>
-                  <span className="w-20 text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">TVL</span>
-                  <span className="w-20 text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
+                  <span className="text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Max Exposure</span>
+                  <span className="text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">APY</span>
+                  <span className="text-right text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">TVL</span>
+                  <span className="text-center text-[10px] font-medium uppercase tracking-wider text-[#8A837C]">Active</span>
                 </div>
 
                 {/* Protocol rows */}
@@ -1550,7 +1556,7 @@ export default function OnboardingPage() {
                     <div
                       key={protocol.id}
                       className={cn(
-                        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer md:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]",
+                        "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-3 transition-all cursor-pointer md:grid-cols-[minmax(0,1.6fr)_120px_80px_90px_90px] md:items-center",
                         idx > 0 && "border-t border-[#E8E2DA]",
                         !isEnabled && "cursor-not-allowed opacity-55",
                         isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
@@ -1572,7 +1578,7 @@ export default function OnboardingPage() {
                           className="rounded-full shrink-0"
                         />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <p className="text-sm font-medium leading-tight text-[#1A1715]">
                               <span className="sm:hidden">{protocol.shortName}</span>
                               <span className="hidden sm:inline">{protocol.name}</span>
@@ -1605,7 +1611,7 @@ export default function OnboardingPage() {
                       </div>
 
                       {/* Max exposure (desktop) */}
-                      <div className="hidden justify-center md:order-2 md:flex md:w-28">
+                      <div className="hidden justify-center md:order-2 md:flex">
                         {isEditingRow ? (
                           <div className="flex items-center gap-2 rounded-full border border-[#E84142]/25 bg-white px-2 py-1">
                             <button
@@ -1653,17 +1659,17 @@ export default function OnboardingPage() {
                       </div>
 
                       {/* APY (desktop) */}
-                      <span className="hidden w-16 text-right font-mono text-[11px] font-semibold text-[#059669] md:order-3 md:block">
+                      <span className="hidden text-right font-mono text-[11px] font-semibold text-[#059669] md:order-3 md:block">
                         {apyLabel}
                       </span>
 
                       {/* TVL (desktop) */}
-                      <span className="hidden w-20 text-right font-mono text-[11px] text-[#5C5550] md:order-4 md:block">
+                      <span className="hidden text-right font-mono text-[11px] text-[#5C5550] md:order-4 md:block">
                         {tvlLabel}
                       </span>
 
                       {/* Toggle / row actions */}
-                      <div className="flex items-center justify-center gap-1.5 self-center md:order-5 md:w-20">
+                      <div className="flex items-center justify-center gap-1.5 self-center md:order-5">
                         {isEditingRow ? (
                           <>
                             <button
