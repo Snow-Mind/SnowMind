@@ -8,6 +8,11 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
 import { getRebalanceCadence } from "@/lib/rebalanceCadence";
 
+function canonicalProtocolId(rawProtocolId: string): string {
+  const normalized = (rawProtocolId || "").trim().toLowerCase();
+  return normalized === "aave" ? "aave_v3" : normalized;
+}
+
 interface LiveRatesProps {
   activeProtocolIds?: string[]; // Selected protocols from onboarding
   activeAllocationIds?: string[]; // Protocols with current allocations > 0
@@ -46,8 +51,9 @@ export default function LiveRates({
   );
 
   const renderCard = (r: (typeof sorted)[number]) => {
+    const canonicalId = canonicalProtocolId(r.protocolId);
     const meta =
-      PROTOCOL_CONFIG[r.protocolId as keyof typeof PROTOCOL_CONFIG];
+      PROTOCOL_CONFIG[canonicalId as keyof typeof PROTOCOL_CONFIG];
     if (!meta) return null;
 
     const displayRiskScore = Number.isFinite(r.riskScore)
@@ -57,8 +63,8 @@ export default function LiveRates({
       ? Math.max(1, Math.round(r.riskScoreMax))
       : RISK_SCORE_MAX;
 
-    const isSelected = activeProtocolIds.includes(r.protocolId);
-    const hasAllocation = activeAllocationIds.includes(r.protocolId);
+    const isSelected = activeProtocolIds.includes(canonicalId);
+    const hasAllocation = activeAllocationIds.includes(canonicalId);
     const isActive = isSelected && hasAllocation; // Actively depositing
 
     return (
@@ -142,6 +148,9 @@ export default function LiveRates({
             </p>
             <p className="text-[10px] text-muted-foreground">
               Risk score is out of 9. Higher is safer.
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
             </p>
             <p className="text-[10px] text-muted-foreground">
               Rebalance cadence for current deposit size: every {rebalanceIntervalLabel}

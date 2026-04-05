@@ -5,6 +5,11 @@ import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { PROTOCOL_CONFIG, type ProtocolId } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
 
+function canonicalProtocolId(rawProtocolId: string): string {
+  const normalized = (rawProtocolId || "").trim().toLowerCase();
+  return normalized === "aave" ? "aave_v3" : normalized;
+}
+
 export default function LiveRateTicker() {
   const { data: rates, dataUpdatedAt } = useProtocolRates();
 
@@ -30,10 +35,11 @@ export default function LiveRateTicker() {
       </span>
 
       {rates?.map((r) => {
-        const cfg = PROTOCOL_CONFIG[r.protocolId as ProtocolId];
+        const canonicalId = canonicalProtocolId(r.protocolId);
+        const cfg = PROTOCOL_CONFIG[canonicalId as ProtocolId];
         if (!cfg || !r.isActive) return null;
         return (
-          <span key={r.protocolId} className="flex items-center gap-1">
+          <span key={canonicalId} className="flex items-center gap-1">
             <span style={{ color: cfg.color }}>{cfg.shortName}</span>
             <span className="font-mono text-arctic">
               {formatPct(r.currentApy * 100)}

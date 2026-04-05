@@ -22,6 +22,11 @@ import AllocationChart from "@/components/dashboard/AllocationChart";
 import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 import type { ProtocolAllocation } from "@snowmind/shared-types";
 
+function canonicalProtocolId(rawProtocolId: string): string {
+  const normalized = (rawProtocolId || "").trim().toLowerCase();
+  return normalized === "aave" ? "aave_v3" : normalized;
+}
+
 function derivePositions(allocations: ProtocolAllocation[]) {
   return allocations.map((a) => {
     const meta = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
@@ -86,14 +91,21 @@ export default function PortfolioPage() {
     : [];
 
   const riskByProtocol = useMemo(() => {
-    const entries = (ratesData ?? []).map((r) => [
-      r.protocolId,
-      {
-        riskScore: Number(r.riskScore),
-        riskScoreMax: Number(r.riskScoreMax),
-      },
-    ] as const);
-    return Object.fromEntries(entries);
+    const out: Record<string, { riskScore: number; riskScoreMax: number }> = {};
+
+    for (const row of ratesData ?? []) {
+      const canonicalId = canonicalProtocolId(row.protocolId);
+      out[canonicalId] = {
+        riskScore: Number(row.riskScore),
+        riskScoreMax: Number(row.riskScoreMax),
+      };
+
+      if (canonicalId === "aave_v3") {
+        out.aave = out[canonicalId];
+      }
+    }
+
+    return out;
   }, [ratesData]);
 
   if (error) {

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowUpRight,
   Check,
   ChevronDown,
   Clock3,
@@ -16,7 +15,6 @@ import {
   Search,
   Send,
   Settings2,
-  SmilePlus,
   Sparkles,
   SquarePen,
   ThumbsDown,
@@ -41,16 +39,12 @@ import { cn } from "@/lib/utils";
 
 const SESSION_STORAGE_KEY = "snowmind_assistant_session_id";
 const SESSION_INDEX_STORAGE_KEY = "snowmind_assistant_session_index";
-const SESSION_ICON_STORAGE_KEY = "snowmind_assistant_session_icons";
 const SESSION_LABEL = "Ctrl+J";
 const DEFAULT_SESSION_TITLE = "New AI chat";
 const MAX_SESSION_ENTRIES = 24;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const HEADER_ICON_STROKE = 1.9;
 const MENU_ICON_STROKE = 1.85;
-
-type SessionIconKind = "neural" | "spark" | "compass";
-const SESSION_ICON_ORDER: SessionIconKind[] = ["neural", "spark", "compass"];
 
 interface AssistantSessionSummaryLike {
   sessionId: string;
@@ -63,14 +57,14 @@ type StoredSessionSummary = AssistantSessionSummaryLike;
 const STARTER_PROMPTS: Array<{ kind: "search" | "spark" | "compass" | "wand"; label: string }> = [
   { kind: "spark", label: "How is risk score being calculated?" },
   { kind: "search", label: "Explain Aave's risk." },
-  { kind: "compass", label: "Propose a market strategy for a conservative portfolio." },
+  { kind: "compass", label: "Propose a conservative portfolio with exact allocations (sum = 100%)." },
   { kind: "wand", label: "How are liquidity and yield profile fetched on-chain each day?" },
 ];
 
 const QUICK_INSERT_PROMPTS: string[] = [
   "Break down O/L/C/Y/A for each active market in a table.",
   "Explain whether today's L and Y came from fresh on-chain data.",
-  "Propose a concise conservative portfolio (markets + allocations only).",
+  "Propose a concise conservative portfolio (markets + exact allocations totaling 100%).",
 ];
 
 function createSessionId(): string {
@@ -219,16 +213,6 @@ function renderStarterIcon(kind: "search" | "spark" | "compass" | "wand") {
   return <WandSparkles className={cls} />;
 }
 
-function renderSessionIcon(kind: SessionIconKind) {
-  if (kind === "spark") {
-    return <Sparkles className="h-4 w-4 text-[#F5F5F7]" />;
-  }
-  if (kind === "compass") {
-    return <Compass className="h-4 w-4 text-[#F5F5F7]" />;
-  }
-  return <NeuralSnowflakeLogo className="h-4 w-4" />;
-}
-
 function makeMessage(role: "user" | "assistant", content: string): AssistantMessage {
   return {
     role,
@@ -241,7 +225,6 @@ export function FloatingAssistant() {
   const [isOpen, setIsOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<StoredSessionSummary[]>([]);
-  const [sessionIcons, setSessionIcons] = useState<Record<string, SessionIconKind>>({});
   const [isRenamingTitle, setIsRenamingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -262,11 +245,6 @@ export function FloatingAssistant() {
     if (!sessionId) return DEFAULT_SESSION_TITLE;
     return sessions.find((row) => row.sessionId === sessionId)?.title ?? DEFAULT_SESSION_TITLE;
   }, [sessionId, sessions]);
-
-  const activeSessionIcon = useMemo<SessionIconKind>(() => {
-    if (!sessionId) return "neural";
-    return sessionIcons[sessionId] ?? "neural";
-  }, [sessionId, sessionIcons]);
 
   const sessionGroups = useMemo(() => splitSessionsByDay(sessions), [sessions]);
 
@@ -328,32 +306,6 @@ export function FloatingAssistant() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(SESSION_INDEX_STORAGE_KEY, JSON.stringify(sessions));
   }, [sessions]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const raw = window.localStorage.getItem(SESSION_ICON_STORAGE_KEY);
-    if (!raw) return;
-
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const cleaned: Record<string, SessionIconKind> = {};
-      for (const [key, value] of Object.entries(parsed)) {
-        if (!SESSION_ID_RE.test(key)) continue;
-        if (value === "neural" || value === "spark" || value === "compass") {
-          cleaned[key] = value;
-        }
-      }
-      setSessionIcons(cleaned);
-    } catch {
-      // Ignore malformed local state.
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(SESSION_ICON_STORAGE_KEY, JSON.stringify(sessionIcons));
-  }, [sessionIcons]);
 
   useEffect(() => {
     setFeedbackByMessageKey({});
@@ -547,12 +499,6 @@ export function FloatingAssistant() {
     activateSession(nextSessionId, nextTitle, knownSession?.lastMessageAt ?? new Date().toISOString());
   };
 
-  const openAssistantInNewTab = () => {
-    if (typeof window === "undefined") return;
-    window.open(window.location.href, "_blank", "noopener,noreferrer");
-    setNotice("Opened in new tab.");
-  };
-
   const beginRenameCurrentSession = () => {
     if (!sessionId) return;
     setTitleDraft(activeSessionTitle);
@@ -572,31 +518,12 @@ export function FloatingAssistant() {
     setNotice("Conversation renamed.");
   };
 
-  const cycleCurrentSessionIcon = () => {
-    if (!sessionId) return;
-    const current = sessionIcons[sessionId] ?? "neural";
-    const currentIndex = SESSION_ICON_ORDER.indexOf(current);
-    const nextIndex = (currentIndex + 1) % SESSION_ICON_ORDER.length;
-    const next = SESSION_ICON_ORDER[nextIndex];
-
-    setSessionIcons((prev) => ({
-      ...prev,
-      [sessionId]: next,
-    }));
-    setNotice("Conversation icon updated.");
-  };
-
   const deleteCurrentConversation = () => {
     if (!sessionId) return;
     const currentSessionId = sessionId;
     const remaining = sessions.filter((row) => row.sessionId !== currentSessionId);
 
     setSessions(remaining);
-    setSessionIcons((prev) => {
-      const next = { ...prev };
-      delete next[currentSessionId];
-      return next;
-    });
 
     if (remaining.length > 0) {
       const target = remaining[0];
@@ -770,7 +697,7 @@ export function FloatingAssistant() {
           <div className="flex items-center justify-between border-b border-[#2D3440] px-2.5 py-1.5">
             <div className="flex min-w-0 items-center gap-1.5">
               <span className="inline-flex h-[25px] w-[25px] items-center justify-center rounded-full border border-[#374050] bg-[#171D27]">
-                {renderSessionIcon(activeSessionIcon)}
+                <NeuralSnowflakeLogo className="h-4 w-4" />
               </span>
               <div className="min-w-0">
                 {isRenamingTitle ? (
@@ -887,15 +814,6 @@ export function FloatingAssistant() {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={openAssistantInNewTab}
-                className={headerActionButtonClass}
-                aria-label="Open assistant in new tab"
-              >
-                <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={HEADER_ICON_STROKE} />
-              </button>
-
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -919,26 +837,11 @@ export function FloatingAssistant() {
                     Rename
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onSelect={cycleCurrentSessionIcon}
-                    className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
-                  >
-                    <SmilePlus className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
-                    Change icon
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
                     onSelect={deleteCurrentConversation}
                     className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
                     Delete
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator className="bg-[#2F3642]" />
-                  <DropdownMenuItem
-                    onSelect={openAssistantInNewTab}
-                    className="rounded-md px-2 py-1.5 text-[12px] text-white/90 focus:bg-[#1C2230] focus:text-white"
-                  >
-                    <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={MENU_ICON_STROKE} />
-                    Open in new tab
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

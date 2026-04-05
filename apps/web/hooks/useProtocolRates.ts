@@ -8,21 +8,34 @@ function toFiniteNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function canonicalProtocolId(value: unknown): string {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "aave" ? "aave_v3" : normalized;
+}
+
 export function useProtocolRates() {
   return useQuery({
     queryKey: ["protocol-rates"],
     queryFn: async () => {
       const rows = await api.getCurrentRates();
-      return rows.map((row) => ({
-        ...row,
-        currentApy: toFiniteNumber(row.currentApy, 0),
-        tvlUsd: toFiniteNumber(row.tvlUsd, 0),
-        riskScore: toFiniteNumber(row.riskScore, 0),
-        riskScoreMax: Math.max(1, Math.round(toFiniteNumber(row.riskScoreMax, 9))),
-        utilizationRate:
-          row.utilizationRate == null ? null : toFiniteNumber(row.utilizationRate, 0),
-        lastUpdated: toFiniteNumber(row.lastUpdated, Date.now() / 1000),
-      }));
+      const byProtocol = new Map<string, (typeof rows)[number]>();
+
+      for (const row of rows) {
+        const normalizedProtocolId = canonicalProtocolId(row.protocolId);
+        byProtocol.set(normalizedProtocolId, {
+          ...row,
+          protocolId: normalizedProtocolId as typeof row.protocolId,
+          currentApy: toFiniteNumber(row.currentApy, 0),
+          tvlUsd: toFiniteNumber(row.tvlUsd, 0),
+          riskScore: toFiniteNumber(row.riskScore, Number.NaN),
+          riskScoreMax: Math.max(1, Math.round(toFiniteNumber(row.riskScoreMax, 9))),
+          utilizationRate:
+            row.utilizationRate == null ? null : toFiniteNumber(row.utilizationRate, Number.NaN),
+          lastUpdated: toFiniteNumber(row.lastUpdated, Date.now() / 1000),
+        });
+      }
+
+      return Array.from(byProtocol.values());
     },
     refetchInterval: 60_000,
     staleTime: 30_000,

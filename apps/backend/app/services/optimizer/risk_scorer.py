@@ -185,16 +185,12 @@ class RiskScorer:
             return {}
 
         apy_samples = self.get_recent_apy_samples(db, rates.keys())
-        spark_psm_liquidity_usd = _ZERO
-        if "spark" in rates:
-            spark_psm_liquidity_usd = await self._read_spark_psm_liquidity_usd()
 
         out: dict[str, RiskScoreResult] = {}
         for protocol_id, rate in rates.items():
             available_liquidity = self.derive_available_liquidity(
                 protocol_id=protocol_id,
                 rate=rate,
-                spark_psm_liquidity_usd=spark_psm_liquidity_usd,
             )
 
             static = self._get_static_scores(protocol_id)
@@ -236,12 +232,13 @@ class RiskScorer:
         Lending protocols: available = total_supplied - total_borrowed,
         where total_borrowed is derived from utilization when provided.
 
-        Spark: available = vault instant buffer (10%) + PSM3 USDC liquidity.
+        Spark: use TVL directly as liquidity proxy for risk scoring.
         """
+        del spark_psm_liquidity_usd
+
         tvl = max(self._to_decimal(rate.tvl_usd) or _ZERO, _ZERO)
         if protocol_id == "spark":
-            vault_buffer = tvl * _SPARK_INSTANT_BUFFER_RATIO
-            return max(vault_buffer + max(spark_psm_liquidity_usd, _ZERO), _ZERO)
+            return tvl
 
         util = self._to_decimal(rate.utilization_rate)
         if util is None:

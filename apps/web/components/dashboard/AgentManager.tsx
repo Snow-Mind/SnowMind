@@ -101,6 +101,12 @@ function isSameOrderedScope(a: CanonicalProtocolId[], b: CanonicalProtocolId[]):
   return true;
 }
 
+function canonicalRateProtocolId(rawProtocolId: string): CanonicalProtocolId {
+  const normalized = (rawProtocolId || "").trim().toLowerCase();
+  const canonical = normalized === "aave" ? "aave_v3" : normalized;
+  return canonical as CanonicalProtocolId;
+}
+
 export default function AgentManager({
   address,
   hasActiveSessionKey,
@@ -109,6 +115,13 @@ export default function AgentManager({
 }: AgentManagerProps) {
   const queryClient = useQueryClient();
   const { data: protocolRates } = useProtocolRates();
+  const rateByProtocol = useMemo(() => {
+    const map = new Map<CanonicalProtocolId, (typeof protocolRates)[number]>();
+    for (const row of protocolRates ?? []) {
+      map.set(canonicalRateProtocolId(row.protocolId), row);
+    }
+    return map;
+  }, [protocolRates]);
 
   const currentScope = useMemo(() => {
     const normalized = normalizeAllowedProtocols(allowedProtocols);
@@ -260,6 +273,8 @@ export default function AgentManager({
           Changes sync to your active session-key scope in backend.
           To change on-chain signed permissions, re-grant session key from Settings.
           Risk score is out of 9 (higher is safer).
+          Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation.
+          They are not endorsements or financial advice. Users should conduct their own research before making decisions.
         </p>
 
         {!hasActiveSessionKey && (
@@ -288,7 +303,7 @@ export default function AgentManager({
           {MANAGED_PROTOCOLS.map((protocol, idx) => {
             const protocolId = protocol.id as CanonicalProtocolId;
             const isSelected = selectedProtocols.has(protocolId);
-            const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
+            const rateData = rateByProtocol.get(protocolId);
             const isEnabled = protocol.isActive;
             const apyLabel = rateData && rateData.currentApy > 0
               ? `${(rateData.currentApy * 100).toFixed(2)}%`

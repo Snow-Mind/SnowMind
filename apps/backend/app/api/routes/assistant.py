@@ -38,6 +38,14 @@ _risk_scorer = RiskScorer()
 
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
+_OLCYA_MEANINGS: tuple[str, ...] = (
+    "O = Oracle quality (price feed trust)",
+    "L = Liquidity (how much withdrawable USDC is available)",
+    "C = Collateral quality (how strong/safe collateral is)",
+    "Y = Yield profile (how stable APY has been)",
+    "A = Architecture (direct deposit vs extra wrapper/curator layer).",
+)
+
 
 class AssistantChatRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=64)
@@ -215,8 +223,9 @@ def _build_dynamic_risk_snapshot_summary(db: Client) -> str:
     lines: list[str] = [
         f"Persisted snapshot protocols: {len(scores)}",
         f"Freshness threshold: {max_age_hours} hour(s)",
-        "Dynamic categories are L (Liquidity) and Y (Yield profile).",
-        "L and Y values are sourced from on-chain data and refreshed daily.",
+        "Risk categories (use these exact meanings):",
+        *_OLCYA_MEANINGS,
+        "Always present risk as total score plus O/L/C/Y/A components. Do not split into static vs dynamic subtotals.",
     ]
 
     stale_count = 0
@@ -236,17 +245,13 @@ def _build_dynamic_risk_snapshot_summary(db: Client) -> str:
         elif score.snapshot_date is not None:
             snapshot_time = score.snapshot_date.isoformat()
 
-        static_subtotal = (
-            score.breakdown.oracle
-            + score.breakdown.collateral
-            + score.breakdown.architecture
-        )
-        dynamic_subtotal = score.breakdown.liquidity + score.breakdown.yield_profile
-
         lines.append(
             (
                 f"- {protocol_id}: total={score.score}/{score.score_max}, "
-                f"static={static_subtotal}/5, dynamic={dynamic_subtotal}/4, "
+                f"O={score.breakdown.oracle}, L={score.breakdown.liquidity}, "
+                f"C={score.breakdown.collateral}, Y={score.breakdown.yield_profile}, "
+                f"A={score.breakdown.architecture}, "
+                f"availableLiquidityUsd={score.available_liquidity_usd}, "
                 f"sampleDays={score.sample_days}, snapshot={snapshot_time}, "
                 f"status={'stale' if is_stale else 'fresh'}"
             )
@@ -298,13 +303,30 @@ def _build_response_style_hints(user_message: str) -> str:
             "risk score calculation",
             "how is risk calculated",
             "how risk is calculated",
+            "why is",
+            "why spark",
+            "risk score breakdown",
+            "score breakdown",
             "o/l/c/y/a",
         )
+    ) or (
+        "score" in normalized
+        and any(token in normalized for token in ("why", "breakdown", "explain", "7/9", "8/9", "9/9"))
     )
     if asks_risk_calculation:
         hints.append(
             "Include this markdown link exactly once in the response: "
             "[Protocol Assessment](https://docs.snowmind.xyz/learn/protocol-assessment)."
+        )
+        hints.append("Use these exact category meanings:")
+        hints.extend(_OLCYA_MEANINGS)
+        hints.append(
+            "Explain risk using total score and O/L/C/Y/A components only; "
+            "do not split into static vs dynamic subtotals."
+        )
+        hints.append(
+            "For single-protocol score questions, provide a complete answer with one concise bullet per O/L/C/Y/A. "
+            "Do not end mid-sentence."
         )
 
     asks_portfolio_advice = (
@@ -324,9 +346,14 @@ def _build_response_style_hints(user_message: str) -> str:
     ) or "market strategy" in normalized
     if asks_portfolio_advice:
         hints.append(
-            "Respond concisely with a proposed portfolio only: list markets and allocations, "
+            "Respond concisely with a concrete proposed portfolio only: provide 2-5 markets with "
+            "explicit allocation percentages that sum to 100%, keep rationale to one short line max, "
             "avoid long risk explanations unless explicitly requested, and end with: "
             "This is not financial advice."
+        )
+        hints.append(
+            "If risk is referenced, present it as total risk and O/L/C/Y/A only. "
+            "Do not use static/dynamic split wording."
         )
 
     return "\n".join(hints) if hints else "No additional style directives for this turn."

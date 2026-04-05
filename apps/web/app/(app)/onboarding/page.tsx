@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -147,6 +147,12 @@ function normalizeIncomingAllocationCaps(
   }
 
   return caps;
+}
+
+function canonicalRateProtocolId(rawProtocolId: string): ProtocolId {
+  const normalized = (rawProtocolId || "").trim().toLowerCase();
+  const canonical = normalized === "aave" ? "aave_v3" : normalized;
+  return canonical as ProtocolId;
 }
 
 const RECEIPT_CONFIRMATION_TIMEOUT_MS = 180_000;
@@ -462,6 +468,13 @@ export default function OnboardingPage() {
 
   // Get live protocol rates for APY display
   const { data: protocolRates } = useProtocolRates();
+  const rateByProtocol = useMemo(() => {
+    const map = new Map<ProtocolId, (typeof protocolRates)[number]>();
+    for (const row of protocolRates ?? []) {
+      map.set(canonicalRateProtocolId(row.protocolId), row);
+    }
+    return map;
+  }, [protocolRates]);
 
   const [copied, setCopied] = useState(false);
   const [eoaBalance, setEoaBalance] = useState("0");
@@ -485,7 +498,7 @@ export default function OnboardingPage() {
   // Best APY from selected protocols (for now, show Benqi APY as highest)
   const bestApy = (() => {
     if (!protocolRates) return 0;
-    const selected = protocolRates.filter((r) => selectedProtocols.has(r.protocolId));
+    const selected = protocolRates.filter((r) => selectedProtocols.has(canonicalRateProtocolId(r.protocolId)));
     const best = selected.reduce((max, r) => (r.currentApy > max ? r.currentApy : max), 0);
     return best * 100; // convert to percentage
   })();
@@ -1494,6 +1507,8 @@ export default function OnboardingPage() {
               <p className="text-xs text-[#8A837C]">
                 Select markets your optimizer can use and set per-market max exposure.
                 Risk score is out of 9 (higher is safer).
+                Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation.
+                They are not endorsements or financial advice. Users should conduct their own research before making decisions.
               </p>
 
               {regrantOnlyMode && (
@@ -1536,7 +1551,7 @@ export default function OnboardingPage() {
                 {MARKET_PROTOCOLS.map((protocol, idx) => {
                   const protocolId = protocol.id as ProtocolId;
                   const isSelected = selectedProtocols.has(protocolId);
-                  const rateData = protocolRates?.find((r) => r.protocolId === protocol.id);
+                  const rateData = rateByProtocol.get(protocol.id as ProtocolId);
                   const tvl = rateData?.tvlUsd;
                   const apy = rateData?.currentApy;
                   const isEnabled = protocol.isActive;

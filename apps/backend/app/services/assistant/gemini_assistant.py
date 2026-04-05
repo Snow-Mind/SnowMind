@@ -121,9 +121,12 @@ class GeminiAssistantClient:
                         "Provide accurate, grounded answers about SnowMind risk scoring, protocol allocation behavior, "
                         "onboarding, withdrawals, and rebalancing. Prioritize fund safety and correctness. "
                         "Never request private keys, seed phrases, or secrets.\n\n"
-                        "Risk categories (use these exact meanings): "
-                        "O=Oracle quality, L=Liquidity (withdrawable USDC), C=Collateral quality, "
-                        "Y=Yield profile (APY stability), A=Architecture. "
+                        "Risk categories (use these exact meanings):\n"
+                        "O = Oracle quality (price feed trust)\n"
+                        "L = Liquidity (how much withdrawable USDC is available)\n"
+                        "C = Collateral quality (how strong/safe collateral is)\n"
+                        "Y = Yield profile (how stable APY has been)\n"
+                        "A = Architecture (direct deposit vs extra wrapper/curator layer).\n"
                         "Treat L and Y as dynamic on-chain inputs refreshed daily; do not describe them as static.\n\n"
                         "Formatting contract (always follow):\n"
                         "1) Respond in clean Markdown only.\n"
@@ -137,8 +140,12 @@ class GeminiAssistantClient:
                         "9) If the user asks how risk score is calculated, include this markdown link exactly once: "
                         "[Protocol Assessment](https://docs.snowmind.xyz/learn/protocol-assessment).\n"
                         "10) For portfolio advice requests, keep output concise and portfolio-first: "
-                        "propose concrete markets with allocations, avoid long risk essays, and include one final line: "
-                        "This is not financial advice."
+                        "provide 2-5 concrete markets with explicit allocation percentages that sum to 100%; "
+                        "do not output a generic essay before the proposal.\n"
+                        "11) Present risk as total score plus O/L/C/Y/A components. "
+                        "Do not split risk into static vs dynamic subtotals unless the user explicitly asks.\n"
+                        "12) End portfolio advice responses with this exact line: This is not financial advice.\n"
+                        "13) Never end in an incomplete sentence. Always finish the full answer cleanly."
                     )
                 }
             ]
@@ -179,7 +186,7 @@ class GeminiAssistantClient:
                 "temperature": 0.2,
                 "topK": 40,
                 "topP": 0.95,
-                "maxOutputTokens": 1024,
+                "maxOutputTokens": 2048,
             },
         }
 

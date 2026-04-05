@@ -19,6 +19,11 @@ interface AllocationChartProps {
   riskByProtocol?: Record<string, { riskScore: number; riskScoreMax: number }>;
 }
 
+function canonicalProtocolId(rawProtocolId: string): string {
+  const normalized = (rawProtocolId || "").trim().toLowerCase();
+  return normalized === "aave" ? "aave_v3" : normalized;
+}
+
 export default function AllocationChart({
   allocations,
   totalDeposited,
@@ -26,18 +31,23 @@ export default function AllocationChart({
 }: AllocationChartProps) {
   const data = allocations.map((a) => {
     const isIdle = a.protocolId === "idle";
+    const canonicalId = canonicalProtocolId(a.protocolId);
     const meta = isIdle
       ? IDLE_CONFIG
-      : PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
-    const dynamicRisk = isIdle ? null : riskByProtocol?.[a.protocolId];
+      : PROTOCOL_CONFIG[canonicalId as keyof typeof PROTOCOL_CONFIG];
+    const dynamicRisk = isIdle ? null : riskByProtocol?.[canonicalId] ?? riskByProtocol?.[a.protocolId];
+    const dynamicRiskScore = Number(dynamicRisk?.riskScore);
+    const dynamicRiskScoreMax = Number(dynamicRisk?.riskScoreMax);
     return {
       name: a.name || meta?.name || a.protocolId,
       value: a.allocationPct * 100,
       amountUsd: Number(a.amountUsdc),
       apy: a.currentApy * 100,
       color: meta?.color ?? "#8899AA",
-      riskScore: dynamicRisk?.riskScore ?? meta?.riskScore ?? 0,
-      riskScoreMax: dynamicRisk?.riskScoreMax ?? RISK_SCORE_MAX,
+      riskScore: Number.isFinite(dynamicRiskScore) ? dynamicRiskScore : (meta?.riskScore ?? 0),
+      riskScoreMax: Number.isFinite(dynamicRiskScoreMax)
+        ? Math.max(1, Math.round(dynamicRiskScoreMax))
+        : RISK_SCORE_MAX,
       logoPath: !isIdle && 'logoPath' in (meta ?? {}) ? (meta as typeof PROTOCOL_CONFIG[keyof typeof PROTOCOL_CONFIG]).logoPath : null,
     };
   });
