@@ -231,7 +231,35 @@ export interface AssistantChatResponse {
   contextSources: string[];
 }
 
+export type AssistantFeedbackValue = "up" | "down";
+
+export interface AssistantFeedbackRequest {
+  sessionId: string;
+  messageCreatedAt: string;
+  messageContent: string;
+  feedback: AssistantFeedbackValue;
+  note?: string;
+}
+
+export interface AssistantFeedbackResponse {
+  sessionId: string;
+  messageCreatedAt: string;
+  feedback: AssistantFeedbackValue;
+  note: string | null;
+  savedAt: string;
+}
+
 export interface AssistantSessionResponse {
   sessionId: string;
   messages: AssistantMessage[];
+}
+
+export interface AssistantSessionSummary {
+  sessionId: string;
+  title: string;
+  lastMessageAt: string;
+}
+
+export interface AssistantSessionListResponse {
+  sessions: AssistantSessionSummary[];
 }

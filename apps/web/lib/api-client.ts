@@ -21,6 +21,9 @@ import type {
   PlatformTvlResponse,
   AssistantChatRequest,
   AssistantChatResponse,
+  AssistantFeedbackRequest,
+  AssistantFeedbackResponse,
+  AssistantSessionListResponse,
   AssistantSessionResponse,
 } from "@snowmind/shared-types";
 
@@ -399,9 +402,20 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  submitAssistantFeedback: (data: AssistantFeedbackRequest) =>
+    request<AssistantFeedbackResponse>("/api/v1/assistant/feedback", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   getAssistantSession: (sessionId: string) =>
     request<AssistantSessionResponse>(
       `/api/v1/assistant/sessions/${encodeURIComponent(sessionId)}`,
+    ),
+
+  getAssistantSessions: (limit = 20) =>
+    request<AssistantSessionListResponse>(
+      `/api/v1/assistant/sessions?limit=${Math.max(1, Math.min(limit, 50))}`,
     ),
 
   // Withdrawals

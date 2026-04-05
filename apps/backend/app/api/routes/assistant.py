@@ -4,8 +4,9 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from supabase import Client
 
@@ -19,7 +20,9 @@ from app.services.assistant.gemini_assistant import (
     GeminiAssistantClient,
 )
 from app.services.assistant.session_store import (
+    AssistantFeedbackEntry,
     AssistantSessionStore,
+    AssistantSessionSummary,
     AssistantStoredMessage,
 )
 from app.services.optimizer.risk_scorer import RiskScorer
@@ -76,6 +79,76 @@ class AssistantSessionResponse(CamelModel):
     messages: list[AssistantMessageResponse]
 
 
+class AssistantSessionSummaryResponse(CamelModel):
+    session_id: str
+    title: str
+    last_message_at: str
+
+
+class AssistantSessionListResponse(CamelModel):
+    sessions: list[AssistantSessionSummaryResponse]
+
+
+class AssistantFeedbackRequest(BaseModel):
+    session_id: str = Field(min_length=8, max_length=64)
+    message_created_at: str = Field(min_length=8, max_length=64)
+    message_content: str = Field(min_length=1, max_length=12000)
+    feedback: Literal["up", "down"]
+    note: str | None = Field(default=None, max_length=600)
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not _SESSION_ID_RE.fullmatch(normalized):
+            raise ValueError("sessionId must match [A-Za-z0-9_-] and be 8-64 chars")
+        return normalized
+
+    @field_validator("message_created_at")
+    @classmethod
+    def _validate_message_created_at(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("messageCreatedAt is required")
+
+        raw = normalized
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValueError("messageCreatedAt must be a valid ISO datetime") from exc
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+
+    @field_validator("message_content")
+    @classmethod
+    def _normalize_message_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("messageContent must not be empty")
+        return normalized
+
+    @field_validator("note")
+    @classmethod
+    def _normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        return normalized or None
+
+
+class AssistantFeedbackResponse(CamelModel):
+    session_id: str
+    message_created_at: str
+    feedback: Literal["up", "down"]
+    note: str | None
+    saved_at: str
+
+
 def _extract_user_id(auth_claims: dict) -> str:
     sub = auth_claims.get("sub")
     if not isinstance(sub, str) or not sub.strip():
@@ -112,6 +185,19 @@ def _serialize_messages(messages: list[AssistantStoredMessage]) -> list[Assistan
             created_at=message.created_at,
         )
         for message in messages
+    ]
+
+
+def _serialize_session_summaries(
+    sessions: list[AssistantSessionSummary],
+) -> list[AssistantSessionSummaryResponse]:
+    return [
+        AssistantSessionSummaryResponse(
+            session_id=session.session_id,
+            title=session.title,
+            last_message_at=session.last_message_at,
+        )
+        for session in sessions
     ]
 
 
@@ -168,6 +254,32 @@ def _build_dynamic_risk_snapshot_summary(db: Client) -> str:
     return "\n".join(lines)
 
 
+def _build_feedback_context(feedback_rows: list[AssistantFeedbackEntry]) -> str:
+    if not feedback_rows:
+        return "No explicit user feedback signals have been recorded yet."
+
+    positive = sum(1 for row in feedback_rows if row.feedback == "up")
+    negative = sum(1 for row in feedback_rows if row.feedback == "down")
+
+    lines: list[str] = [
+        f"Recent feedback signals: thumbs_up={positive}, thumbs_down={negative}",
+        "Use these as style-quality hints while still prioritizing factual correctness.",
+    ]
+
+    for row in feedback_rows[:8]:
+        lines.append(
+            (
+                f"- {row.feedback.upper()} @ {row.created_at} "
+                f"(session={row.session_id}, response_at={row.assistant_created_at})"
+            )
+        )
+        lines.append(f"  Response excerpt: {row.message_excerpt}")
+        if row.note:
+            lines.append(f"  User note: {row.note}")
+
+    return "\n".join(lines)
+
+
 @router.post("/chat", response_model=AssistantChatResponse)
 @limiter.limit("30/minute")
 async def chat_with_assistant(
@@ -199,6 +311,13 @@ async def chat_with_assistant(
         limit=max_history,
     )
 
+    feedback_rows = _assistant_session_store.list_recent_feedback(
+        db,
+        privy_user_id=user_id,
+        limit=8,
+    )
+    feedback_context = _build_feedback_context(feedback_rows)
+
     dynamic_summary = _build_dynamic_risk_snapshot_summary(db)
     grounding_context, context_sources = _assistant_knowledge_base.build_grounding_context(dynamic_summary)
 
@@ -206,6 +325,7 @@ async def chat_with_assistant(
         reply = await _assistant_client.generate_reply(
             messages=history,
             grounding_context=grounding_context,
+            feedback_context=feedback_context,
         )
     except RuntimeError as exc:
         detail = str(exc)
@@ -245,6 +365,30 @@ async def chat_with_assistant(
     )
 
 
+@router.get("/sessions", response_model=AssistantSessionListResponse)
+@limiter.limit("60/minute")
+async def list_assistant_sessions(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=50),
+    db: Client = Depends(get_db),
+    auth_claims: dict = Depends(require_privy_auth),
+):
+    """Return recent sessions for the authenticated user."""
+    del request
+
+    user_id = _extract_user_id(auth_claims)
+
+    sessions = _assistant_session_store.list_recent_sessions(
+        db,
+        privy_user_id=user_id,
+        limit=limit,
+    )
+
+    return AssistantSessionListResponse(
+        sessions=_serialize_session_summaries(sessions),
+    )
+
+
 @router.get("/sessions/{session_id}", response_model=AssistantSessionResponse)
 @limiter.limit("60/minute")
 async def get_assistant_session(
@@ -270,4 +414,37 @@ async def get_assistant_session(
     return AssistantSessionResponse(
         session_id=normalized_session_id,
         messages=_serialize_messages(history),
+    )
+
+
+@router.post("/feedback", response_model=AssistantFeedbackResponse)
+@limiter.limit("120/minute")
+async def submit_assistant_feedback(
+    request: Request,
+    payload: AssistantFeedbackRequest,
+    db: Client = Depends(get_db),
+    auth_claims: dict = Depends(require_privy_auth),
+):
+    """Persist user feedback for one assistant response."""
+    del request
+
+    user_id = _extract_user_id(auth_claims)
+    normalized_session_id = _normalize_session_id(payload.session_id, allow_generate=False)
+
+    stored_feedback = _assistant_session_store.record_feedback(
+        db,
+        privy_user_id=user_id,
+        session_id=normalized_session_id,
+        assistant_created_at=payload.message_created_at,
+        feedback=payload.feedback,
+        message_content=payload.message_content,
+        note=payload.note,
+    )
+
+    return AssistantFeedbackResponse(
+        session_id=stored_feedback.session_id,
+        message_created_at=stored_feedback.assistant_created_at,
+        feedback=stored_feedback.feedback,
+        note=stored_feedback.note,
+        saved_at=stored_feedback.created_at,
     )

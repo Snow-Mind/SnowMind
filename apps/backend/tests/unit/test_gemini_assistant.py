@@ -75,6 +75,7 @@ async def test_gemini_client_uses_x_goog_api_key_header(monkeypatch) -> None:
             )
         ],
         grounding_context="risk context",
+        feedback_context="thumbs_up=1",
     )
 
     assert out.startswith("Dynamic risk updates")
@@ -86,6 +87,18 @@ async def test_gemini_client_uses_x_goog_api_key_header(monkeypatch) -> None:
     assert isinstance(headers, dict)
     assert headers.get("X-goog-api-key") == "test-key"
     assert headers.get("Content-Type") == "application/json"
+    payload = _CAPTURE["json"]
+    assert isinstance(payload, dict)
+    system_instruction = payload.get("systemInstruction")
+    assert isinstance(system_instruction, dict)
+    parts = system_instruction.get("parts")
+    assert isinstance(parts, list) and parts
+    first_part = parts[0]
+    assert isinstance(first_part, dict)
+    instruction_text = first_part.get("text")
+    assert isinstance(instruction_text, str)
+    assert "Markdown table" in instruction_text
+    assert "bullet lists" in instruction_text
 
 
 @pytest.mark.asyncio
@@ -101,4 +114,5 @@ async def test_gemini_client_rejects_missing_api_key(monkeypatch) -> None:
         await GeminiAssistantClient().generate_reply(
             messages=[],
             grounding_context="context",
+            feedback_context="none",
         )

@@ -18,6 +18,8 @@ Expected tables (after all migrations):
 - `accounts`
 - `account_yield_tracking`
 - `allocations`
+- `assistant_chat_messages`
+- `assistant_message_feedback`
 - `daily_apy_snapshots`
 - `daily_risk_scores`
 - `protocol_health`
@@ -51,6 +53,8 @@ Expected tables (after all migrations):
 | 014 | `014_add_activity_indexes_and_platform_kpis.sql` | Add activity feed indexes, backfill funding activity rows, and enterprise KPI snapshot storage |
 | 015 | `015_add_session_key_allocation_caps.sql` | Add per-protocol max allocation caps (`allocation_caps`) to session keys |
 | 016 | `016_add_daily_risk_scores.sql` | Add daily risk score snapshots with static + dynamic category breakdowns |
+| 017 | `017_add_assistant_chat_messages.sql` | Add assistant chat message persistence for authenticated session history |
+| 018 | `018_add_assistant_message_feedback.sql` | Add assistant thumbs up/down feedback persistence for response quality tuning |
 
 ## Creating a new migration
 

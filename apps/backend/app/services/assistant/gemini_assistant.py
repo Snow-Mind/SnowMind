@@ -103,6 +103,7 @@ class GeminiAssistantClient:
         *,
         messages: list[AssistantStoredMessage],
         grounding_context: str,
+        feedback_context: str,
     ) -> str:
         settings = get_settings()
         if not settings.GEMINI_API_KEY:
@@ -115,10 +116,19 @@ class GeminiAssistantClient:
             "parts": [
                 {
                     "text": (
-                        "You are SnowMind Assistant. Provide concise, accurate answers about SnowMind risk scoring, "
-                        "protocol allocation behavior, and onboarding/rebalancing flows. "
-                        "Prioritize fund safety, correctness, and explicit caveats. "
-                        "Never request private keys, seed phrases, or secrets."
+                        "You are SnowMind Assistant for a production DeFi yield optimizer. "
+                        "Provide accurate, grounded answers about SnowMind risk scoring, protocol allocation behavior, "
+                        "onboarding, withdrawals, and rebalancing. Prioritize fund safety and correctness. "
+                        "Never request private keys, seed phrases, or secrets.\n\n"
+                        "Formatting contract (always follow):\n"
+                        "1) Respond in clean Markdown only.\n"
+                        "2) Use a short lead sentence, then structured sections.\n"
+                        "3) Use bullet lists for discrete points and recommendations.\n"
+                        "4) Use a Markdown table whenever comparing 2+ options across shared fields (risk, APY, liquidity, tradeoffs).\n"
+                        "5) Use numbered steps for procedures.\n"
+                        "6) If data is missing, state uncertainty explicitly instead of guessing.\n"
+                        "7) Keep answers pragmatic: explain reasoning and concrete next actions.\n"
+                        "8) For financial/risk guidance, include a short safety caveat when uncertainty is present."
                     )
                 }
             ]
@@ -132,7 +142,9 @@ class GeminiAssistantClient:
                         "text": (
                             "Grounding context is provided below. Use it as the source of truth for risk scoring "
                             "framework and plan details.\n\n"
-                            f"{grounding_context}"
+                            f"{grounding_context}\n\n"
+                            "Recent user quality feedback signals (prefer patterns that received thumbs up, avoid repeated patterns that got thumbs down):\n"
+                            f"{feedback_context}"
                         )
                     }
                 ],

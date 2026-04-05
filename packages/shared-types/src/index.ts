@@ -24,5 +24,10 @@ export type {
   AssistantMessage,
   AssistantChatRequest,
   AssistantChatResponse,
+  AssistantFeedbackValue,
+  AssistantFeedbackRequest,
+  AssistantFeedbackResponse,
   AssistantSessionResponse,
+  AssistantSessionSummary,
+  AssistantSessionListResponse,
 } from "./api";
