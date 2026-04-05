@@ -14,11 +14,13 @@ from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import require_privy_auth
 from app.models.base import CamelModel
-from app.services.assistant import (
+from app.services.assistant.gemini_assistant import (
     AssistantKnowledgeBase,
+    GeminiAssistantClient,
+)
+from app.services.assistant.session_store import (
     AssistantSessionStore,
     AssistantStoredMessage,
-    GeminiAssistantClient,
 )
 from app.services.optimizer.risk_scorer import RiskScorer
 
