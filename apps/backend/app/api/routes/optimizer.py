@@ -691,10 +691,11 @@ async def options_apy_timeseries_trailing_slash() -> Response:
 @router.get("/rates/timeseries", response_model=list[ApyTimeseriesPoint])
 @limiter.limit("60/minute")
 async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
-    """Return daily APY timeseries for SnowMind best route vs Aave benchmark.
+    """Return daily APY timeseries for SnowMind deployable route vs Aave benchmark.
 
     Used by the landing page growth chart. Public endpoint, no auth required.
-    Returns up to 30 days of daily data points.
+    Returns up to 30 days of daily data points using conservative, health-aware
+    filtering so non-deposit-safe protocol spikes do not inflate displayed APY.
     """
     global _timeseries_cache
     cache_ttl = max(0, int(get_settings().APY_TIMESERIES_CACHE_TTL_SECONDS))
@@ -711,7 +712,7 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
 
         snapshots = (
             db.table("daily_apy_snapshots")
-            .select("protocol_id, apy, date")
+            .select("protocol_id, apy, tvl_usd, date")
             .gte("date", thirty_days_ago)
             .order("date")
             .execute()
@@ -721,38 +722,100 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
         if not snapshots:
             return []
 
-        # Group by date, tracking best non-aave active protocol and aave
-        by_date: dict[str, dict[str, Decimal]] = {}
+        # Determine protocols that are currently deployable.
+        # Fail-safe: protocols with unreadable health are excluded.
+        active_pids = set(ACTIVE_ADAPTERS.keys())
+        deployable_pids: set[str] = set()
+        for pid in active_pids:
+            adapter = ACTIVE_ADAPTERS.get(pid)
+            if adapter is None:
+                continue
+            try:
+                health = await adapter.get_health()
+            except Exception as exc:
+                logger.warning(
+                    "Timeseries health check failed for %s: %s — excluding from SnowMind chart",
+                    pid,
+                    exc,
+                )
+                continue
+            if health.is_deposit_safe:
+                deployable_pids.add(pid)
+
+        if not deployable_pids:
+            logger.warning(
+                "No deployable protocols available for SnowMind timeseries — returning empty chart data"
+            )
+            return []
+
+        # Group by date and protocol with APY + TVL metadata.
+        by_date: dict[str, dict[str, tuple[Decimal, Decimal | None]]] = {}
         for snap in snapshots:
             d = snap["date"]
             pid = snap["protocol_id"]
             try:
                 apy = Decimal(str(snap["apy"]))
+                tvl_usd = (
+                    Decimal(str(snap.get("tvl_usd")))
+                    if snap.get("tvl_usd") is not None
+                    else None
+                )
             except Exception as exc:
                 logger.debug(
-                    "Skipping malformed APY snapshot in timeseries (date=%s, protocol=%s, apy=%s): %s",
+                    "Skipping malformed APY snapshot in timeseries (date=%s, protocol=%s, apy=%s, tvl=%s): %s",
                     d,
                     pid,
                     snap.get("apy"),
+                    snap.get("tvl_usd"),
                     exc,
                 )
                 continue
             if d not in by_date:
                 by_date[d] = {}
-            by_date[d][pid] = apy
+            by_date[d][pid] = (apy, tvl_usd)
 
-        # Build timeseries: SnowMind = best active protocol APY, Aave = aave_v3
-        active_pids = set(ACTIVE_ADAPTERS.keys())
+        # Build timeseries:
+        # - SnowMind = best deployable APY after conservative liquidity adjustment
+        # - Aave = raw aave_v3 benchmark APY
+        max_sanity_apy = Decimal(str(get_settings().MAX_APY_SANITY_BOUND))
+        liquidity_floor = Decimal("0.85")
+        liquidity_span = Decimal("0.15")
+        liquidity_full_tvl = Decimal("50000000")
         out: list[ApyTimeseriesPoint] = []
         for date_str in sorted(by_date.keys()):
             day_rates = by_date[date_str]
-            aave_apy = day_rates.get("aave_v3", Decimal("0"))
+            aave_apy = day_rates.get("aave_v3", (Decimal("0"), None))[0]
 
-            # SnowMind picks the best active protocol on each day
+            # SnowMind picks the best deployable protocol on each day
+            # after conservative liquidity adjustment.
             best_apy = Decimal("0")
-            for pid, apy in day_rates.items():
-                if pid in active_pids and apy > best_apy:
-                    best_apy = apy
+            for pid in deployable_pids:
+                if pid not in day_rates:
+                    continue
+
+                apy, tvl_usd = day_rates[pid]
+                if apy <= Decimal("0"):
+                    continue
+                if apy > max_sanity_apy:
+                    logger.debug(
+                        "Timeseries excluded APY outlier for %s on %s: %s > %s",
+                        pid,
+                        date_str,
+                        apy,
+                        max_sanity_apy,
+                    )
+                    continue
+
+                if tvl_usd is None:
+                    liquidity_factor = liquidity_floor
+                else:
+                    tvl_clamped = max(tvl_usd, Decimal("0"))
+                    tvl_ratio = min(tvl_clamped / liquidity_full_tvl, Decimal("1"))
+                    liquidity_factor = liquidity_floor + (tvl_ratio * liquidity_span)
+
+                adjusted_apy = apy * liquidity_factor
+                if adjusted_apy > best_apy:
+                    best_apy = adjusted_apy
 
             out.append(
                 ApyTimeseriesPoint(

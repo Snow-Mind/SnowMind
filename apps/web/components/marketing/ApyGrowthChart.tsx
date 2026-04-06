@@ -76,11 +76,14 @@ export default function ApyGrowthChart() {
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#8A837C]">
-              30-Day APY Performance
+              30-Day Deployable APY (Safety-Filtered)
             </p>
             <h3 className="mt-1 font-sans text-[22px] font-bold text-[#FAFAF8] md:text-[28px]">
               SnowMind vs Aave
             </h3>
+            <p className="mt-2 max-w-2xl text-[11px] text-[#8A837C] md:text-xs">
+              SnowMind values exclude protocols that fail live health checks and apply conservative liquidity weighting.
+            </p>
           </div>
           {latest && (
             <div className="flex gap-6">
