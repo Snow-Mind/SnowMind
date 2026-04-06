@@ -30,6 +30,8 @@ _HISTORY_SIZE = 20
 _VELOCITY_WINDOW = 5
 _MIN_POSITION_USDC = Decimal("0.01")
 _USDC_QUANT = Decimal("0.000001")
+_UTILIZATION_READ_MAX_ATTEMPTS = 3
+_UTILIZATION_READ_BASE_BACKOFF_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -217,19 +219,34 @@ class UtilizationMonitor:
             if adapter is None:
                 return protocol_id, None
 
-            try:
-                utilization = await adapter.get_utilization()
-                if utilization is None:
+            for attempt in range(_UTILIZATION_READ_MAX_ATTEMPTS):
+                try:
+                    utilization = await adapter.get_utilization()
+                    if utilization is None:
+                        return protocol_id, None
+                    utilization = max(Decimal("0"), min(Decimal(str(utilization)), Decimal("1")))
+                    return protocol_id, utilization
+                except Exception as exc:
+                    if attempt < _UTILIZATION_READ_MAX_ATTEMPTS - 1:
+                        backoff = _UTILIZATION_READ_BASE_BACKOFF_SECONDS * (2 ** attempt)
+                        logger.debug(
+                            "Utilization read attempt %d/%d failed for %s: %s; retrying in %.2fs",
+                            attempt + 1,
+                            _UTILIZATION_READ_MAX_ATTEMPTS,
+                            protocol_id,
+                            exc,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+
+                    logger.warning(
+                        "Utilization read failed for %s after %d attempts: %s",
+                        protocol_id,
+                        _UTILIZATION_READ_MAX_ATTEMPTS,
+                        exc,
+                    )
                     return protocol_id, None
-                utilization = max(Decimal("0"), min(Decimal(str(utilization)), Decimal("1")))
-                return protocol_id, utilization
-            except Exception as exc:
-                logger.warning(
-                    "Utilization read failed for %s: %s",
-                    protocol_id,
-                    exc,
-                )
-                return protocol_id, None
 
         results = await asyncio.gather(*(_read_one(pid) for pid in protocol_ids))
         return {pid: util for pid, util in results}

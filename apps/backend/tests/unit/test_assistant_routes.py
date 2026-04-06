@@ -441,3 +441,20 @@ async def test_delete_assistant_session_removes_messages_and_feedback(monkeypatc
         {"sub": "did:privy:123"},
     )
     assert listed.sessions == []
+
+
+def test_response_style_hints_prefers_dynamic_caps_for_optimizer_scope() -> None:
+    hints = assistant_routes._build_response_style_hints(
+        "Recommend market scope and max exposure caps for optimizer setup"
+    )
+
+    assert "do not need to sum to 100" in hints
+    assert "This is not financial advice." in hints
+
+
+def test_response_style_hints_uses_fixed_split_when_explicit() -> None:
+    hints = assistant_routes._build_response_style_hints(
+        "Give me a fixed split portfolio that sums to 100"
+    )
+
+    assert "sum to 100%" in hints

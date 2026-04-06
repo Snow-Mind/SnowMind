@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   Check,
   ChevronDown,
@@ -58,14 +59,14 @@ type StoredSessionSummary = AssistantSessionSummaryLike;
 const STARTER_PROMPTS: Array<{ kind: "search" | "spark" | "compass" | "wand"; label: string }> = [
   { kind: "spark", label: "How is risk score being calculated?" },
   { kind: "search", label: "Explain Aave's risk." },
-  { kind: "compass", label: "Propose a conservative portfolio with exact allocations (sum = 100%)." },
+  { kind: "compass", label: "Suggest enabled markets and max caps for optimizer (caps need not sum to 100%)." },
   { kind: "wand", label: "How are liquidity and yield profile fetched on-chain each day?" },
 ];
 
 const QUICK_INSERT_PROMPTS: string[] = [
   "Break down O/L/C/Y/A for each active market in a table.",
   "Explain whether today's L and Y came from fresh on-chain data.",
-  "Propose a concise conservative portfolio (markets + exact allocations totaling 100%).",
+  "Recommend market scope and per-market max caps for dynamic optimizer routing.",
 ];
 
 function createSessionId(): string {
@@ -240,6 +241,7 @@ function compactApiErrorMessage(err: APIError, fallback: string): string {
 }
 
 export function FloatingAssistant() {
+  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<StoredSessionSummary[]>([]);
@@ -257,6 +259,7 @@ export function FloatingAssistant() {
   const [sessionFetchVersion, setSessionFetchVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const onboardingAutoOpenRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -352,6 +355,18 @@ export function FloatingAssistant() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (pathname === "/onboarding") {
+      if (!onboardingAutoOpenRef.current) {
+        setIsOpen(true);
+        onboardingAutoOpenRef.current = true;
+      }
+      return;
+    }
+
+    onboardingAutoOpenRef.current = false;
+  }, [pathname]);
 
   useEffect(() => {
     if (!isOpen) return;

@@ -351,26 +351,77 @@ def _build_response_style_hints(user_message: str) -> str:
             "Do not end mid-sentence."
         )
 
+    asks_optimizer_scope = any(
+        token in normalized
+        for token in (
+            "max exposure",
+            "max cap",
+            "allocation cap",
+            "market scope",
+            "allowed market",
+            "allowed protocol",
+            "choose market",
+            "enable market",
+            "optimizer can use",
+            "dynamic optimizer",
+        )
+    )
+
+    asks_fixed_split = any(
+        token in normalized
+        for token in (
+            "sum to 100",
+            "sums to 100",
+            "totaling 100",
+            "fixed split",
+            "fixed allocation",
+            "equal weight",
+            "40/40/20",
+            "weights",
+        )
+    )
+
     asks_portfolio_advice = (
-        "portfolio" in normalized
-        and any(
-            token in normalized
-            for token in (
-                "advice",
-                "strategy",
-                "allocate",
-                "allocation",
-                "conservative",
-                "recommend",
-                "propose",
+        (
+            "portfolio" in normalized
+            and any(
+                token in normalized
+                for token in (
+                    "advice",
+                    "strategy",
+                    "allocate",
+                    "allocation",
+                    "conservative",
+                    "recommend",
+                    "propose",
+                )
             )
         )
-    ) or "market strategy" in normalized
+        or "market strategy" in normalized
+        or asks_optimizer_scope
+        or asks_fixed_split
+    )
+
     if asks_portfolio_advice:
+        if asks_optimizer_scope and not asks_fixed_split:
+            hints.append(
+                "Treat this as optimizer-configuration guidance, not a fixed split portfolio: "
+                "recommend 2-5 enabled markets with per-market max caps (often 100% for enabled markets unless "
+                "risk or liquidity constraints justify lower caps), and explicitly state that caps are upper bounds "
+                "that do not need to sum to 100 because routing is dynamic."
+            )
+        elif asks_fixed_split:
+            hints.append(
+                "Provide a fixed split portfolio with explicit allocation percentages that sum to 100%."
+            )
+        else:
+            hints.append(
+                "Default to dynamic optimizer guidance: recommend markets plus per-market max caps rather than "
+                "forcing fixed weights, unless the user explicitly requests a fixed split that sums to 100%."
+            )
+
         hints.append(
-            "Respond concisely with a concrete proposed portfolio only: provide 2-5 markets with "
-            "explicit allocation percentages that sum to 100%, keep rationale to one short line max, "
-            "avoid long risk explanations unless explicitly requested, and end with: "
+            "Keep rationale concise and practical, and end recommendation responses with: "
             "This is not financial advice."
         )
         hints.append(

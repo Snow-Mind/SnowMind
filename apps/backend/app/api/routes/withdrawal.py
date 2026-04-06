@@ -266,6 +266,57 @@ def _to_raw_usdc(amount_usdc: Decimal) -> int:
     return int((normalized * Decimal("1e6")).to_integral_exact())
 
 
+def _ensure_withdrawal_quote_within_onchain_balance(
+    fee_calc: FeeCalculation,
+    current_balance_usdc: Decimal,
+    account: dict,
+    yield_tracking: dict | None,
+) -> FeeCalculation:
+    """Ensure quoted fee + user transfer do not exceed current on-chain balance.
+
+    Decimal math is exact, but micro-unit quantization can still produce tiny
+    edge drifts in rare cases. Recompute once using the on-chain max if needed.
+    """
+    onchain_balance_raw = _to_raw_usdc(current_balance_usdc)
+    normalized = fee_calc
+
+    for attempt in range(2):
+        user_raw = _to_raw_usdc(normalized.user_receives)
+        fee_raw = _to_raw_usdc(normalized.agent_fee)
+
+        if user_raw <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Net withdrawal amount rounds to zero after fees",
+            )
+
+        total_out_raw = user_raw + fee_raw
+        if total_out_raw <= onchain_balance_raw:
+            return normalized
+
+        if attempt == 0:
+            logger.warning(
+                "Withdrawal quote exceeded on-chain balance for %s by %s microUSDC; recomputing",
+                account.get("address", "unknown"),
+                total_out_raw - onchain_balance_raw,
+            )
+            max_withdrawable = Decimal(onchain_balance_raw) / Decimal("1e6")
+            normalized = _compute_fee(
+                withdraw_amount_usdc=max_withdrawable,
+                current_balance_usdc=current_balance_usdc,
+                account=account,
+                yield_tracking=yield_tracking,
+            )
+            continue
+
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to build a safe withdrawal quote from on-chain balance. Please retry.",
+        )
+
+    return normalized
+
+
 def _build_withdrawal_authorization_message(
     *,
     smart_account_address: str,
@@ -380,6 +431,12 @@ async def preview_withdrawal(
     # Compute fee
     yield_tracking = get_yield_tracking(db, account["id"])
     fee_calc = _compute_fee(withdraw_amount, current_balance, account, yield_tracking)
+    fee_calc = _ensure_withdrawal_quote_within_onchain_balance(
+        fee_calc,
+        current_balance,
+        account,
+        yield_tracking,
+    )
 
     return WithdrawalPreviewResponse(
         withdrawAmount=str(fee_calc.withdraw_amount),
@@ -472,6 +529,12 @@ async def execute_withdrawal(
     # Compute fee
     yield_tracking = get_yield_tracking(db, account["id"])
     fee_calc = _compute_fee(withdraw_amount, current_balance, account, yield_tracking)
+    fee_calc = _ensure_withdrawal_quote_within_onchain_balance(
+        fee_calc,
+        current_balance,
+        account,
+        yield_tracking,
+    )
 
     # Build and submit withdrawal UserOp via Execution Service
     try:
@@ -526,10 +589,11 @@ async def execute_withdrawal(
         # Always use quantized fee-calculator output to avoid micro truncation drift.
         net_to_user = fee_calc.user_receives
         withdraw_raw = _to_raw_usdc(net_to_user)
-        if withdraw_raw <= 0:
+
+        if withdraw_raw + agent_fee_raw > _to_raw_usdc(current_balance):
             raise HTTPException(
-                status_code=400,
-                detail="Net withdrawal amount rounds to zero after fees",
+                status_code=503,
+                detail="Computed withdrawal exceeds on-chain balance. Please retry.",
             )
 
         payload = {

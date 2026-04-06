@@ -504,10 +504,6 @@ export default function OnboardingPage() {
   })();
 
   const selectedCount = selectedProtocols.size;
-  const selectedCapTotal = MARKET_PROTOCOL_IDS
-    .filter((pid) => selectedProtocols.has(pid))
-    .reduce((sum, pid) => sum + (allocationCaps[pid] ?? 100), 0);
-  const selectedCoveragePct = Math.min(selectedCapTotal, 100);
   const hasDeployableSelectedProtocol = MARKET_PROTOCOL_IDS.some(
     (pid) => selectedProtocols.has(pid) && (allocationCaps[pid] ?? 100) > 0,
   );
@@ -1507,8 +1503,6 @@ export default function OnboardingPage() {
               <p className="text-xs text-[#8A837C]">
                 Select markets your optimizer can use and set per-market max exposure.
                 Risk score is out of 9 (higher is safer).
-                Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation.
-                They are not endorsements or financial advice. Users should conduct their own research before making decisions.
               </p>
 
               {regrantOnlyMode && (
@@ -1856,27 +1850,9 @@ export default function OnboardingPage() {
                 </button>
               </div>
 
-              <div className="rounded-lg border border-[#E8E2DA] bg-[#F8F4EF] px-3 py-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-[#8A837C]">Combined max-cap coverage</span>
-                  <span className="font-mono text-sm font-semibold text-[#1A1715]">{selectedCoveragePct}%</span>
-                </div>
-                {selectedCapTotal < 100 && selectedCount > 0 && (
-                  <p className="mt-1 text-[11px] text-[#B45309]">
-                    Selected caps are below 100%; up to {100 - selectedCapTotal}% can stay idle.
-                  </p>
-                )}
-                {selectedCapTotal > 100 && selectedCount > 0 && (
-                  <p className="mt-1 text-[11px] text-[#8A837C]">
-                    Totals above 100% are valid since caps are per-market maximums, not fixed weights.
-                  </p>
-                )}
-                {!hasDeployableSelectedProtocol && selectedCount > 0 && (
-                  <p className="mt-1 text-[11px] text-[#B91C1C]">
-                    All selected markets are capped at 0%. Increase one cap to continue.
-                  </p>
-                )}
-              </div>
+              <p className="text-[11px] text-[#8A837C]">
+                Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
+              </p>
             </motion.div>
           )}
 

@@ -161,3 +161,61 @@ def test_requested_amount_at_or_above_balance_normalizes_to_full():
 
     assert is_full is True
     assert normalized_amount == Decimal("100")
+
+
+def test_withdrawal_quote_guard_recomputes_if_raw_total_exceeds_onchain():
+    """Quote should be recomputed when quantized transfers exceed on-chain balance."""
+    from app.api.routes.withdrawal import _ensure_withdrawal_quote_within_onchain_balance
+    from app.services.fee_calculator import FeeCalculation
+
+    over_quoted = FeeCalculation(
+        withdraw_amount=Decimal("100.000001"),
+        current_balance=Decimal("100"),
+        net_principal=Decimal("100"),
+        accrued_profit=Decimal("0"),
+        attributable_profit=Decimal("0"),
+        agent_fee=Decimal("0"),
+        user_receives=Decimal("100.000001"),
+        new_net_principal=Decimal("0"),
+        fee_exempt=True,
+        fee_rate=Decimal("0"),
+    )
+
+    normalized = _ensure_withdrawal_quote_within_onchain_balance(
+        fee_calc=over_quoted,
+        current_balance_usdc=Decimal("100"),
+        account={"fee_exempt": True, "address": "0x123"},
+        yield_tracking=None,
+    )
+
+    assert normalized.user_receives == Decimal("100")
+    assert normalized.agent_fee == Decimal("0")
+
+
+def test_withdrawal_quote_guard_keeps_valid_quote_unchanged():
+    """Already-safe quote should pass through unchanged."""
+    from app.api.routes.withdrawal import _ensure_withdrawal_quote_within_onchain_balance
+    from app.services.fee_calculator import FeeCalculation
+
+    safe_quote = FeeCalculation(
+        withdraw_amount=Decimal("50"),
+        current_balance=Decimal("100"),
+        net_principal=Decimal("100"),
+        accrued_profit=Decimal("0"),
+        attributable_profit=Decimal("0"),
+        agent_fee=Decimal("0"),
+        user_receives=Decimal("50"),
+        new_net_principal=Decimal("50"),
+        fee_exempt=True,
+        fee_rate=Decimal("0"),
+    )
+
+    normalized = _ensure_withdrawal_quote_within_onchain_balance(
+        fee_calc=safe_quote,
+        current_balance_usdc=Decimal("100"),
+        account={"fee_exempt": True, "address": "0x123"},
+        yield_tracking=None,
+    )
+
+    assert normalized.user_receives == Decimal("50")
+    assert normalized.agent_fee == Decimal("0")

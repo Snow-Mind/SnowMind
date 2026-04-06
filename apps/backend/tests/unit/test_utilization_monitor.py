@@ -87,3 +87,31 @@ async def test_execute_targeted_withdrawal_sets_cooldown(
 
     # Second call should be skipped due to cooldown.
     assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_utilizations_retries_then_succeeds(monitor: UtilizationMonitor) -> None:
+    adapter = MagicMock()
+    adapter.get_utilization = AsyncMock(side_effect=[RuntimeError("rpc"), Decimal("0.95")])
+
+    with patch("app.workers.utilization_monitor.ALL_ADAPTERS", {"benqi": adapter}), patch(
+        "app.workers.utilization_monitor.asyncio.sleep", AsyncMock(return_value=None)
+    ):
+        results = await monitor._fetch_utilizations(["benqi"])
+
+    assert results["benqi"] == Decimal("0.95")
+    assert adapter.get_utilization.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_utilizations_returns_none_after_retry_exhaustion(monitor: UtilizationMonitor) -> None:
+    adapter = MagicMock()
+    adapter.get_utilization = AsyncMock(side_effect=RuntimeError("rpc-down"))
+
+    with patch("app.workers.utilization_monitor.ALL_ADAPTERS", {"benqi": adapter}), patch(
+        "app.workers.utilization_monitor.asyncio.sleep", AsyncMock(return_value=None)
+    ):
+        results = await monitor._fetch_utilizations(["benqi"])
+
+    assert results["benqi"] is None
+    assert adapter.get_utilization.await_count == 3

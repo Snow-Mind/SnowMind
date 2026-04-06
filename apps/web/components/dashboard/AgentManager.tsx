@@ -154,11 +154,6 @@ export default function AgentManager({
   }, [currentScopeKey, currentScope, currentCapsKey, currentCaps]);
 
   const selectedOrdered = CANONICAL_PROTOCOL_IDS.filter((id) => selectedProtocols.has(id));
-  const selectedCapTotal = selectedOrdered.reduce(
-    (sum, pid) => sum + (protocolCaps[pid] ?? 100),
-    0,
-  );
-  const selectedCoveragePct = Math.min(selectedCapTotal, 100);
   const hasDeployableSelectedMarket = selectedOrdered.some(
     (pid) => (protocolCaps[pid] ?? 100) > 0,
   );
@@ -274,8 +269,6 @@ export default function AgentManager({
           Changes sync to your active session-key scope in backend.
           To change on-chain signed permissions, re-grant session key from Settings.
           Risk score is out of 9 (higher is safer).
-          Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation.
-          They are not endorsements or financial advice. Users should conduct their own research before making decisions.
         </p>
 
         {!hasActiveSessionKey && (
@@ -545,28 +538,6 @@ export default function AgentManager({
           <span className="font-mono text-sm font-semibold text-[#1A1715]">{selectedOrdered.length}</span>
         </div>
 
-        <div className="rounded-lg border border-[#E8E2DA] bg-[#F8F4EF] px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#8A837C]">Combined max-cap coverage</span>
-            <span className="font-mono text-sm font-semibold text-[#1A1715]">{selectedCoveragePct}%</span>
-          </div>
-          {selectedCapTotal < 100 && (
-            <p className="mt-1 text-[11px] text-[#B45309]">
-              Combined caps across selected markets are below 100%; up to {100 - selectedCapTotal}% can remain idle.
-            </p>
-          )}
-          {selectedCapTotal > 100 && (
-            <p className="mt-1 text-[11px] text-[#8A837C]">
-              Totals above 100% are expected because caps are per-market maximums, not fixed portfolio weights.
-            </p>
-          )}
-          {!hasDeployableSelectedMarket && (
-            <p className="mt-1 text-[11px] text-[#B91C1C]">
-              All selected market caps are 0%. Increase at least one cap to allow deployment.
-            </p>
-          )}
-        </div>
-
         <button
           type="button"
           onClick={handleSave}
@@ -585,6 +556,10 @@ export default function AgentManager({
             </>
           )}
         </button>
+
+        <p className="text-[11px] text-[#8A837C]">
+          Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
+        </p>
       </div>
     </div>
   );
