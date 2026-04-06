@@ -56,9 +56,12 @@ _PRINCIPAL_RECONCILE_IMPROVEMENT_EPSILON_USDC = Decimal("0.01")
 _PRINCIPAL_RECONCILE_MAX_TX = 5000
 _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
 _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
+_PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
 _SNOWTRACE_PAGE_SIZE = 1000
 _SNOWTRACE_MAX_PAGES = 20
 _SNOWTRACE_TIMEOUT_SECONDS = 20.0
+_RPC_LOG_SCAN_BLOCK_STEP = 2_000_000
+_RPC_LOG_SCAN_MIN_BLOCK_STEP = 100_000
 
 # Short-lived in-memory cache to dampen duplicate dashboard polling.
 _portfolio_cache: dict[str, tuple[float, dict]] = {}
@@ -101,8 +104,23 @@ def _topic_to_address(topic_hex: str) -> str:
     return f"0x{normalized[-40:]}"
 
 
+def _address_to_topic(address: str) -> str:
+    normalized = address.lower().replace("0x", "")
+    return f"0x{'0' * 24}{normalized}"
+
+
 def _usdc_to_decimal(raw: str | int) -> Decimal:
     return Decimal(str(raw)) / Decimal("1000000")
+
+
+def _log_data_to_int(data: object) -> int:
+    if isinstance(data, (bytes, bytearray)):
+        return int.from_bytes(data, "big")
+
+    raw = str(data or "0x0")
+    if raw.startswith("0x"):
+        return int(raw, 16)
+    return int(raw)
 
 
 async def _collect_principal_from_rebalance_receipts(
@@ -309,6 +327,124 @@ async def _collect_principal_from_snowtrace(
     return cumulative_deposited, cumulative_withdrawn
 
 
+async def _fetch_transfer_logs(
+    w3,
+    *,
+    usdc_address: str,
+    transfer_topic: str,
+    source_topic: str,
+    destination_topic: str,
+) -> list[dict] | None:
+    params = {
+        "address": usdc_address,
+        "fromBlock": 0,
+        "toBlock": "latest",
+        "topics": [transfer_topic, source_topic, destination_topic],
+    }
+
+    try:
+        return await w3.eth.get_logs(params)
+    except Exception as exc:
+        logger.warning(
+            "RPC transfer log full-range query failed; retrying chunked scan: %s",
+            exc,
+        )
+
+    try:
+        latest_block = int(await w3.eth.block_number)
+    except Exception as exc:
+        logger.warning("Failed to read latest block for chunked transfer scan: %s", exc)
+        return None
+
+    logs: list[dict] = []
+    block_step = _RPC_LOG_SCAN_BLOCK_STEP
+    start = 0
+
+    while start <= latest_block:
+        end = min(start + block_step - 1, latest_block)
+        try:
+            chunk = await w3.eth.get_logs(
+                {
+                    "address": usdc_address,
+                    "fromBlock": start,
+                    "toBlock": end,
+                    "topics": [transfer_topic, source_topic, destination_topic],
+                }
+            )
+            logs.extend(chunk)
+            start = end + 1
+        except Exception as exc:
+            if block_step <= _RPC_LOG_SCAN_MIN_BLOCK_STEP:
+                logger.warning(
+                    "RPC transfer log chunked scan failed for range %d-%d: %s",
+                    start,
+                    end,
+                    exc,
+                )
+                return None
+
+            block_step = max(block_step // 2, _RPC_LOG_SCAN_MIN_BLOCK_STEP)
+            logger.warning(
+                "Reducing transfer log scan range to %d blocks after error: %s",
+                block_step,
+                exc,
+            )
+
+    return logs
+
+
+async def _collect_principal_from_rpc_logs(
+    smart_address: str,
+    owner_address: str,
+    usdc_address: str,
+) -> tuple[Decimal, Decimal] | None:
+    """Collect lifetime owner<->smart USDC transfers directly from RPC logs."""
+    try:
+        w3 = get_shared_async_web3()
+        transfer_topic = f"0x{w3.keccak(text='Transfer(address,address,uint256)').hex().replace('0x', '')}"
+        checksum_usdc = w3.to_checksum_address(usdc_address)
+        owner_topic = _address_to_topic(owner_address)
+        smart_topic = _address_to_topic(smart_address)
+
+        deposit_logs = await _fetch_transfer_logs(
+            w3,
+            usdc_address=checksum_usdc,
+            transfer_topic=transfer_topic,
+            source_topic=owner_topic,
+            destination_topic=smart_topic,
+        )
+        withdraw_logs = await _fetch_transfer_logs(
+            w3,
+            usdc_address=checksum_usdc,
+            transfer_topic=transfer_topic,
+            source_topic=smart_topic,
+            destination_topic=owner_topic,
+        )
+
+        if deposit_logs is None and withdraw_logs is None:
+            return None
+
+        cumulative_deposited = Decimal("0")
+        for entry in deposit_logs or []:
+            cumulative_deposited += _usdc_to_decimal(_log_data_to_int(entry.get("data")))
+
+        cumulative_withdrawn = Decimal("0")
+        for entry in withdraw_logs or []:
+            cumulative_withdrawn += _usdc_to_decimal(_log_data_to_int(entry.get("data")))
+
+        if cumulative_deposited <= Decimal("0") and cumulative_withdrawn <= Decimal("0"):
+            return None
+
+        return cumulative_deposited, cumulative_withdrawn
+    except Exception as exc:
+        logger.warning(
+            "RPC log principal collection failed for %s: %s",
+            smart_address,
+            exc,
+        )
+        return None
+
+
 async def _reconcile_principal_tracking_from_chain(
     db: Client,
     account_id: str,
@@ -327,9 +463,6 @@ async def _reconcile_principal_tracking_from_chain(
     next_allowed = _principal_reconcile_cooldowns.get(cooldown_key, 0.0)
     if now_mono < next_allowed:
         return None
-    _principal_reconcile_cooldowns[cooldown_key] = (
-        now_mono + _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS
-    )
 
     try:
         settings = get_settings()
@@ -355,9 +488,21 @@ async def _reconcile_principal_tracking_from_chain(
                 owner_address=owner_address,
                 usdc_address=usdc_address,
             )
-            if receipt_totals is None:
-                return None
-            cumulative_deposited, cumulative_withdrawn = receipt_totals
+            if receipt_totals is not None:
+                cumulative_deposited, cumulative_withdrawn = receipt_totals
+            else:
+                rpc_totals = await _collect_principal_from_rpc_logs(
+                    smart_address=smart_address,
+                    owner_address=owner_address,
+                    usdc_address=usdc_address,
+                )
+                if rpc_totals is None:
+                    _principal_reconcile_cooldowns[cooldown_key] = (
+                        time.monotonic() + _PRINCIPAL_RECONCILE_RETRY_SECONDS
+                    )
+                    return None
+                cumulative_deposited, cumulative_withdrawn = rpc_totals
+                source_used = "rpc_logs"
 
         deposited_q = cumulative_deposited.quantize(Decimal("0.000001"))
         withdrawn_q = cumulative_withdrawn.quantize(Decimal("0.000001"))
@@ -383,8 +528,14 @@ async def _reconcile_principal_tracking_from_chain(
             withdrawn_q,
             reconciled_net_principal,
         )
+        _principal_reconcile_cooldowns[cooldown_key] = (
+            time.monotonic() + _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS
+        )
         return reconciled_net_principal
     except Exception as exc:
+        _principal_reconcile_cooldowns[cooldown_key] = (
+            time.monotonic() + _PRINCIPAL_RECONCILE_RETRY_SECONDS
+        )
         logger.warning(
             "Principal reconciliation from chain failed for %s: %s",
             smart_address,

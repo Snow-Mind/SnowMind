@@ -354,6 +354,7 @@ def _record_funding_transfer(
     funding_tx_hash: str | None,
     funding_amount_usdc: str | None,
     funding_source: str | None,
+    is_existing_account: bool,
 ) -> None:
     """Persist onboarding funding transfer as a durable activity row.
 
@@ -374,6 +375,15 @@ def _record_funding_transfer(
 
     normalized_amount = amount.quantize(Decimal("0.000001"))
     normalized_hash = funding_tx_hash.lower() if funding_tx_hash else None
+
+    # Guardrail: for already-registered accounts, require tx hash so retries
+    # cannot inflate principal tracking with duplicate implicit deposits.
+    if is_existing_account and not normalized_hash:
+        logger.warning(
+            "Skipping funding activity for existing account %s because funding tx hash is missing",
+            address,
+        )
+        return
 
     # Idempotency: same funding tx for same account should not duplicate rows.
     if normalized_hash:
@@ -526,6 +536,7 @@ async def _do_register(
         req.funding_tx_hash,
         req.funding_amount_usdc,
         req.funding_source,
+        is_existing_account=bool(existing.data),
     )
 
     # Record initial allocation FIRST (idempotent, must not be blocked by

@@ -4,6 +4,7 @@ Usage:
   python -m app.scripts.backfill_account_principal_tracking --dry-run
   python -m app.scripts.backfill_account_principal_tracking --limit 5000 --batch-size 200
   python -m app.scripts.backfill_account_principal_tracking --account-id <uuid>
+    python -m app.scripts.backfill_account_principal_tracking --smart-address <0x...>
 
 What it repairs:
 - account_yield_tracking drift where cumulative_deposited/cumulative_net_withdrawn
@@ -51,7 +52,14 @@ def _read_current_net_principal(db, account_id: str) -> Decimal:
         return Decimal("0")
 
 
-async def run(*, dry_run: bool, limit: int, batch_size: int, account_id: str | None) -> int:
+async def run(
+    *,
+    dry_run: bool,
+    limit: int,
+    batch_size: int,
+    account_id: str | None,
+    smart_address: str | None,
+) -> int:
     db = get_supabase()
 
     scanned = 0
@@ -70,6 +78,8 @@ async def run(*, dry_run: bool, limit: int, batch_size: int, account_id: str | N
         )
         if account_id:
             query = query.eq("id", account_id)
+        if smart_address:
+            query = query.eq("address", smart_address)
 
         rows = query.execute().data or []
         if not rows:
@@ -128,13 +138,14 @@ async def run(*, dry_run: bool, limit: int, batch_size: int, account_id: str | N
         offset += len(rows)
 
     logger.info(
-        "Principal backfill complete: scanned=%d reconciled=%d skipped=%d failed=%d dry_run=%s account_id=%s",
+        "Principal backfill complete: scanned=%d reconciled=%d skipped=%d failed=%d dry_run=%s account_id=%s smart_address=%s",
         scanned,
         reconciled,
         skipped,
         failed,
         dry_run,
         account_id or "*",
+        smart_address or "*",
     )
     return 1 if failed else 0
 
@@ -145,6 +156,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=5000, help="Maximum accounts to scan")
     parser.add_argument("--batch-size", type=int, default=200, help="Accounts per page")
     parser.add_argument("--account-id", type=str, default=None, help="Optional single-account scope")
+    parser.add_argument("--smart-address", type=str, default=None, help="Optional smart-account address scope")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -155,6 +167,9 @@ def main() -> int:
     if args.batch_size <= 0:
         logger.error("--batch-size must be positive")
         return 2
+    if args.account_id and args.smart_address:
+        logger.error("Use either --account-id or --smart-address, not both")
+        return 2
 
     return asyncio.run(
         run(
@@ -162,6 +177,7 @@ def main() -> int:
             limit=args.limit,
             batch_size=args.batch_size,
             account_id=args.account_id,
+            smart_address=args.smart_address,
         )
     )
 

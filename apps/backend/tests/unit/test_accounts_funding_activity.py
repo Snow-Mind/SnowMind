@@ -56,6 +56,7 @@ def test_record_funding_transfer_inserts_activity_and_updates_principal() -> Non
             funding_tx_hash="0xABCDEF",
             funding_amount_usdc="50",
             funding_source="onboarding_wallet_transfer",
+            is_existing_account=False,
         )
 
     assert len(db.rebalance_logs.inserted_rows) == 1
@@ -82,6 +83,26 @@ def test_record_funding_transfer_skips_duplicate_tx_hash() -> None:
             funding_tx_hash="0xABCDEF",
             funding_amount_usdc="50",
             funding_source="onboarding_wallet_transfer",
+            is_existing_account=False,
+        )
+
+    assert db.rebalance_logs.inserted_rows == []
+    record_deposit.assert_not_called()
+
+
+def test_record_funding_transfer_skips_existing_account_without_tx_hash() -> None:
+    """Existing-account retries without tx hash must not inflate principal."""
+    db = _FakeDB(existing_tx=False)
+
+    with patch("app.services.fee_calculator.record_deposit") as record_deposit:
+        accounts._record_funding_transfer(
+            db=db,
+            account_id="acct-1",
+            address="0xabc",
+            funding_tx_hash=None,
+            funding_amount_usdc="50",
+            funding_source="onboarding_wallet_transfer",
+            is_existing_account=True,
         )
 
     assert db.rebalance_logs.inserted_rows == []
