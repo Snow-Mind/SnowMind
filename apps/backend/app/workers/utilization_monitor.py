@@ -388,6 +388,49 @@ class UtilizationMonitor:
             trigger_reason=trigger_reason,
         )
 
+        # Immediately run a single follow-up rebalance so recovered idle funds
+        # can be redeployed to healthier protocols without waiting for the
+        # next scheduler cadence.
+        await self._run_post_withdrawal_rebalance(
+            account_id=position.account_id,
+            smart_account_address=position.smart_account_address,
+            source_protocol_id=protocol_id,
+        )
+
+    async def _run_post_withdrawal_rebalance(
+        self,
+        *,
+        account_id: str,
+        smart_account_address: str,
+        source_protocol_id: str,
+    ) -> None:
+        """Run one immediate rebalance after an emergency partial withdrawal."""
+        try:
+            result = await self.rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=smart_account_address,
+            )
+            status = "unknown"
+            reason = None
+            if isinstance(result, dict):
+                status = str(result.get("status") or status)
+                reason = result.get("skip_reason") or result.get("reason")
+            logger.info(
+                "Post-emergency rebalance result for account=%s after %s withdrawal: status=%s reason=%s",
+                account_id,
+                source_protocol_id,
+                status,
+                reason,
+            )
+        except Exception as exc:
+            # Fail-safe: emergency exit already succeeded; do not roll back.
+            logger.warning(
+                "Post-emergency rebalance failed for account=%s after %s withdrawal: %s",
+                account_id,
+                source_protocol_id,
+                exc,
+            )
+
     async def _resolve_withdrawable_amount(
         self,
         position: PositionSnapshot,

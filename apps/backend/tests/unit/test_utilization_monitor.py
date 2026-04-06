@@ -67,6 +67,7 @@ async def test_execute_targeted_withdrawal_sets_cooldown(
     monitor._resolve_withdrawable_amount = AsyncMock(return_value=Decimal("50.000000"))
     monitor._record_withdrawal_activity = MagicMock()
     monitor.rebalancer.execute_partial_withdrawal = AsyncMock(return_value="0xtx")
+    monitor.rebalancer.check_and_rebalance = AsyncMock(return_value={"status": "executed"})
 
     position = PositionSnapshot(
         account_id="acct-1",
@@ -87,6 +88,33 @@ async def test_execute_targeted_withdrawal_sets_cooldown(
 
     # Second call should be skipped due to cooldown.
     assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
+    assert monitor.rebalancer.check_and_rebalance.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_targeted_withdrawal_post_rebalance_failure_nonfatal(
+    monitor: UtilizationMonitor,
+) -> None:
+    monitor._resolve_withdrawable_amount = AsyncMock(return_value=Decimal("25.000000"))
+    monitor._record_withdrawal_activity = MagicMock()
+    monitor.rebalancer.execute_partial_withdrawal = AsyncMock(return_value="0xtx")
+    monitor.rebalancer.check_and_rebalance = AsyncMock(side_effect=RuntimeError("planner failure"))
+
+    position = PositionSnapshot(
+        account_id="acct-2",
+        smart_account_address="0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556",
+        amount_usdc=Decimal("25"),
+    )
+
+    # Post-withdraw rebalance failures must never undo or block emergency exits.
+    await monitor._execute_targeted_withdrawal(
+        protocol_id="silo_savusd_usdc",
+        position=position,
+        trigger_reason="absolute utilization above 92%",
+    )
+
+    assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
+    assert monitor.rebalancer.check_and_rebalance.await_count == 1
 
 
 @pytest.mark.asyncio

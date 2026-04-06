@@ -1578,6 +1578,19 @@ export async function executeRebalance({
       && typeof ecdsaOwner === "string"
       && backendRecoveredSigner.toLowerCase() === ecdsaOwner.toLowerCase()
 
+    const ownerLooksUninitialized = typeof ecdsaOwner === "string" && (
+      ecdsaOwner.toLowerCase() === zeroAddress.toLowerCase() ||
+      ecdsaOwner.toLowerCase() === "unknown"
+    )
+    const typedDataDiagnosticsReady = (
+      backendTypedDataHash !== "none" &&
+      backendValidationId !== "none" &&
+      backendSelectorDataHash !== "none" &&
+      onchainNonce !== null &&
+      sdkNonce !== null
+    )
+    const mismatchActionable = typedDataDiagnosticsReady && !ownerLooksUninitialized
+
     // Hash the enableData for cross-side comparison with frontend
     const enableDataHash = enableDataHex ? keccak256(enableDataHex) : "none"
 
@@ -1620,23 +1633,43 @@ export async function executeRebalance({
 
     const hasRecoverableEnableSig = typeof enableSig === "string" && enableSig.startsWith("0x") && enableSig.length > 2
     if (hasRecoverableEnableSig && !backendSignerMatchesOwner) {
-      console.log(JSON.stringify({
-        level: "error",
-        action: "enable_signature_MISMATCH",
-        detail: "Compare backendTypedDataHash with frontend typedDataHash from console logs. " +
-          "If hashes match, the typed data is identical and the enable signature itself is the problem. " +
-          "If hashes differ, compare validationId, selectorDataHash, domain, nonce to find the discrepancy.",
-        backendRecoveredSigner,
-        ecdsaOwner,
-        enableDataHash,
-        enableSigHash,
-        backendTypedDataHash,
-        backendValidationId,
-        backendSelectorDataHash,
-        onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
-        sdkNonce,
-        timestamp: new Date().toISOString(),
-      }))
+      if (mismatchActionable) {
+        console.log(JSON.stringify({
+          level: "error",
+          action: "enable_signature_MISMATCH",
+          detail: "Compare backendTypedDataHash with frontend typedDataHash from console logs. " +
+            "If hashes match, the typed data is identical and the enable signature itself is the problem. " +
+            "If hashes differ, compare validationId, selectorDataHash, domain, nonce to find the discrepancy.",
+          backendRecoveredSigner,
+          ecdsaOwner,
+          enableDataHash,
+          enableSigHash,
+          backendTypedDataHash,
+          backendValidationId,
+          backendSelectorDataHash,
+          onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
+          sdkNonce,
+          timestamp: new Date().toISOString(),
+        }))
+      } else {
+        console.log(JSON.stringify({
+          level: "warn",
+          action: "enable_signature_mismatch_deferred",
+          detail: "Non-actionable mismatch during pre-enable diagnostics (owner uninitialized or typed-data inputs incomplete).",
+          backendRecoveredSigner,
+          ecdsaOwner,
+          enableDataHash,
+          enableSigHash,
+          backendTypedDataHash,
+          backendValidationId,
+          backendSelectorDataHash,
+          diagnosticsReady: typedDataDiagnosticsReady,
+          ownerLooksUninitialized,
+          onchainNonce: onchainNonce !== null ? Number(onchainNonce) : null,
+          sdkNonce,
+          timestamp: new Date().toISOString(),
+        }))
+      }
     }
   } catch (debugErr) {
     console.log(JSON.stringify({
