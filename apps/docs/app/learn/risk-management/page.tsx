@@ -64,7 +64,7 @@ export default function RiskManagementPage() {
         Even after target allocations are computed, a rebalance only executes if execution gates pass:
       </p>
       <ol>
-        <li><strong>Cooldown (deposit-size aware):</strong> &lt;=$100: 24h, &lt;=$1,000: 12h, &lt;=$10,000: 8h, &gt;$10,000: 6h since the last successful rebalance</li>
+        <li><strong>Cadence gate (deposit-size aware):</strong> &lt;=$3,000: 12h, &lt;=$10,000: 4h, &lt;=$100,000: 2h, &gt;$100,000: 1h since the last successful optimizer activity</li>
         <li><strong>Minimum movement:</strong> total movement must be at least $1</li>
         <li><strong>Profitability:</strong> estimated daily gain must exceed estimated execution cost</li>
         <li><strong>Max rebalance size:</strong> if a single rebalance would move more than the configured cap, it is halted for manual review</li>

@@ -43,7 +43,7 @@ const DETAILED_STEPS = [
     details: [
       "Allocation drift > 5% triggers evaluation",
       "Daily yield improvement must exceed rebalance gas cost",
-      "Minimum 6-hour cooldown between rebalances",
+      "Deposit-tier cadence gate: <=$3,000 (12h), <=$10,000 (4h), <=$100,000 (2h), >$100,000 (1h)",
       "30-day average APY prevents chasing short spikes",
     ],
   },

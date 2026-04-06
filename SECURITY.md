@@ -43,7 +43,7 @@ If the SnowMind backend is fully compromised and the attacker gains access to th
 ### On-Chain Safety Constraints
 
 - **15% TVL cap**: Allocator constraint prevents over-allocation to any single lending pool's liquidity (Aave/Benqi). ERC-4626 vaults (Spark, Euler, Silo) have no TVL cap.
-- **6-hour cooldown**: Minimum time between rebalances prevents rapid cycling
+- **Deposit-tier cadence gate**: Minimum time between optimizer runs scales by principal size (<= $3,000: 12h, <= $10,000: 4h, <= $100,000: 2h, > $100,000: 1h)
 - **Net-positive gate**: Rebalance only executes if improvement exceeds gas costs
 
 ## Emergency Procedures
