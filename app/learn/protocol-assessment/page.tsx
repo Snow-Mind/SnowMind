@@ -3,7 +3,7 @@ import { Callout } from "@/components/callout";
 
 export const metadata: Metadata = {
   title: "Protocol Assessment",
-  description: "How SnowMind evaluates and scores the risk of each supported protocol using a transparent 10-point framework.",
+  description: "How SnowMind evaluates and scores the risk of each supported protocol using a transparent 9-point framework.",
 };
 
 export default function ProtocolAssessmentPage() {
@@ -11,13 +11,16 @@ export default function ProtocolAssessmentPage() {
     <article className="prose max-w-none">
       <h1>Protocol Assessment</h1>
       <p className="lead">
-        SnowMind evaluates every protocol using a transparent 10-point risk scoring framework.
+        SnowMind evaluates every protocol using a transparent 9-point risk scoring framework.
         Scores help users assess risk at a glance and inform the AI assistant&apos;s explanations.
       </p>
 
       <Callout variant="info" title="Scores Are Informational">
         Scores are not used for rebalancing decisions — the optimizer has its own separate logic.
-        This scoring is purely to help users decide which protocols to activate.
+        This scoring is purely to help users decide which protocols to activate. Scores reflect
+        SnowMind&apos;s independent assessment based on publicly available on-chain data and
+        documentation. They are not endorsements or financial advice. Users should conduct their
+        own research before making decisions.
       </Callout>
 
       <h2>Hard Filters</h2>
@@ -36,11 +39,11 @@ export default function ProtocolAssessmentPage() {
           <tbody>
             <tr>
               <td>Audit</td>
-              <td>At least 1 completed security audit</td>
+              <td>At least 1 completed security audit from a recognized firm</td>
             </tr>
             <tr>
               <td>Exploit history</td>
-              <td>No exploits in the past 12 months</td>
+              <td>No exploits in the past 12 months (any version or deployment)</td>
             </tr>
             <tr>
               <td>Source code</td>
@@ -54,134 +57,217 @@ export default function ProtocolAssessmentPage() {
         it does not appear on the protocol selection page.
       </p>
 
-      <h2>Scoring Categories (10 points max)</h2>
+      <h2>Scoring Categories (9 points max)</h2>
+      <p>
+        Each listed protocol is scored across five categories. Three categories are reviewed
+        manually when a protocol is onboarded. Two categories — Liquidity and Yield Profile —
+        are updated automatically every 24 hours from on-chain data, so scores reflect current
+        market conditions.
+      </p>
 
-      <h3>1. Protocol Safety (max 2 points)</h3>
-      <p>How secure and trustworthy is the protocol itself?</p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
-              <th>Points</th>
-              <th>Details</th>
+              <th>#</th>
+              <th>Category</th>
+              <th>Max Points</th>
+              <th>Data Source</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Audited</td>
               <td>1</td>
-              <td>At least 1 completed audit from a recognized firm</td>
-            </tr>
-            <tr>
-              <td>No exploit history ever</td>
-              <td>1</td>
-              <td>Never exploited across any deployment or version</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p>
-        Exploit history considers all versions. If v1 was exploited but v2 is a full rewrite,
-        the point is still lost — the team&apos;s track record matters.
-      </p>
-      <h3>2. Liquidity (max 3 points)</h3>
-      <p>How much capital is in the protocol and how reliable is access to it? Checked every 24 hours.</p>
-      <div className="overflow-x-auto">
-        <table>
-          <thead>
-            <tr>
-              <th>Check</th>
-              <th>Points</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>TVL &gt; $10M</td>
-              <td>3</td>
-              <td>Large, established pool with deep liquidity</td>
-            </tr>
-            <tr>
-              <td>TVL &gt; $1M</td>
+              <td>Oracle Quality</td>
               <td>2</td>
-              <td>Moderate liquidity, sufficient for most deposit sizes</td>
+              <td>Manual review</td>
             </tr>
             <tr>
-              <td>TVL &gt; $500K</td>
+              <td>2</td>
+              <td>Liquidity</td>
+              <td>3</td>
+              <td>On-chain (updated daily)</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Collateral Quality</td>
+              <td>2</td>
+              <td>Manual review</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>Yield Profile</td>
               <td>1</td>
-              <td>Smaller pool, limited capacity</td>
+              <td>On-chain (updated daily)</td>
             </tr>
             <tr>
-              <td>TVL &lt; $500K</td>
-              <td>0</td>
-              <td>Very small, deposits may significantly impact rates</td>
+              <td>5</td>
+              <td>Architecture</td>
+              <td>1</td>
+              <td>Manual review</td>
+            </tr>
+            <tr>
+              <td></td>
+              <td><strong>Total</strong></td>
+              <td><strong>9</strong></td>
+              <td></td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <h3>1. Oracle Quality (max 2 points)</h3>
       <p>
-        TVL is measured as the total USDC deposited in the specific market/vault SnowMind
-        interacts with, not the protocol&apos;s overall TVL across all assets and chains.
+        How reliable and trustworthy are the price feeds that the protocol depends on?
+        Oracle manipulation is one of the most common exploit vectors in DeFi lending,
+        so the quality and independence of price feeds matters.
       </p>
+      <div className="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Points</th>
+              <th>Criteria</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2</td>
+              <td>
+                Industry-standard oracle provider (e.g. Chainlink, Chronicle, Pyth) with
+                multi-source aggregation and on-chain verifiable configuration. Or no external
+                oracle dependency (e.g. yield rate set directly by protocol governance).
+              </td>
+            </tr>
+            <tr>
+              <td>1</td>
+              <td>
+                Reputable oracle provider, but with trust assumptions — for example, oracle
+                selection is controlled by a third party (e.g. a vault curator), only a single
+                price source with no fallback, or the provider has limited battle-testing at scale.
+              </td>
+            </tr>
+            <tr>
+              <td>0</td>
+              <td>
+                Custom or proprietary oracle, TWAP based on a low-liquidity pool, no fallback
+                mechanism, or oracle logic that is not publicly verifiable on-chain.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>2. Liquidity (max 3 points)</h3>
+      <p>
+        How much USDC is actually available for withdrawal? This is checked every 24 hours
+        from on-chain data.
+      </p>
+      <div className="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Points</th>
+              <th>Criteria</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>3</td>
+              <td>Available liquidity &gt; $10M — deep liquidity, reliable withdrawal capacity</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Available liquidity &gt; $1M — sufficient for most deposit sizes</td>
+            </tr>
+            <tr>
+              <td>1</td>
+              <td>Available liquidity &gt; $500K — limited capacity, may impact rates</td>
+            </tr>
+            <tr>
+              <td>0</td>
+              <td>Available liquidity &lt; $500K — withdrawals may be constrained</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <Callout variant="info" title="How We Measure Liquidity">
+        For lending protocols, available liquidity is total USDC supplied minus total USDC
+        borrowed in the specific market SnowMind uses — not protocol-wide TVL. For savings
+        vaults, it is the total USDC deposited (TVL) in the vault. This ensures the score
+        reflects the actual capacity of each market.
+      </Callout>
 
       <h3>3. Collateral Quality (max 2 points)</h3>
-      <p>What assets are borrowers posting as collateral against the USDC that SnowMind lends?</p>
+      <p>
+        What assets are backing the USDC that SnowMind deposits? In lending protocols,
+        borrowers post collateral to borrow USDC. If that collateral loses value faster
+        than liquidators can act, it can create bad debt that affects depositors. For savings
+        vaults with no borrowers, collateral quality considers the underlying asset risk instead.
+      </p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Blue chip only or N/A</td>
               <td>2</td>
-              <td>Collateral is BTC, ETH, USDC, or other major assets</td>
+              <td>
+                Blue-chip only — collateral consists of major, proven assets (BTC, ETH,
+                USDC, etc.). Also applies to savings vaults where there are no borrowers
+                and therefore no collateral risk.
+              </td>
             </tr>
             <tr>
-              <td>Mixed or yield-bearing stablecoins</td>
               <td>1</td>
-              <td>Includes yield-bearing assets like sUSDe, savUSD with additional depeg risk</td>
+              <td>
+                Mixed — includes yield-bearing or wrapped assets (e.g. liquid staking tokens,
+                yield-bearing stablecoins) that carry additional depeg or slashing risk.
+              </td>
             </tr>
             <tr>
-              <td>Exotic or synthetic only</td>
               <td>0</td>
-              <td>Entirely newer, less proven synthetic or algorithmic assets</td>
+              <td>
+                Exotic or synthetic — primarily newer, unproven, or highly volatile collateral
+                assets.
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3>4. Yield Profile (max 2 points)</h3>
-      <p>How sustainable and predictable is the yield? Checked every 24 hours.</p>
+      <h3>4. Yield Profile (max 1 point)</h3>
+      <p>
+        How stable is the yield? This is calculated every 24 hours from on-chain data.
+        SnowMind only considers organic yield (real borrower interest or protocol-set rates)
+        — token incentives and airdrops are excluded from APY calculations.
+      </p>
       <div className="overflow-x-auto">
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Organic and stable</td>
-              <td>2</td>
-              <td>Yield from real borrower interest or protocol-set rates with low variance</td>
-            </tr>
-            <tr>
-              <td>Organic but volatile</td>
               <td>1</td>
-              <td>Real lending activity but fluctuates significantly</td>
+              <td>
+                Organic and stable — the 30-day APY standard deviation is less than 30%
+                of the mean APY.
+              </td>
             </tr>
             <tr>
-              <td>Mostly incentive-driven</td>
               <td>0</td>
-              <td>Primarily from token incentives that can end at any time</td>
+              <td>
+                Organic but volatile — the 30-day APY standard deviation is 30% or more
+                of the mean APY.
+              </td>
             </tr>
           </tbody>
         </table>
@@ -193,25 +279,41 @@ export default function ProtocolAssessmentPage() {
         <table>
           <thead>
             <tr>
-              <th>Check</th>
               <th>Points</th>
-              <th>Details</th>
+              <th>Criteria</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Direct deposit</td>
               <td>1</td>
-              <td>USDC deposited directly into the lending pool or savings contract</td>
+              <td>
+                Direct deposit — USDC is deposited directly into the lending pool or vault
+                contract with no intermediary.
+              </td>
             </tr>
             <tr>
-              <td>Through curator or wrapper</td>
               <td>0</td>
-              <td>Additional layer (vault curator, meta-vault, savings wrapper)</td>
+              <td>
+                Through curator or wrapper — an additional contract layer sits between
+                SnowMind and the yield source (e.g. a vault curator, meta-vault, PSM
+                conversion, or savings wrapper).
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <h2>Dynamic vs. Static Scores</h2>
+      <p>
+        Three categories (Oracle Quality, Collateral Quality, Architecture) are scored once
+        during our manual protocol review and only change when we reassess a protocol.
+      </p>
+      <p>
+        Two categories (Liquidity, Yield Profile) are recalculated every 24 hours from
+        on-chain data. This means a protocol&apos;s total score can change daily as market
+        conditions shift — for example, if available liquidity drops below a threshold or
+        yield becomes more volatile.
+      </p>
     </article>
   );
 }

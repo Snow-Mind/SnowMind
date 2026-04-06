@@ -16,7 +16,7 @@ const faqs = [
   },
   {
     q: "How does the optimizer decide where to put my funds?",
-    a: "SnowMind runs health and safety checks on each integrated protocol, then allocates your USDC among the ones that pass — weighing TWAP-smoothed APY against risk and operational limits. Each protocol is capped at 7.5% of its TVL to limit market impact, and you can set your own per-protocol allocation limits.",
+    a: "SnowMind runs health and safety checks on each integrated protocol, then allocates your USDC among the ones that pass — weighing TWAP-smoothed APY against risk and operational limits. Each protocol is capped at 15% of its available USDC liquidity to ensure withdrawals are always possible, and you can set your own per-protocol allocation limits.",
   },
   {
     q: "What are session keys?",

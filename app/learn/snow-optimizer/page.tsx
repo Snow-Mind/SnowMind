@@ -32,8 +32,8 @@ export default function SnowOptimizerPage() {
       <h2>Allocation Limits</h2>
       <ul>
         <li><strong>User-specified limits:</strong> You can set your own maximum allocation per protocol, or leave it uncapped for full flexibility</li>
-        <li><strong>7.5% TVL cap:</strong> Never deposits more than 7.5% of a protocol&apos;s total TVL to avoid impacting rates</li>
-        <li><strong>$100K minimum TVL:</strong> Protocols below this threshold are excluded</li>
+        <li><strong>15% liquidity cap:</strong> Never deposits more than 15% of a protocol&apos;s available USDC liquidity to ensure withdrawals are always possible</li>
+        <li><strong>Minimum liquidity threshold:</strong> Protocols below the minimum liquidity threshold are excluded</li>
       </ul>
 
       <h2>Rate Sources</h2>
