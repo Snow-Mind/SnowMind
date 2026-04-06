@@ -147,12 +147,6 @@ export default function LiveRates({
               APY comparison across protocols
             </p>
             <p className="text-[10px] text-muted-foreground">
-              Risk score is out of 9. Higher is safer.
-            </p>
-            <p className="text-[10px] text-muted-foreground">
-              Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
-            </p>
-            <p className="text-[10px] text-muted-foreground">
               Rebalance cadence for current deposit size: every {rebalanceIntervalLabel}
             </p>
           </div>
@@ -219,6 +213,10 @@ export default function LiveRates({
           </>
         )}
       </div>
+
+      <p className="mt-2 text-[10px] text-muted-foreground">
+        Risk score is out of 9 (higher is safer). Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
+      </p>
     </div>
   );
 }

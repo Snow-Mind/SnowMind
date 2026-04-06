@@ -1502,7 +1502,6 @@ export default function OnboardingPage() {
 
               <p className="text-xs text-[#8A837C]">
                 Select markets your optimizer can use and set per-market max exposure.
-                Risk score is out of 9 (higher is safer).
               </p>
 
               {regrantOnlyMode && (
@@ -1851,7 +1850,7 @@ export default function OnboardingPage() {
               </div>
 
               <p className="text-[11px] text-[#8A837C]">
-                Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
+                Risk score is out of 9 (higher is safer). Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
               </p>
             </motion.div>
           )}

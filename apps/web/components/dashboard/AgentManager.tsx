@@ -268,7 +268,6 @@ export default function AgentManager({
           Control which markets your optimizer is allowed to use and set per-market max exposure caps.
           Changes sync to your active session-key scope in backend.
           To change on-chain signed permissions, re-grant session key from Settings.
-          Risk score is out of 9 (higher is safer).
         </p>
 
         {!hasActiveSessionKey && (
@@ -558,7 +557,7 @@ export default function AgentManager({
         </button>
 
         <p className="text-[11px] text-[#8A837C]">
-          Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
+          Risk score is out of 9 (higher is safer). Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
         </p>
       </div>
     </div>
