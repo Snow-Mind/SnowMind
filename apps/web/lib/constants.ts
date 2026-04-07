@@ -27,7 +27,7 @@ const defaultBackendUrl =
     ? DEFAULT_PRODUCTION_BACKEND_URL
     : DEFAULT_DEVELOPMENT_BACKEND_URL;
 
-export const BACKEND_URL_CANDIDATES = Array.from(
+const SERVER_BACKEND_URL_CANDIDATES = Array.from(
   new Set(
     [
       normalizeBackendUrl(process.env.NEXT_PUBLIC_BACKEND_URL),
@@ -37,7 +37,17 @@ export const BACKEND_URL_CANDIDATES = Array.from(
   ),
 );
 
-export const BACKEND_URL = BACKEND_URL_CANDIDATES[0] ?? defaultBackendUrl;
+const SERVER_BACKEND_URL = SERVER_BACKEND_URL_CANDIDATES[0] ?? defaultBackendUrl;
+
+const isBrowserRuntime = typeof window !== "undefined";
+
+// Safety guard: browser code must always use same-origin /api and never embed
+// absolute backend hostnames that can fail DNS resolution client-side.
+export const BACKEND_URL_CANDIDATES = isBrowserRuntime
+  ? [""]
+  : SERVER_BACKEND_URL_CANDIDATES;
+
+export const BACKEND_URL = isBrowserRuntime ? "" : SERVER_BACKEND_URL;
 
 export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? "";
 

@@ -58,6 +58,10 @@ See `apps/web/.env.example` for required variables:
 - `NEXT_PUBLIC_BACKEND_FALLBACK_URLS` — Optional comma-separated fallback API origins
 - `NEXT_PUBLIC_PIMLICO_API_KEY` — Pimlico bundler key
 
+Important:
+- Do not set `BACKEND_URL` to `https://app.snowmind.xyz`. That causes `/api/*` rewrite loops and `508 Loop Detected`.
+- `BACKEND_URL` must point to the backend service origin (for example Railway backend URL).
+
 ## Deployment
 
 Deployed automatically to Vercel on push to `main`. Security headers (CSP, X-Frame-Options, etc.) are configured in `vercel.json`.

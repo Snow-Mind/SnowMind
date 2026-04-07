@@ -1,13 +1,43 @@
 import type { NextConfig } from "next";
 
-const rawBackendProxyTarget =
-  process.env.BACKEND_URL
-  ?? process.env.NEXT_PUBLIC_BACKEND_URL
-  ?? (process.env.NODE_ENV === "production"
-    ? "https://snowmindbackend-production-10ed.up.railway.app"
-    : "http://localhost:8000");
+const DEFAULT_PRODUCTION_BACKEND_TARGET = "https://snowmindbackend-production-10ed.up.railway.app";
+const DEFAULT_DEVELOPMENT_BACKEND_TARGET = "http://localhost:8000";
 
-const backendProxyTarget = rawBackendProxyTarget.replace(/\/+$/, "");
+const APP_HOSTS = new Set([
+  "app.snowmind.xyz",
+  "snowmind.xyz",
+  "www.snowmind.xyz",
+]);
+
+function normalizeBackendProxyTarget(rawValue: string | undefined): string | null {
+  if (!rawValue) return null;
+  const trimmed = rawValue.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    const normalizedHost = parsed.hostname.toLowerCase();
+
+    // Guard against /api rewrite loops when backend target is app host.
+    if (APP_HOSTS.has(normalizedHost)) {
+      return null;
+    }
+
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+const defaultBackendProxyTarget = process.env.NODE_ENV === "production"
+  ? DEFAULT_PRODUCTION_BACKEND_TARGET
+  : DEFAULT_DEVELOPMENT_BACKEND_TARGET;
+
+const backendProxyTarget =
+  normalizeBackendProxyTarget(process.env.BACKEND_URL)
+  ?? normalizeBackendProxyTarget(process.env.NEXT_PUBLIC_BACKEND_URL)
+  ?? defaultBackendProxyTarget;
 
 const nextConfig: NextConfig = {
   reactCompiler: true,

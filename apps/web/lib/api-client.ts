@@ -71,6 +71,10 @@ function isPublicPath(path: string): boolean {
   );
 }
 
+function isAbsoluteHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
   _getAccessToken = getter;
 }
@@ -252,11 +256,15 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
   const isIdempotent = method === "GET" || method === "HEAD";
   const canRetry = isIdempotent || options?.retryable === true;
   const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
-  // Browser requests always use same-origin /api. This avoids direct client
-  // DNS dependence on backend hostnames and lets Vercel rewrites proxy safely.
-  const candidatePool = typeof window !== "undefined"
-    ? [""]
+  const browserSafeCandidates = typeof window !== "undefined"
+    ? BACKEND_URL_CANDIDATES.filter((entry) => !isAbsoluteHttpUrl(entry))
     : BACKEND_URL_CANDIDATES;
+
+  // Browser requests always use same-origin /api first. If any absolute URL
+  // leaks into candidates, filter it out to avoid client-side DNS failures.
+  const candidatePool = typeof window !== "undefined"
+    ? ["", ...browserSafeCandidates]
+    : browserSafeCandidates;
 
   const backendCandidates = Array.from(
     new Set(candidatePool.length > 0 ? candidatePool : [BACKEND_URL]),
