@@ -6,7 +6,7 @@
 
 ---
 
-## Live App
+## Live App-
 
 **Website**: https://www.snowmind.xyz
 **App**: https://app.snowmind.xyz
