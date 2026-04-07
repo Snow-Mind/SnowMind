@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from threading import Lock
@@ -194,23 +195,38 @@ class GeminiAssistantClient:
         }
 
         timeout = max(5, int(settings.GEMINI_TIMEOUT_SECONDS))
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    endpoint,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-goog-api-key": settings.GEMINI_API_KEY,
-                    },
-                    json=payload,
-                )
-                response.raise_for_status()
-                body = response.json()
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code if exc.response is not None else "unknown"
-            raise RuntimeError(f"Gemini returned HTTP {status_code}") from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"Gemini request failed: {exc}") from exc
+        body: object | None = None
+        attempts = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        endpoint,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-goog-api-key": settings.GEMINI_API_KEY,
+                        },
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+                    break
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code if exc.response is not None else "unknown"
+                transient_status = isinstance(status_code, int) and status_code in {429, 500, 502, 503, 504}
+                if transient_status and attempt < attempts:
+                    await asyncio.sleep(0.4 * attempt)
+                    continue
+
+                raise RuntimeError(f"Gemini returned HTTP {status_code}") from exc
+            except httpx.HTTPError as exc:
+                if attempt < attempts:
+                    await asyncio.sleep(0.4 * attempt)
+                    continue
+                raise RuntimeError(f"Gemini request failed: {exc!r}") from exc
+
+        if body is None:
+            raise RuntimeError("Gemini request failed: no response body")
 
         text = self._extract_text(body)
         if not text:

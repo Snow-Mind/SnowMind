@@ -82,7 +82,7 @@ export default function ApyGrowthChart() {
               SnowMind vs Aave
             </h3>
             <p className="mt-2 max-w-2xl text-[11px] text-[#8A837C] md:text-xs">
-              SnowMind values exclude protocols that fail live health checks and apply conservative liquidity weighting.
+              SnowMind values use a live latest point and exclude protocols that fail health checks, with conservative liquidity and risk weighting.
             </p>
           </div>
           {latest && (

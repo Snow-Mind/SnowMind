@@ -32,6 +32,7 @@ _MIN_POSITION_USDC = Decimal("0.01")
 _USDC_QUANT = Decimal("0.000001")
 _UTILIZATION_READ_MAX_ATTEMPTS = 3
 _UTILIZATION_READ_BASE_BACKOFF_SECONDS = 0.25
+_MIN_EMERGENCY_UTILIZATION_THRESHOLD = Decimal("0.92")
 
 
 @dataclass(frozen=True)
@@ -69,11 +70,12 @@ class UtilizationMonitor:
             self._poll_loop(),
             name="snowmind-utilization-monitor",
         )
+        threshold = self._effective_emergency_threshold()
         logger.info(
             "Utilization monitor started [instance=%s interval=%ss threshold=%.1f%%]",
             self.instance,
             int(self.settings.UTILIZATION_POLL_INTERVAL),
-            float(self.settings.EMERGENCY_UTILIZATION_THRESHOLD) * 100,
+            float(threshold) * 100,
         )
 
     async def stop(self) -> None:
@@ -266,11 +268,11 @@ class UtilizationMonitor:
             # Require consecutive successful reads before triggering.
             return None
 
-        emergency_threshold = Decimal(str(self.settings.EMERGENCY_UTILIZATION_THRESHOLD))
+        emergency_threshold = self._effective_emergency_threshold()
         recent_values = [point for point in recent if point is not None]
-        if all(value > emergency_threshold for value in recent_values):
+        if all(value >= emergency_threshold for value in recent_values):
             return (
-                f"absolute utilization above {float(emergency_threshold * 100):.1f}% "
+                f"absolute utilization at or above {float(emergency_threshold * 100):.1f}% "
                 f"for {confirm_count} consecutive reads"
             )
 
@@ -291,6 +293,12 @@ class UtilizationMonitor:
             )
 
         return None
+
+    def _effective_emergency_threshold(self) -> Decimal:
+        """Return configured emergency threshold with a conservative floor."""
+        configured = Decimal(str(self.settings.EMERGENCY_UTILIZATION_THRESHOLD))
+        clamped = max(Decimal("0"), min(configured, Decimal("1")))
+        return max(clamped, _MIN_EMERGENCY_UTILIZATION_THRESHOLD)
 
     async def _handle_protocol_alert(
         self,
@@ -468,15 +476,19 @@ class UtilizationMonitor:
         trigger_reason: str,
     ) -> None:
         """Persist a transaction-feed row for utilization-triggered withdrawals."""
+        amount_q = amount_usdc.quantize(_USDC_QUANT)
+        reason = f"EMERGENCY_WITHDRAWAL: utilization monitor trigger ({trigger_reason})"
         try:
             self.db.table("rebalance_logs").insert(
                 {
                     "account_id": account_id,
                     "status": "executed",
-                    "skip_reason": f"Utilization monitor emergency withdrawal: {trigger_reason}",
+                    "skip_reason": reason,
                     "from_protocol": protocol_id,
                     "to_protocol": "idle",
-                    "amount_moved": str(amount_usdc.quantize(_USDC_QUANT)),
+                    "amount_moved": str(amount_q),
+                    "proposed_allocations": {protocol_id: str(amount_q)},
+                    "executed_allocations": {"idle": str(amount_q)},
                     "tx_hash": tx_hash,
                     "apr_improvement": None,
                 }

@@ -184,6 +184,22 @@ class _FailingAssistantClient:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
 
+class _TransientFailingAssistantClient:
+    async def generate_reply(
+        self,
+        *,
+        messages,
+        grounding_context: str,
+        feedback_context: str,
+        response_style_hints: str,
+    ) -> str:
+        del messages
+        del grounding_context
+        del feedback_context
+        del response_style_hints
+        raise RuntimeError("Gemini request failed: timeout")
+
+
 class _FakeKnowledgeBase:
     def build_grounding_context(self, dynamic_risk_snapshot_summary: str) -> tuple[str, list[str]]:
         return (
@@ -256,6 +272,33 @@ async def test_chat_with_assistant_returns_503_when_gemini_unconfigured(monkeypa
         )
 
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_chat_with_assistant_returns_fallback_reply_on_transient_model_failure(monkeypatch) -> None:
+    fake_store = _FakeSessionStore()
+
+    monkeypatch.setattr(assistant_routes, "_assistant_session_store", fake_store)
+    monkeypatch.setattr(assistant_routes, "_assistant_client", _TransientFailingAssistantClient())
+    monkeypatch.setattr(assistant_routes, "_assistant_knowledge_base", _FakeKnowledgeBase())
+    monkeypatch.setattr(
+        assistant_routes,
+        "_build_dynamic_risk_snapshot_summary",
+        lambda _db: "Fresh snapshots: 0; stale snapshots: 0",
+    )
+
+    out = await assistant_routes.chat_with_assistant(
+        _make_request("/api/v1/assistant/chat"),
+        assistant_routes.AssistantChatRequest(message="how risky is silo savUsd/usdc vault"),
+        SimpleNamespace(),
+        {"sub": "did:privy:123"},
+    )
+
+    assert out.reply
+    assert "temporarily" in out.reply.lower()
+    assert out.model.endswith(":fallback")
+    assert len(out.messages) == 2
+    assert out.messages[1].role == "assistant"
 
 
 @pytest.mark.asyncio

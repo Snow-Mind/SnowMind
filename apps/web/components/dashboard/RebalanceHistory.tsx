@@ -26,7 +26,17 @@ function protocolName(id: string) {
   return PROTOCOL_CONFIG[id as keyof typeof PROTOCOL_CONFIG]?.name ?? id;
 }
 
+function isEmergencyWithdrawal(row: HistoryRow): boolean {
+  const reason = (row.skipReason ?? "").toLowerCase();
+  return reason.includes("emergency_withdrawal") || reason.includes("emergency withdrawal");
+}
+
 function describeMove(row: HistoryRow): string {
+  if (isEmergencyWithdrawal(row)) {
+    const source = row.fromProtocol ? protocolName(row.fromProtocol) : "Protocol";
+    return `Emergency withdraw · ${source} -> Smart Account`;
+  }
+
   const proposed = row.proposedAllocations ?? {};
   const executed = row.executedAllocations ?? {};
   const changes: string[] = [];

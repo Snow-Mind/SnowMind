@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -72,6 +73,20 @@ class _FakeAdapter:
         )
 
 
+class _FakeRate:
+    def __init__(self, apy: str, tvl_usd: str):
+        self.apy = Decimal(apy)
+        self.tvl_usd = Decimal(tvl_usd)
+
+
+class _FakeRateFetcher:
+    def __init__(self, rates: dict[str, _FakeRate]):
+        self._rates = rates
+
+    async def fetch_display_rates(self):
+        return self._rates
+
+
 @pytest.mark.asyncio
 async def test_timeseries_excludes_non_deposit_safe_protocol_spikes(monkeypatch):
     optimizer_routes._timeseries_cache = None
@@ -102,6 +117,7 @@ async def test_timeseries_excludes_non_deposit_safe_protocol_spikes(monkeypatch)
             MAX_APY_SANITY_BOUND=0.25,
         ),
     )
+    monkeypatch.setattr(optimizer_routes, "_rate_fetcher", _FakeRateFetcher({}))
 
     out = await optimizer_routes.get_apy_timeseries(_make_request(), _FakeDB(snapshot_rows))
     by_date = {item.date: item for item in out}
@@ -137,6 +153,7 @@ async def test_timeseries_applies_conservative_liquidity_weight(monkeypatch):
             MAX_APY_SANITY_BOUND=0.25,
         ),
     )
+    monkeypatch.setattr(optimizer_routes, "_rate_fetcher", _FakeRateFetcher({}))
 
     out = await optimizer_routes.get_apy_timeseries(_make_request(), _FakeDB(snapshot_rows))
     assert len(out) == 1
@@ -171,6 +188,79 @@ async def test_timeseries_returns_empty_when_no_deployable_protocols(monkeypatch
             MAX_APY_SANITY_BOUND=0.25,
         ),
     )
+    monkeypatch.setattr(optimizer_routes, "_rate_fetcher", _FakeRateFetcher({}))
 
     out = await optimizer_routes.get_apy_timeseries(_make_request(), _FakeDB(snapshot_rows))
     assert out == []
+
+
+@pytest.mark.asyncio
+async def test_timeseries_appends_live_risk_weighted_latest_point(monkeypatch):
+    optimizer_routes._timeseries_cache = None
+
+    snapshot_rows = [
+        {"protocol_id": "aave_v3", "apy": "0.020", "tvl_usd": "100000000", "date": "2026-04-05"},
+        {"protocol_id": "benqi", "apy": "0.028", "tvl_usd": "70000000", "date": "2026-04-05"},
+    ]
+
+    monkeypatch.setattr(
+        optimizer_routes,
+        "ACTIVE_ADAPTERS",
+        {
+            "aave_v3": _FakeAdapter("aave_v3", deposit_safe=True),
+            "benqi": _FakeAdapter("benqi", deposit_safe=True),
+            "silo_savusd_usdc": _FakeAdapter("silo_savusd_usdc", deposit_safe=True),
+        },
+    )
+    monkeypatch.setattr(
+        optimizer_routes,
+        "get_settings",
+        lambda: SimpleNamespace(
+            APY_TIMESERIES_CACHE_TTL_SECONDS=0,
+            MAX_APY_SANITY_BOUND=0.25,
+        ),
+    )
+    monkeypatch.setattr(
+        optimizer_routes,
+        "_rate_fetcher",
+        _FakeRateFetcher(
+            {
+                "aave_v3": _FakeRate("0.021", "100000000"),
+                "benqi": _FakeRate("0.031", "50000000"),
+                "silo_savusd_usdc": _FakeRate("0.160", "3000000"),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        optimizer_routes,
+        "_filter_fresh_persisted_scores",
+        lambda _scores: (
+            {
+                "aave_v3": SimpleNamespace(score=Decimal("8")),
+                "benqi": SimpleNamespace(score=Decimal("7")),
+                "silo_savusd_usdc": SimpleNamespace(score=Decimal("5")),
+            },
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        optimizer_routes._risk_scorer,
+        "get_latest_persisted_scores",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        optimizer_routes._risk_scorer,
+        "compute_scores_from_rates",
+        lambda _db, _rates: {},
+    )
+
+    out = await optimizer_routes.get_apy_timeseries(_make_request(), _FakeDB(snapshot_rows))
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    by_date = {item.date: item for item in out}
+    assert today in by_date
+
+    # Risk floor excludes Silo (score 5 < 6), so Benqi should define live SnowMind point.
+    expected_live_snowmind = Decimal("0.031") * (Decimal("7") / Decimal("9"))
+    assert by_date[today].snowmind_apy == expected_live_snowmind
+    assert by_date[today].aave_apy == Decimal("0.021")

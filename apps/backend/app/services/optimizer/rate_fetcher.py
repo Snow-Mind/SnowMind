@@ -30,11 +30,13 @@ logger = logging.getLogger("snowmind.rate_fetcher")
 _rate_cache: dict[str, ProtocolRate] = {}
 _rate_cache_timestamp: float = 0.0
 _RATE_CACHE_TTL_SECONDS: float = 45.0  # Serve cached rates for 45s
+_rate_fetch_lock = asyncio.Lock()
 
 # Separate cache for UI display rates (live/spot, no 24h snapshot injection)
 _display_rate_cache: dict[str, ProtocolRate] = {}
 _display_rate_cache_timestamp: float = 0.0
-_DISPLAY_RATE_CACHE_TTL_SECONDS: float = 20.0
+_DISPLAY_RATE_CACHE_TTL_SECONDS: float = 55.0
+_display_rate_fetch_lock = asyncio.Lock()
 
 # ERC-4626 vault adapters that use 24h convertToAssets snapshots for stable APY
 _VAULT_SNAPSHOT_PROTOCOLS = {"spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"}
@@ -289,80 +291,90 @@ class RateFetcher:
             )
             return dict(_rate_cache)
 
-        settings = self.settings
-        semaphore = asyncio.Semaphore(settings.RPC_CONCURRENCY_LIMIT)
+        async with _rate_fetch_lock:
+            now = time.time()
+            if _rate_cache and (now - _rate_cache_timestamp) < _RATE_CACHE_TTL_SECONDS:
+                logger.debug(
+                    "Returning cached rates after lock (age=%.0fs, ttl=%.0fs)",
+                    now - _rate_cache_timestamp,
+                    _RATE_CACHE_TTL_SECONDS,
+                )
+                return dict(_rate_cache)
 
-        async def _do_fetch(pid: str) -> ProtocolRate:
-            """Execute a single adapter's get_rate() call."""
-            adapter = ALL_ADAPTERS[pid]
-            # Pass 24h convertToAssets snapshot to all ERC-4626 vault adapters
-            if pid in _VAULT_SNAPSHOT_PROTOCOLS:
-                snapshot_data = self._get_vault_yesterday_snapshot(pid)
-                if snapshot_data is not None:
-                    yesterday_value, snapshot_at = snapshot_data
-                    return await adapter.get_rate(
-                        yesterday_snapshot=yesterday_value,
-                        snapshot_at=snapshot_at,
-                    )
+            settings = self.settings
+            semaphore = asyncio.Semaphore(settings.RPC_CONCURRENCY_LIMIT)
+
+            async def _do_fetch(pid: str) -> ProtocolRate:
+                """Execute a single adapter's get_rate() call."""
+                adapter = ALL_ADAPTERS[pid]
+                # Pass 24h convertToAssets snapshot to all ERC-4626 vault adapters
+                if pid in _VAULT_SNAPSHOT_PROTOCOLS:
+                    snapshot_data = self._get_vault_yesterday_snapshot(pid)
+                    if snapshot_data is not None:
+                        yesterday_value, snapshot_at = snapshot_data
+                        return await adapter.get_rate(
+                            yesterday_snapshot=yesterday_value,
+                            snapshot_at=snapshot_at,
+                        )
+                    else:
+                        return await adapter.get_rate(yesterday_snapshot=None)
                 else:
-                    return await adapter.get_rate(yesterday_snapshot=None)
-            else:
-                return await adapter.get_rate()
+                    return await adapter.get_rate()
 
-        async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
-            """Run a single adapter fetch under the concurrency semaphore.
+            async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
+                """Run a single adapter fetch under the concurrency semaphore.
 
-            On 429 rate-limit errors, notifies the RPCManager to rotate
-            providers and retries once with the new provider.
-            """
-            async with semaphore:
-                try:
-                    result = await _do_fetch(pid)
-                    return pid, result
-                except Exception as exc:
-                    err_str = str(exc)
-                    if "429" in err_str or "Too Many Requests" in err_str:
-                        from app.core.rpc import get_rpc_manager
-                        get_rpc_manager().report_rate_limit()
-                        try:
-                            result = await _do_fetch(pid)
-                            return pid, result
-                        except Exception as retry_exc:
-                            return pid, retry_exc
-                    return pid, exc
+                On 429 rate-limit errors, notifies the RPCManager to rotate
+                providers and retries once with the new provider.
+                """
+                async with semaphore:
+                    try:
+                        result = await _do_fetch(pid)
+                        return pid, result
+                    except Exception as exc:
+                        err_str = str(exc)
+                        if "429" in err_str or "Too Many Requests" in err_str:
+                            from app.core.rpc import get_rpc_manager
+                            get_rpc_manager().report_rate_limit()
+                            try:
+                                result = await _do_fetch(pid)
+                                return pid, result
+                            except Exception as retry_exc:
+                                return pid, retry_exc
+                        return pid, exc
 
-        pids_to_fetch = [
-            pid for pid in ALL_ADAPTERS
-            if not circuit_breaker.is_open(pid)
-        ]
-        for pid in ALL_ADAPTERS:
-            if circuit_breaker.is_open(pid):
-                logger.warning("Skipping %s — circuit breaker open", pid)
+            pids_to_fetch = [
+                pid for pid in ALL_ADAPTERS
+                if not circuit_breaker.is_open(pid)
+            ]
+            for pid in ALL_ADAPTERS:
+                if circuit_breaker.is_open(pid):
+                    logger.warning("Skipping %s — circuit breaker open", pid)
 
-        if not pids_to_fetch:
-            return {}
+            if not pids_to_fetch:
+                return {}
 
-        raw_results = await asyncio.gather(
-            *[_throttled_fetch(pid) for pid in pids_to_fetch]
-        )
+            raw_results = await asyncio.gather(
+                *[_throttled_fetch(pid) for pid in pids_to_fetch]
+            )
 
-        results: dict[str, ProtocolRate] = {}
-        for pid, result in raw_results:
-            if isinstance(result, Exception):
-                logger.warning("Rate fetch failed for %s: %s", pid, result)
-                circuit_breaker.record_failure(pid)
-            else:
-                results[pid] = result
-                circuit_breaker.record_success(pid)
-                twap_buffer.add(result)
+            results: dict[str, ProtocolRate] = {}
+            for pid, result in raw_results:
+                if isinstance(result, Exception):
+                    logger.warning("Rate fetch failed for %s: %s", pid, result)
+                    circuit_breaker.record_failure(pid)
+                else:
+                    results[pid] = result
+                    circuit_breaker.record_success(pid)
+                    twap_buffer.add(result)
 
-        # Update response cache
-        if results:
-            _rate_cache.clear()
-            _rate_cache.update(results)
-            _rate_cache_timestamp = time.time()
+            # Update response cache
+            if results:
+                _rate_cache.clear()
+                _rate_cache.update(results)
+                _rate_cache_timestamp = time.time()
 
-        return results
+            return results
 
     async def fetch_active_rates(self) -> dict[str, ProtocolRate]:
         """Backward-compatible alias retained for legacy scheduler/routes."""
@@ -381,53 +393,58 @@ class RateFetcher:
         if _display_rate_cache and (now - _display_rate_cache_timestamp) < _DISPLAY_RATE_CACHE_TTL_SECONDS:
             return dict(_display_rate_cache)
 
-        semaphore = asyncio.Semaphore(self.settings.RPC_CONCURRENCY_LIMIT)
+        async with _display_rate_fetch_lock:
+            now = time.time()
+            if _display_rate_cache and (now - _display_rate_cache_timestamp) < _DISPLAY_RATE_CACHE_TTL_SECONDS:
+                return dict(_display_rate_cache)
 
-        async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
-            async with semaphore:
-                adapter = ALL_ADAPTERS[pid]
-                try:
-                    result = await adapter.get_rate()
-                    return pid, result
-                except Exception as exc:
-                    err_str = str(exc)
-                    if "429" in err_str or "Too Many Requests" in err_str:
-                        from app.core.rpc import get_rpc_manager
-                        get_rpc_manager().report_rate_limit()
-                        try:
-                            result = await adapter.get_rate()
-                            return pid, result
-                        except Exception as retry_exc:
-                            return pid, retry_exc
-                    return pid, exc
+            semaphore = asyncio.Semaphore(self.settings.RPC_CONCURRENCY_LIMIT)
 
-        pids_to_fetch = [
-            pid for pid in ALL_ADAPTERS
-            if not circuit_breaker.is_open(pid)
-        ]
+            async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
+                async with semaphore:
+                    adapter = ALL_ADAPTERS[pid]
+                    try:
+                        result = await adapter.get_rate()
+                        return pid, result
+                    except Exception as exc:
+                        err_str = str(exc)
+                        if "429" in err_str or "Too Many Requests" in err_str:
+                            from app.core.rpc import get_rpc_manager
+                            get_rpc_manager().report_rate_limit()
+                            try:
+                                result = await adapter.get_rate()
+                                return pid, result
+                            except Exception as retry_exc:
+                                return pid, retry_exc
+                        return pid, exc
 
-        if not pids_to_fetch:
-            return {}
+            pids_to_fetch = [
+                pid for pid in ALL_ADAPTERS
+                if not circuit_breaker.is_open(pid)
+            ]
 
-        raw_results = await asyncio.gather(
-            *[_throttled_fetch(pid) for pid in pids_to_fetch]
-        )
+            if not pids_to_fetch:
+                return {}
 
-        results: dict[str, ProtocolRate] = {}
-        for pid, result in raw_results:
-            if isinstance(result, Exception):
-                logger.warning("Display-rate fetch failed for %s: %s", pid, result)
-                circuit_breaker.record_failure(pid)
-            else:
-                results[pid] = result
-                circuit_breaker.record_success(pid)
+            raw_results = await asyncio.gather(
+                *[_throttled_fetch(pid) for pid in pids_to_fetch]
+            )
 
-        if results:
-            _display_rate_cache.clear()
-            _display_rate_cache.update(results)
-            _display_rate_cache_timestamp = time.time()
+            results: dict[str, ProtocolRate] = {}
+            for pid, result in raw_results:
+                if isinstance(result, Exception):
+                    logger.warning("Display-rate fetch failed for %s: %s", pid, result)
+                    circuit_breaker.record_failure(pid)
+                else:
+                    results[pid] = result
+                    circuit_breaker.record_success(pid)
 
-        return results
+            if results:
+                _display_rate_cache.clear()
+                _display_rate_cache.update(results)
+                _display_rate_cache_timestamp = time.time()
+
+            return results
 
     def get_twap_effective_apys(self) -> dict[str, Decimal]:
         """Return TWAP-smoothed effective APYs for all protocols with samples."""

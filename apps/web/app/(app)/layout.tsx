@@ -187,6 +187,7 @@ export default function AppLayout({
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
+  const [addressResolutionGraceElapsed, setAddressResolutionGraceElapsed] = useState(false);
   const recoveryInFlightRef = useRef(false);
   const appHostLoginKickoffRef = useRef(false);
   const appQueryClient = useQueryClient();
@@ -289,6 +290,28 @@ export default function AppLayout({
 
   const awaitingAddressRecovery = clientReady && ready && authenticated && !!activeWallet && !effectiveSmartAccountAddress;
 
+  // Avoid premature onboarding redirects while wallet/account restoration settles.
+  useEffect(() => {
+    if (!ready || !authenticated) {
+      setAddressResolutionGraceElapsed(false);
+      return;
+    }
+
+    if (effectiveSmartAccountAddress) {
+      setAddressResolutionGraceElapsed(true);
+      return;
+    }
+
+    setAddressResolutionGraceElapsed(false);
+    const timer = window.setTimeout(() => {
+      setAddressResolutionGraceElapsed(true);
+    }, 2500);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [ready, authenticated, effectiveSmartAccountAddress]);
+
   // Redirect to landing if not authenticated
   useEffect(() => {
     if (ready && !authenticated) {
@@ -316,10 +339,11 @@ export default function AppLayout({
     if (!clientReady) return;
     const storedAddr = usePortfolioStore.getState().smartAccountAddress;
     if (!storedAddr && awaitingAddressRecovery) return;
+    if (!storedAddr && !addressResolutionGraceElapsed) return;
     if (!storedAddr && pathname !== "/onboarding" && pathname !== "/settings") {
       router.replace("/onboarding");
     }
-  }, [clientReady, awaitingAddressRecovery, pathname, router]);
+  }, [clientReady, awaitingAddressRecovery, addressResolutionGraceElapsed, pathname, router]);
 
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
@@ -433,8 +457,24 @@ export default function AppLayout({
     return null;
   }
 
-  // Dashboard-specific loading: wait for hydration to determine routing
-  if (pathname === "/dashboard" && (!clientReady || awaitingAddressRecovery || (!!effectiveSmartAccountAddress && !storeActivated && !isAgentActive && !dataReady && !hasAuthFault))) {
+  const shouldShowRouteDecisionLoader =
+    !clientReady
+    || awaitingAddressRecovery
+    || (!effectiveSmartAccountAddress && !addressResolutionGraceElapsed && pathname !== "/onboarding")
+    || (
+      !!effectiveSmartAccountAddress
+      && !hasAuthFault
+      && (
+        pathname === "/dashboard"
+        || pathname === "/onboarding"
+        || pathname === "/portfolio"
+        || pathname === "/settings"
+      )
+      && !dataReady
+    );
+
+  // Route-decision loading gate: show spinner while auth/account state settles.
+  if (shouldShowRouteDecisionLoader) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />

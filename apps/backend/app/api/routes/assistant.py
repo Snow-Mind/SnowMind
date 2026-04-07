@@ -432,6 +432,24 @@ def _build_response_style_hints(user_message: str) -> str:
     return "\n".join(hints) if hints else "No additional style directives for this turn."
 
 
+def _build_transient_fallback_reply(user_message: str) -> str:
+    """Return a safe user-facing fallback when the model request fails."""
+    normalized = (user_message or "").strip().lower()
+
+    if any(token in normalized for token in ("risk", "score", "olcya", "protocol")):
+        return (
+            "The assistant model is temporarily unavailable, so I cannot provide a fresh, grounded risk explanation in this response.\n\n"
+            "Please retry in a few seconds. If this persists, check status at https://docs.snowmind.xyz/.\n\n"
+            "This is not financial advice."
+        )
+
+    return (
+        "I could not complete that request because the assistant model is temporarily unavailable.\n\n"
+        "Please retry in a few seconds. If this persists, check status at https://docs.snowmind.xyz/.\n\n"
+        "This is not financial advice."
+    )
+
+
 @router.post("/chat", response_model=AssistantChatResponse)
 @limiter.limit("30/minute")
 async def chat_with_assistant(
@@ -474,6 +492,8 @@ async def chat_with_assistant(
     dynamic_summary = _build_dynamic_risk_snapshot_summary(db)
     grounding_context, context_sources = _assistant_knowledge_base.build_grounding_context(dynamic_summary)
 
+    model_used = get_settings().GEMINI_MODEL
+
     try:
         reply = await _assistant_client.generate_reply(
             messages=history,
@@ -490,10 +510,8 @@ async def chat_with_assistant(
             ) from exc
 
         logger.warning("Assistant model request failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Assistant request failed",
-        ) from exc
+        reply = _build_transient_fallback_reply(payload.message)
+        model_used = f"{model_used}:fallback"
 
     stored_reply = _assistant_session_store.append_message(
         db,
@@ -514,7 +532,7 @@ async def chat_with_assistant(
         session_id=session_id,
         reply=stored_reply.content,
         messages=_serialize_messages(updated_history),
-        model=get_settings().GEMINI_MODEL,
+        model=model_used,
         context_sources=context_sources,
     )
 

@@ -37,6 +37,20 @@ def test_evaluate_thresholds_absolute_trigger(monitor: UtilizationMonitor) -> No
     assert "absolute utilization" in reason
 
 
+def test_evaluate_thresholds_enforces_92_percent_floor(monitor: UtilizationMonitor) -> None:
+    # Even if env is set below 92%, emergency trigger floor remains conservative.
+    monitor.settings.EMERGENCY_UTILIZATION_THRESHOLD = 0.90
+    monitor._history["aave_v3"] = deque(
+        [Decimal("0.92"), Decimal("0.92")],
+        maxlen=20,
+    )
+
+    reason = monitor._evaluate_thresholds("aave_v3")
+
+    assert reason is not None
+    assert "92.0%" in reason
+
+
 def test_evaluate_thresholds_velocity_trigger(monitor: UtilizationMonitor) -> None:
     monitor._history["benqi"] = deque(
         [Decimal("0.70"), Decimal("0.82")],

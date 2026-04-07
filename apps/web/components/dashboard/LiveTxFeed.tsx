@@ -26,7 +26,7 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-type ActionType = "deposit" | "withdraw" | "rebalance" | "monitoring";
+type ActionType = "deposit" | "withdraw" | "rebalance" | "emergency_withdraw" | "monitoring";
 
 type AgentSection = "transactions" | "log";
 
@@ -181,6 +181,9 @@ function inferAction(entry: RebalanceLogEntry): ActionType {
   if (entry.status === "skipped") return "monitoring";
   const ext = entry as ExtendedLogEntry;
   const skipReason = (entry.skipReason ?? "").toLowerCase();
+  if (skipReason.includes("emergency_withdrawal") || skipReason.includes("emergency withdrawal")) {
+    return "emergency_withdraw";
+  }
   if (ext.fromProtocol === "user_wallet" || skipReason.includes("initial funding transfer")) return "deposit";
   if (ext.fromProtocol === "withdrawal" || ext.toProtocol === "user_eoa") return "withdraw";
 
@@ -195,6 +198,7 @@ const ACTION_CONFIG: Record<ActionType, { icon: typeof ArrowDownToLine; label: s
   deposit:    { icon: ArrowDownToLine, label: "Deposit",    iconClass: "text-mint" },
   withdraw:   { icon: ArrowUpFromLine, label: "Withdraw",   iconClass: "text-crimson" },
   rebalance:  { icon: RefreshCw,       label: "Rebalance",  iconClass: "text-glacier" },
+  emergency_withdraw: { icon: AlertTriangle, label: "Emergency Withdraw", iconClass: "text-crimson" },
   monitoring: { icon: Eye,             label: "Monitoring",  iconClass: "text-muted-foreground" },
 };
 
@@ -279,6 +283,15 @@ function deriveReasoning(entry: RebalanceLogEntry): string | null {
     return entry.skipReason || "Monitoring complete — no action needed.";
   }
   if (entry.status === "failed") return "Transaction reverted. Funds remain safe — agent will retry next cycle.";
+  const skipReason = (entry.skipReason ?? "").toLowerCase();
+  if (skipReason.includes("emergency_withdrawal") || skipReason.includes("emergency withdrawal")) {
+    const detail = (entry.skipReason ?? "")
+      .replace(/^EMERGENCY_WITHDRAWAL:\s*/i, "")
+      .trim();
+    return detail
+      ? `Emergency withdrawal triggered by utilization monitor: ${detail}`
+      : "Emergency withdrawal triggered by utilization monitor due to liquidity stress.";
+  }
   if ((entry as ExtendedLogEntry).fromProtocol === "user_wallet") {
     return "USDC funded from your wallet into the smart account.";
   }
@@ -397,6 +410,7 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
     const allocationSum = allocationTotal(allocations);
     const reasonLower = (entry.skipReason ?? "").toLowerCase();
     const explicitDeposit = entry.fromProtocol === "user_wallet" || reasonLower.includes("initial funding transfer");
+    const explicitEmergency = reasonLower.includes("emergency_withdrawal") || reasonLower.includes("emergency withdrawal");
     const explicitWithdrawal = entry.fromProtocol === "withdrawal" || entry.toProtocol === "user_eoa";
     const movedAmountRaw = parseNumericAmount(entry.amountMoved);
     const movedAmount = movedAmountRaw != null && movedAmountRaw > 0
@@ -438,6 +452,32 @@ function buildTransactions(history: RebalanceLogEntry[]): TransactionItem[] {
         operationProtocol: derivedSourceProtocol,
         sourceProtocol: derivedSourceProtocol,
         destinationProtocol: derivedDestinationProtocol,
+        amountValue: normalizedAmount,
+        amountLabel: formatAmountLabel(normalizedAmount),
+        allocations,
+        reasoning,
+      });
+      if (normalizedAmount != null && normalizedAmount > 0) {
+        previousPortfolioTotal = Math.max(previousPortfolioTotal - normalizedAmount, 0);
+      }
+      if (allocationSum > 0) {
+        previousAllocationState = allocations;
+      }
+      continue;
+    }
+
+    if (explicitEmergency) {
+      const normalizedAmount = movedAmount ?? (allocationSum > 0 ? allocationSum : null);
+      const sourceProtocol = protocolLabel(entry.fromProtocol || topProtocol(allocations));
+      const destinationProtocol = protocolLabel(entry.toProtocol || "idle");
+      const reasoning = deriveReasoning(entry)
+        ?? "Emergency withdrawal executed to move funds into smart-account idle balance.";
+      transactions.push({
+        entry,
+        action: "emergency_withdraw",
+        operationProtocol: sourceProtocol,
+        sourceProtocol,
+        destinationProtocol,
         amountValue: normalizedAmount,
         amountLabel: formatAmountLabel(normalizedAmount),
         allocations,

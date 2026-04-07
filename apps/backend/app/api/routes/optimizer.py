@@ -703,6 +703,7 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
     from datetime import datetime, timedelta, timezone
 
     try:
+        settings = get_settings()
         thirty_days_ago = (
             datetime.now(timezone.utc) - timedelta(days=30)
         ).date().isoformat()
@@ -718,6 +719,14 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
 
         if not snapshots:
             return []
+
+        max_sanity_apy = Decimal(str(settings.MAX_APY_SANITY_BOUND))
+        liquidity_floor = Decimal("0.85")
+        liquidity_span = Decimal("0.15")
+        liquidity_full_tvl = Decimal("50000000")
+        risk_score_max = Decimal("9")
+        min_deployable_risk = Decimal("6")
+        risk_weight_floor = Decimal("0.60")
 
         # Determine protocols that are currently deployable.
         # Fail-safe: protocols with unreadable health are excluded.
@@ -744,6 +753,35 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
                 "No deployable protocols available for SnowMind timeseries — returning empty chart data"
             )
             return []
+
+        live_rates = {}
+        try:
+            live_rates = await _rate_fetcher.fetch_display_rates()
+        except Exception as exc:
+            logger.warning("Timeseries live-rate fetch failed; using snapshot-only chart: %s", exc)
+
+        risk_by_protocol: dict[str, Decimal] = {}
+        if live_rates:
+            try:
+                persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
+                fresh_scores, _stale_protocols = _filter_fresh_persisted_scores(persisted_scores)
+                missing_score_inputs = {
+                    pid: rate
+                    for pid, rate in live_rates.items()
+                    if pid not in fresh_scores
+                }
+                computed_scores = (
+                    await _risk_scorer.compute_scores_from_rates(db, missing_score_inputs)
+                    if missing_score_inputs
+                    else {}
+                )
+
+                for pid in deployable_pids:
+                    score = fresh_scores.get(pid) or computed_scores.get(pid)
+                    if score is not None:
+                        risk_by_protocol[pid] = score.score
+            except Exception as exc:
+                logger.warning("Timeseries risk scoring fallback triggered: %s", exc)
 
         # Group by date and protocol with APY + TVL metadata.
         by_date: dict[str, dict[str, tuple[Decimal, Decimal | None]]] = {}
@@ -772,19 +810,9 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
             by_date[d][pid] = (apy, tvl_usd)
 
         # Build timeseries:
-        # - SnowMind = best deployable APY after conservative liquidity adjustment
+        # - SnowMind = best deployable APY after conservative liquidity + risk adjustment
         # - Aave = raw aave_v3 benchmark APY
-        max_sanity_apy = Decimal(str(get_settings().MAX_APY_SANITY_BOUND))
-        liquidity_floor = Decimal("0.85")
-        liquidity_span = Decimal("0.15")
-        liquidity_full_tvl = Decimal("50000000")
-        out: list[ApyTimeseriesPoint] = []
-        for date_str in sorted(by_date.keys()):
-            day_rates = by_date[date_str]
-            aave_apy = day_rates.get("aave_v3", (Decimal("0"), None))[0]
-
-            # SnowMind picks the best deployable protocol on each day
-            # after conservative liquidity adjustment.
+        def _best_snowmind_apy(day_rates: dict[str, tuple[Decimal, Decimal | None]], date_str: str) -> Decimal:
             best_apy = Decimal("0")
             for pid in deployable_pids:
                 if pid not in day_rates:
@@ -810,9 +838,38 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
                     tvl_ratio = min(tvl_clamped / liquidity_full_tvl, Decimal("1"))
                     liquidity_factor = liquidity_floor + (tvl_ratio * liquidity_span)
 
-                adjusted_apy = apy * liquidity_factor
+                risk_score = risk_by_protocol.get(pid)
+                if risk_score is not None and risk_score < min_deployable_risk:
+                    logger.debug(
+                        "Timeseries excluded risk-weak protocol %s on %s: score=%s < %s",
+                        pid,
+                        date_str,
+                        risk_score,
+                        min_deployable_risk,
+                    )
+                    continue
+                if risk_score is None:
+                    risk_factor = Decimal("1")
+                else:
+                    risk_factor = max(
+                        risk_weight_floor,
+                        min(risk_score / risk_score_max, Decimal("1")),
+                    )
+
+                adjusted_apy = apy * liquidity_factor * risk_factor
                 if adjusted_apy > best_apy:
                     best_apy = adjusted_apy
+
+            return best_apy
+
+        out: list[ApyTimeseriesPoint] = []
+        for date_str in sorted(by_date.keys()):
+            day_rates = by_date[date_str]
+            aave_apy = day_rates.get("aave_v3", (Decimal("0"), None))[0]
+
+            # SnowMind picks the best deployable protocol on each day
+            # after conservative liquidity and risk adjustment.
+            best_apy = _best_snowmind_apy(day_rates, date_str)
 
             out.append(
                 ApyTimeseriesPoint(
@@ -821,6 +878,33 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
                     aave_apy=aave_apy,
                 )
             )
+
+        # Override (or append) today's datapoint with live rates so LP headline
+        # reflects current on-chain conditions rather than last daily snapshot.
+        if live_rates:
+            today = datetime.now(timezone.utc).date().isoformat()
+            live_day_rates: dict[str, tuple[Decimal, Decimal | None]] = {}
+            for pid, rate in live_rates.items():
+                if pid not in deployable_pids and pid != "aave_v3":
+                    continue
+                live_day_rates[pid] = (rate.apy, rate.tvl_usd)
+
+            if live_day_rates:
+                live_point = ApyTimeseriesPoint(
+                    date=today,
+                    snowmind_apy=_best_snowmind_apy(live_day_rates, today),
+                    aave_apy=live_day_rates.get("aave_v3", (Decimal("0"), None))[0],
+                )
+
+                replaced = False
+                for idx, point in enumerate(out):
+                    if point.date == today:
+                        out[idx] = live_point
+                        replaced = True
+                        break
+                if not replaced:
+                    out.append(live_point)
+                    out = sorted(out, key=lambda point: point.date)[-30:]
 
         if cache_ttl > 0:
             _timeseries_cache = (

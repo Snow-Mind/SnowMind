@@ -44,6 +44,13 @@ function redirectToHost(req: NextRequest, host: string): NextResponse {
   return NextResponse.redirect(destination, 308);
 }
 
+function redirectToPath(req: NextRequest, pathname: string): NextResponse {
+  const destination = req.nextUrl.clone();
+  destination.pathname = pathname;
+  destination.protocol = "https";
+  return NextResponse.redirect(destination, 308);
+}
+
 function isAllowedOrigin(origin: string | null): boolean {
   if (!origin) return false;
   try {
@@ -102,6 +109,9 @@ export function middleware(req: NextRequest) {
   }
 
   if (host === APP_HOST) {
+    if (pathname === "/") {
+      return withCorsHeaders(redirectToPath(req, "/dashboard"), origin);
+    }
     if (!isAppRoute(pathname)) {
       return withCorsHeaders(redirectToHost(req, WWW_HOST), origin);
     }
