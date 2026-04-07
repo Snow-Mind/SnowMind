@@ -30,7 +30,7 @@ _ONE_USDC = Decimal("1000000")
 _RATE_SCALE = Decimal("1e18")
 _HOURS_PER_YEAR = 8760
 _MAX_UINT32 = (1 << 32) - 1
-_ROUTE_CACHE_TTL_SECONDS = 15.0
+_ROUTE_CACHE_TTL_SECONDS = 120.0
 
 
 # HubPool read ABI
@@ -181,8 +181,12 @@ class FolksAdapter(BaseProtocolAdapter):
         self.pool_id = int(getattr(settings, "FOLKS_USDC_POOL_ID", 1))
         self.account_nonce = int(getattr(settings, "FOLKS_ACCOUNT_NONCE", 1))
         self.loan_nonce = int(getattr(settings, "FOLKS_LOAN_NONCE", 1))
-        self.account_nonce_scan_max = int(getattr(settings, "FOLKS_ACCOUNT_NONCE_SCAN_MAX", 4))
-        self.loan_nonce_scan_max = int(getattr(settings, "FOLKS_LOAN_NONCE_SCAN_MAX", 4))
+        configured_account_scan = int(getattr(settings, "FOLKS_ACCOUNT_NONCE_SCAN_MAX", 128))
+        configured_loan_scan = int(getattr(settings, "FOLKS_LOAN_NONCE_SCAN_MAX", 8))
+        # Recovery guard: older Folks accounts may use high nonces. Keep account
+        # scan floor high enough to rediscover existing positions.
+        self.account_nonce_scan_max = min(max(configured_account_scan, 128), 512)
+        self.loan_nonce_scan_max = min(max(configured_loan_scan, 4), 64)
         self._route_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 
         if not self.hub_pool_address:

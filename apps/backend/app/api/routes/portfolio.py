@@ -698,12 +698,24 @@ async def _get_idle_usdc(address: str) -> Decimal | None:
 
 async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | None:
     """Read on-chain underlying balance for a protocol."""
+    settings = get_settings()
+    timeout_seconds = max(0.5, float(settings.RATE_FETCH_TIMEOUT_SECONDS))
     for attempt in range(2):
         try:
-            settings = get_settings()
             adapter = get_adapter(protocol_id)
-            balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
+            balance_wei = await asyncio.wait_for(
+                adapter.get_user_balance(address, settings.USDC_ADDRESS),
+                timeout=timeout_seconds,
+            )
             return Decimal(str(balance_wei)) / Decimal("1000000")
+        except asyncio.TimeoutError:
+            logger.warning(
+                "On-chain balance read timed out for %s/%s after %.1fs",
+                protocol_id,
+                address,
+                timeout_seconds,
+            )
+            return None
         except Exception as exc:
             err_str = str(exc)
             if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
@@ -728,7 +740,11 @@ async def _get_live_apys() -> dict[str, Decimal]:
     from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
     try:
         fetcher = RateFetcher()
-        rates = await fetcher.fetch_display_rates()
+        timeout_seconds = max(0.5, float(get_settings().RATE_FETCH_TIMEOUT_SECONDS))
+        rates = await asyncio.wait_for(
+            fetcher.fetch_display_rates(),
+            timeout=timeout_seconds,
+        )
         apys: dict[str, Decimal] = {}
 
         for pid in ACTIVE_ADAPTERS.keys():
@@ -742,6 +758,13 @@ async def _get_live_apys() -> dict[str, Decimal]:
                 apys[pid] = cached.effective_apy
 
         return apys
+    except asyncio.TimeoutError:
+        logger.warning("Rate fetcher timed out in portfolio; using cached TWAP fallbacks")
+        return {
+            pid: snap.effective_apy
+            for pid in ACTIVE_ADAPTERS.keys()
+            if (snap := twap_buffer.get_latest(pid)) is not None
+        }
     except Exception as exc:
         logger.warning("Rate fetcher failed in portfolio: %s", exc)
         return {}

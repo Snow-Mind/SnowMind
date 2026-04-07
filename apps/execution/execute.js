@@ -458,12 +458,28 @@ const PERMIT2_ABI = [
 const USDC_BASE_UNITS = 1_000_000n
 const DEPOSIT_ONLY_USDC_BUFFER_RAW = 1_000n // 0.001 USDC safety headroom
 const RECEIPT_WAIT_TIMEOUT_MS = Number(process.env.EXECUTION_RECEIPT_TIMEOUT_MS || 45_000)
+const FOLKS_MESSAGE_FAILED_TOPIC0 = "0x3f5874d5457242294cfd609fe884fd768ee3c2914ccba7daa8536db7791d1919"
 
 function formatUsdcRaw(rawAmount) {
   const value = rawAmount >= 0n ? rawAmount : 0n
   const whole = value / USDC_BASE_UNITS
   const fraction = (value % USDC_BASE_UNITS).toString().padStart(6, "0")
   return `${whole.toString()}.${fraction}`
+}
+
+function extractFolksMessageFailures(receipt) {
+  const failures = []
+  const logs = Array.isArray(receipt?.logs) ? receipt.logs : []
+  for (const log of logs) {
+    const topics = Array.isArray(log?.topics) ? log.topics : []
+    if (topics.length < 2) continue
+    if (String(topics[0]).toLowerCase() !== FOLKS_MESSAGE_FAILED_TOPIC0) continue
+    failures.push({
+      address: log?.address || null,
+      messageId: topics[1] || null,
+    })
+  }
+  return failures
 }
 
 async function waitForConfirmedSuccess(publicClient, txHash, smartAccountAddress, context) {
@@ -488,6 +504,17 @@ async function waitForConfirmedSuccess(publicClient, txHash, smartAccountAddress
 
     if (status !== "success") {
       throw new Error(`Transaction ${txHash} reverted on-chain (${context})`)
+    }
+
+    const folksFailures = extractFolksMessageFailures(receipt)
+    if (folksFailures.length > 0) {
+      const ids = folksFailures
+        .map((entry) => entry.messageId)
+        .filter(Boolean)
+        .join(",")
+      throw new Error(
+        `Folks message processing failed on-chain (${context}); messageIds=${ids || "unknown"}`,
+      )
     }
   } catch (err) {
     throw new Error(
@@ -1186,7 +1213,7 @@ function normalizeFolksNonce(rawValue, fallbackInt) {
 }
 
 function buildFolksNonceCandidates(primaryNonceInt, scanMaxRaw) {
-  const scanMax = Math.min(Math.max(parsePositiveInt(scanMaxRaw, 4), 0), 32)
+  const scanMax = Math.min(Math.max(parsePositiveInt(scanMaxRaw, 4), 0), 256)
   const ordered = []
   const seen = new Set()
   const push = (value) => {
@@ -1252,10 +1279,30 @@ function resolveFolksRoutingData(source, contracts, smartAccountAddress) {
 
   const canonicalAccountId = buildFolksAccountIdCanonical(smartAccountAddress, chainId, accountNonce)
   const legacyAccountId = buildFolksAccountIdLegacy(smartAccountAddress, chainId, accountNonce)
-  const accountId = source?.folksAccountId || canonicalAccountId
-  const loanId = source?.folksLoanId || buildFolksLoanId(accountId, loanNonce)
+  const explicitAccountId =
+    typeof source?.folksAccountId === "string" && source.folksAccountId
+      ? source.folksAccountId
+      : null
+  const explicitLoanId =
+    typeof source?.folksLoanId === "string" && source.folksLoanId
+      ? source.folksLoanId
+      : null
+
+  // Creation paths must default to canonical IDs. Explicit IDs are considered
+  // later only when on-chain checks prove they already exist.
+  const accountId = canonicalAccountId
+  const loanId =
+    explicitLoanId &&
+    explicitAccountId &&
+    explicitAccountId.toLowerCase() === canonicalAccountId.toLowerCase()
+      ? explicitLoanId
+      : buildFolksLoanId(accountId, loanNonce)
 
   return {
+    folksAccountId: explicitAccountId,
+    folksLoanId: explicitLoanId,
+    explicitAccountId,
+    explicitLoanId,
     accountId,
     loanId,
     accountNonce,
@@ -1303,13 +1350,15 @@ async function resolveFolksActiveRouting(publicClient, contracts, smartAccountAd
   }
 
   const base = resolveFolksRoutingData(source, contracts, smartAccountAddress)
+  const accountScanMax = Math.max(parsePositiveInt(contracts.FOLKS_ACCOUNT_NONCE_SCAN_MAX, 128), 128)
+  const loanScanMax = Math.max(parsePositiveInt(contracts.FOLKS_LOAN_NONCE_SCAN_MAX, 8), 4)
   const accountNonceCandidates = buildFolksNonceCandidates(
     base.accountNonceInt,
-    contracts.FOLKS_ACCOUNT_NONCE_SCAN_MAX,
+    accountScanMax,
   )
   const loanNonceCandidates = buildFolksNonceCandidates(
     base.loanNonceInt,
-    contracts.FOLKS_LOAN_NONCE_SCAN_MAX,
+    loanScanMax,
   )
 
   const accountCandidates = []
@@ -1549,7 +1598,17 @@ async function resolveFolksDepositMode(
   ) {
     try {
       const accountIdsToCheck = [folks.accountId]
-      if (folks.legacyAccountId && folks.legacyAccountId.toLowerCase() !== folks.accountId.toLowerCase()) {
+      if (
+        folks.explicitAccountId &&
+        folks.explicitAccountId.toLowerCase() !== folks.accountId.toLowerCase()
+      ) {
+        accountIdsToCheck.push(folks.explicitAccountId)
+      }
+      if (
+        folks.legacyAccountId &&
+        folks.legacyAccountId.toLowerCase() !== folks.accountId.toLowerCase() &&
+        folks.legacyAccountId.toLowerCase() !== String(folks.explicitAccountId || "").toLowerCase()
+      ) {
         accountIdsToCheck.push(folks.legacyAccountId)
       }
 
@@ -1563,8 +1622,20 @@ async function resolveFolksDepositMode(
       ))
 
       const primaryAccountCreated = Boolean(accountCreatedFlags[0])
-      const legacyAccountCreated = Boolean(accountCreatedFlags[1])
-      if (!primaryAccountCreated && legacyAccountCreated) {
+      const explicitAccountCreated = Boolean(
+        folks.explicitAccountId && accountIdsToCheck[1]?.toLowerCase() === folks.explicitAccountId.toLowerCase()
+          ? accountCreatedFlags[1]
+          : false,
+      )
+      const legacyIndex = accountIdsToCheck.findIndex(
+        (accountId) => accountId.toLowerCase() === String(folks.legacyAccountId || "").toLowerCase(),
+      )
+      const legacyAccountCreated = legacyIndex >= 0 ? Boolean(accountCreatedFlags[legacyIndex]) : false
+
+      if (!primaryAccountCreated && explicitAccountCreated) {
+        folks.accountId = folks.explicitAccountId
+        folks.loanId = buildFolksLoanId(folks.accountId, folks.loanNonce)
+      } else if (!primaryAccountCreated && legacyAccountCreated) {
         folks.accountId = folks.legacyAccountId
         folks.loanId = buildFolksLoanId(folks.accountId, folks.loanNonce)
       }

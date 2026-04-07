@@ -445,7 +445,8 @@ class RateFetcher:
             results: dict[str, ProtocolRate] = {}
             for pid, result in raw_results:
                 if isinstance(result, Exception):
-                    logger.warning("Rate fetch failed for %s: %s", pid, result)
+                    detail = str(result) or type(result).__name__
+                    logger.warning("Rate fetch failed for %s: %s", pid, detail)
                     circuit_breaker.record_failure(pid)
                 elif not self.validate_rate(result):
                     logger.warning("Rate fetch rejected for %s due to validation failure", pid)
@@ -527,7 +528,8 @@ class RateFetcher:
             results: dict[str, ProtocolRate] = {}
             for pid, result in raw_results:
                 if isinstance(result, Exception):
-                    logger.warning("Display-rate fetch failed for %s: %s", pid, result)
+                    detail = str(result) or type(result).__name__
+                    logger.warning("Display-rate fetch failed for %s: %s", pid, detail)
                     circuit_breaker.record_failure(pid)
                 elif not self.validate_rate(result):
                     logger.warning("Display-rate fetch rejected for %s due to validation failure", pid)

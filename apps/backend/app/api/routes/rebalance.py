@@ -7,6 +7,7 @@ frontend can use the address it already has from ZeroDev.
 import logging
 import asyncio
 import json
+import time
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -29,6 +30,8 @@ logger = logging.getLogger("snowmind")
 router = APIRouter()  # Auth applied per-endpoint
 
 _VALID_REBALANCE_STATUSES = {"executed", "skipped", "failed", "halted", "pending"}
+_IDLE_BALANCE_DIAGNOSTIC_CACHE: dict[str, tuple[float, Decimal]] = {}
+_IDLE_BALANCE_DIAGNOSTIC_TTL_SECONDS = 20.0
 
 
 async def _tx_receipt_succeeded(tx_hash: str | None) -> bool | None:
@@ -309,12 +312,20 @@ async def get_rebalance_status(
     has_session_key = bool(get_active_session_key(db, account_id))
 
     idle_usdc = Decimal("0")
-    if is_active and has_session_key:
+    idle_cache_key = f"{account_id}:{addr.lower()}"
+    cached_idle = _IDLE_BALANCE_DIAGNOSTIC_CACHE.get(idle_cache_key)
+    if cached_idle and cached_idle[0] > time.monotonic():
+        idle_usdc = cached_idle[1]
+    elif is_active and has_session_key:
         try:
             rebalancer = Rebalancer()
             idle_usdc = await asyncio.wait_for(
                 rebalancer._get_idle_usdc_balance(addr),
-                timeout=3.0,
+                timeout=1.5,
+            )
+            _IDLE_BALANCE_DIAGNOSTIC_CACHE[idle_cache_key] = (
+                time.monotonic() + _IDLE_BALANCE_DIAGNOSTIC_TTL_SECONDS,
+                idle_usdc,
             )
         except TimeoutError:
             logger.info("Idle balance diagnostic timed out for %s", addr)
