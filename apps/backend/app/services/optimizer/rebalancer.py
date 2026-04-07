@@ -218,6 +218,42 @@ class Rebalancer:
             # Fail safe: avoid writing potentially wrong deposit totals.
             return False
 
+    async def _reconcile_principal_tracking_fallback(
+        self,
+        db,
+        *,
+        account_id: str,
+        smart_account_address: str,
+        owner_address: str,
+    ) -> Decimal | None:
+        """Attempt to self-heal stale principal tracking from chain transfer history.
+
+        Returns reconciled net principal when successful, otherwise ``None``.
+        """
+        owner = (owner_address or "").strip()
+        if not (owner.startswith("0x") and len(owner) == 42):
+            return None
+
+        try:
+            # Local import avoids service start-up coupling with route modules.
+            from app.api.routes.portfolio import _reconcile_principal_tracking_from_chain
+
+            reconciled = await _reconcile_principal_tracking_from_chain(
+                db=db,
+                account_id=account_id,
+                smart_address=smart_account_address,
+                owner_address=owner,
+                persist=True,
+            )
+            return reconciled
+        except Exception as exc:
+            logger.warning(
+                "Principal self-heal fallback failed for %s: %s",
+                smart_account_address,
+                exc,
+            )
+            return None
+
     async def _get_idle_usdc_balance(self, smart_account_address: str) -> Decimal:
         """Read the on-chain USDC balance sitting idle in the smart account.
 
@@ -349,6 +385,20 @@ class Rebalancer:
             logger.debug("No active session key for %s — skipping", account_id)
             return await self._log(db, account_id, "skipped",
                                    reason="No active session key")
+
+        account_owner_address = ""
+        try:
+            account_row = (
+                db.table("accounts")
+                .select("owner_address")
+                .eq("id", account_id)
+                .limit(1)
+                .execute()
+            )
+            if account_row.data:
+                account_owner_address = str(account_row.data[0].get("owner_address") or "").strip()
+        except Exception as exc:
+            logger.warning("Failed to load owner address for %s: %s", account_id, exc)
 
         # Fast-path: if another rebalance is currently executing for this account,
         # skip early to avoid rerunning the full pipeline and amplifying RPC load.
@@ -765,6 +815,25 @@ class Rebalancer:
                     drop_pct = (baseline_total - total_usd) / baseline_total
                     drop_threshold = Decimal(str(self.settings.PORTFOLIO_VALUE_DROP_PCT))
                     if drop_pct > drop_threshold:
+                        if not principal_matches_balance:
+                            reconciled_principal = await self._reconcile_principal_tracking_fallback(
+                                db,
+                                account_id=account_id,
+                                smart_account_address=smart_account_address,
+                                owner_address=account_owner_address,
+                            )
+                            if reconciled_principal is not None:
+                                principal_matches_balance = (
+                                    abs(total_usd - reconciled_principal) <= Decimal("0.50")
+                                )
+                                if principal_matches_balance:
+                                    logger.warning(
+                                        "Circuit-breaker principal self-healed for %s: current=$%.2f reconciled_principal=$%.2f",
+                                        account_id,
+                                        float(total_usd),
+                                        float(reconciled_principal),
+                                    )
+
                         if principal_matches_balance:
                             logger.info(
                                 "Portfolio-drop alert suppressed for %s: on-chain balance matches outstanding principal (current=$%.2f)",
