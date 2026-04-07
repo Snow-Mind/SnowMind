@@ -283,6 +283,9 @@ function deriveReasoning(entry: RebalanceLogEntry): string | null {
     return entry.skipReason || "Monitoring complete — no action needed.";
   }
   if (entry.status === "failed") return "Transaction reverted. Funds remain safe — agent will retry next cycle.";
+  if (entry.status === "halted") {
+    return entry.skipReason || "Safety guard halted this cycle. Funds were not moved.";
+  }
   const skipReason = (entry.skipReason ?? "").toLowerCase();
   if (skipReason.includes("emergency_withdrawal") || skipReason.includes("emergency withdrawal")) {
     const detail = (entry.skipReason ?? "")

@@ -236,6 +236,13 @@ const ERC4626_ABI = [
 
 const ERC20_ABI = [
   {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
     name: "approve",
     type: "function",
     stateMutability: "nonpayable",
@@ -1236,9 +1243,7 @@ export async function executeRebalance({
   try {
     const usdcBalance = await execPublicClient.readContract({
       address: contracts.USDC,
-      abi: [{ name: "balanceOf", type: "function", stateMutability: "view",
-              inputs: [{ name: "account", type: "address" }],
-              outputs: [{ name: "", type: "uint256" }] }],
+      abi: ERC20_ABI,
       functionName: "balanceOf",
       args: [smartAccountAddress],
     })

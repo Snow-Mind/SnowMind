@@ -79,6 +79,29 @@ def _should_refresh_amount(existing_amount: Decimal, onchain_amount: Decimal) ->
     return abs(onchain_amount - existing_amount) > _BALANCE_RECONCILE_EPSILON_USDC
 
 
+def _should_normalize_idle_only_principal(
+    *,
+    has_non_idle_positions: bool,
+    has_executed_rebalance: bool,
+    tracked_net_principal: Decimal | None,
+    total_current_value: Decimal,
+) -> bool:
+    """Return True when idle-only portfolios should suppress drifted PnL display."""
+    if has_non_idle_positions:
+        return False
+
+    # Before first successful deployment, all visible balance is principal.
+    if not has_executed_rebalance:
+        return True
+
+    # If everything is idle but principal is still far above current value,
+    # treat it as stale tracking drift for display purposes.
+    if tracked_net_principal is None:
+        return False
+
+    return (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
+
+
 def _portfolio_cache_get(cache_key: str) -> PortfolioResponse | None:
     cached = _portfolio_cache.get(cache_key)
     if not cached:
@@ -921,6 +944,8 @@ async def get_portfolio(
         for alloc in allocations:
             alloc.allocation_pct = alloc.amount_usdc / total_current_value
 
+    has_non_idle_positions = any(alloc.protocol_id != "idle" for alloc in allocations)
+
     # Last rebalance timestamp
     last_rb = (
         db.table("rebalance_logs")
@@ -1000,7 +1025,26 @@ async def get_portfolio(
                     after_drift,
                 )
 
+    has_executed_rebalance = bool(last_rb.data)
     net_principal = tracked_net_principal if tracked_net_principal is not None else total_current_value
+
+    if _should_normalize_idle_only_principal(
+        has_non_idle_positions=has_non_idle_positions,
+        has_executed_rebalance=has_executed_rebalance,
+        tracked_net_principal=tracked_net_principal,
+        total_current_value=total_current_value,
+    ):
+        if tracked_net_principal is not None and abs(tracked_net_principal - total_current_value) > Decimal("0.01"):
+            logger.warning(
+                "Idle-only principal normalization for %s: tracked=%s current=%s executed=%s",
+                address,
+                tracked_net_principal,
+                total_current_value,
+                has_executed_rebalance,
+            )
+        # No deployed positions means any PnL shown here is usually ledger drift, not real yield.
+        net_principal = total_current_value
+
     total_yield = total_current_value - net_principal
 
     response = PortfolioResponse(

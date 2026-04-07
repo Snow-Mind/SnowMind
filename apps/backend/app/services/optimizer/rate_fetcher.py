@@ -29,13 +29,13 @@ logger = logging.getLogger("snowmind.rate_fetcher")
 # Prevents Infura 429 storms when /rates is polled rapidly by the frontend.
 _rate_cache: dict[str, ProtocolRate] = {}
 _rate_cache_timestamp: float = 0.0
-_RATE_CACHE_TTL_SECONDS: float = 45.0  # Serve cached rates for 45s
+_RATE_CACHE_TTL_SECONDS: float = 20.0  # Serve cached rates for 20s
 _rate_fetch_lock = asyncio.Lock()
 
 # Separate cache for UI display rates (live/spot, no 24h snapshot injection)
 _display_rate_cache: dict[str, ProtocolRate] = {}
 _display_rate_cache_timestamp: float = 0.0
-_DISPLAY_RATE_CACHE_TTL_SECONDS: float = 55.0
+_DISPLAY_RATE_CACHE_TTL_SECONDS: float = 20.0
 _display_rate_fetch_lock = asyncio.Lock()
 
 # ERC-4626 vault adapters that use 24h convertToAssets snapshots for stable APY

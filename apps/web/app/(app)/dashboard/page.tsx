@@ -21,7 +21,6 @@ import AgentManager from "@/components/dashboard/AgentManager";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
 import { usePortfolio } from "@/hooks/usePortfolio";
-import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
 import { useAccountDetail } from "@/hooks/useAccountDetail";
@@ -214,8 +213,6 @@ export default function DashboardPage() {
   }, [address, queryClient, refetchPortfolio, activeTab]);
 
   useRealtimePortfolio(address, accountDetail?.id || null);
-
-  const { data: rates } = useProtocolRates();
   const isLoading = portfolioLoading || rebalanceLoading || accountLoading;
   const stats = portfolio ? deriveOverviewStats(portfolio) : null;
   const accountIsActive = accountDetail?.isActive ?? true;
@@ -247,12 +244,18 @@ export default function DashboardPage() {
     );
   })();
 
-  const shouldAutoDeployIdle = !isLoading && accountIsActive && hasActiveSessionKey && !requiresRegrant && hasDeployableIdleBalance;
+  const deployStatus = String(rebalanceStatus?.status ?? "").toLowerCase();
+  const hasDeployInFlightStatus = ["pending", "executing"].includes(deployStatus);
+  const shouldAutoDeployIdle = !isLoading
+    && accountIsActive
+    && hasActiveSessionKey
+    && !requiresRegrant
+    && hasDeployableIdleBalance
+    && !hasDeployInFlightStatus;
   const isIdleOnlyDeployment = !isLoading && accountIsActive && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
   const deploySkipReason = rebalanceStatus?.reasonDetail
     ?? rebalanceStatus?.lastLog?.skipReason
     ?? null;
-  const deployStatus = String(rebalanceStatus?.status ?? "").toLowerCase();
   const showDeployRetry = isIdleOnlyDeployment
     && hasActiveSessionKey
     && ["skipped", "failed", "halted"].includes(deployStatus);
@@ -423,12 +426,6 @@ export default function DashboardPage() {
   const regrantReason = rebalanceStatus?.reasonDetail
     ?? "Your session key needs to be granted again before automated rebalancing can continue.";
 
-  // Best available APY across active protocols (shown when blended APY is 0)
-  const bestRate = rates
-    ?.filter((r) => r.isActive && !r.isComingSoon && r.currentApy > 0)
-    .sort((a, b) => b.currentApy - a.currentApy)[0];
-  const projectedApy = bestRate ? bestRate.currentApy * 100 : 0;
-
   // Active protocol IDs = user's selected protocols during onboarding (allowedProtocols in session key)
   // NOT based on current portfolio allocations, so it shows what user chose, not just current holdings
   const activeProtocolIds = accountDetail?.sessionKey?.allowedProtocols ?? [];
@@ -526,7 +523,9 @@ export default function DashboardPage() {
                 <div>
                   <p className="text-[10px] text-[#8A837C]">APR</p>
                   <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
-                    {stats.blendedApy > 0 ? formatPct(stats.blendedApy) : projectedApy > 0 ? `~${formatPct(projectedApy)}` : "0.00%"}
+                    {stats.activeProtocols > 0 && stats.blendedApy > 0
+                      ? formatPct(stats.blendedApy)
+                      : "0.00%"}
                   </p>
                 </div>
                 <div>
@@ -534,7 +533,7 @@ export default function DashboardPage() {
                   <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
                     {stats.activeProtocols > 0
                       ? stats.activeProtocols
-                      : hasIdleAllocation
+                      : isIdleOnlyDeployment
                         ? (
                           <span className="inline-flex items-center gap-1 text-glacier">
                             <Loader2 className="h-3 w-3 animate-spin" />

@@ -14,6 +14,42 @@ def test_should_refresh_amount_tracks_small_yield_deltas() -> None:
     assert not portfolio._should_refresh_amount(Decimal("50.000000"), Decimal("50.0000004"))
 
 
+def test_should_normalize_idle_only_principal_before_first_execution() -> None:
+    assert portfolio._should_normalize_idle_only_principal(
+        has_non_idle_positions=False,
+        has_executed_rebalance=False,
+        tracked_net_principal=Decimal("49.99"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
+def test_should_normalize_idle_only_principal_on_overcount_after_execution() -> None:
+    assert portfolio._should_normalize_idle_only_principal(
+        has_non_idle_positions=False,
+        has_executed_rebalance=True,
+        tracked_net_principal=Decimal("49.99"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
+def test_should_not_normalize_principal_when_positions_are_deployed() -> None:
+    assert not portfolio._should_normalize_idle_only_principal(
+        has_non_idle_positions=True,
+        has_executed_rebalance=True,
+        tracked_net_principal=Decimal("49.99"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
+def test_should_not_normalize_idle_only_principal_when_not_overcounted() -> None:
+    assert not portfolio._should_normalize_idle_only_principal(
+        has_non_idle_positions=False,
+        has_executed_rebalance=True,
+        tracked_net_principal=Decimal("1.00"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_protocol_balance_returns_none_after_rate_limit_retries() -> None:
     """Protocol balance reads should fail-safe (None) after retrying 429 errors."""
