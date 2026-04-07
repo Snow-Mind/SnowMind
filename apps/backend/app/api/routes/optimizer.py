@@ -805,6 +805,11 @@ async def _build_apy_timeseries_response(db: Client) -> list[ApyTimeseriesPoint]
     from datetime import datetime, timedelta, timezone
 
     settings = get_settings()
+    health_timeout_seconds = max(0.5, float(settings.RATE_FETCH_TIMEOUT_SECONDS))
+    live_rate_timeout_seconds = max(
+        0.5,
+        float(settings.TIMESERIES_LIVE_RATE_TIMEOUT_SECONDS),
+    )
     thirty_days_ago = (
         datetime.now(timezone.utc) - timedelta(days=30)
     ).date().isoformat()
@@ -842,7 +847,10 @@ async def _build_apy_timeseries_response(db: Client) -> list[ApyTimeseriesPoint]
         adapter,
     ) -> tuple[str, bool, Exception | None]:
         try:
-            health = await adapter.get_health()
+            health = await asyncio.wait_for(
+                adapter.get_health(),
+                timeout=health_timeout_seconds,
+            )
             return protocol_id, health.is_deposit_safe, None
         except Exception as exc:  # pragma: no cover - defensive logging path
             return protocol_id, False, exc
@@ -870,7 +878,15 @@ async def _build_apy_timeseries_response(db: Client) -> list[ApyTimeseriesPoint]
 
     live_rates = {}
     try:
-        live_rates = await _rate_fetcher.fetch_display_rates()
+        live_rates = await asyncio.wait_for(
+            _rate_fetcher.fetch_display_rates(),
+            timeout=live_rate_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Timeseries live-rate fetch timed out after %.1fs; using snapshot-only chart",
+            live_rate_timeout_seconds,
+        )
     except Exception as exc:
         logger.warning("Timeseries live-rate fetch failed; using snapshot-only chart: %s", exc)
 

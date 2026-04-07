@@ -90,6 +90,13 @@ EULER_V2_ABI = [
         "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     },
+    {
+        "name": "maxWithdraw",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "maxAssets", "type": "uint256"}],
+        "stateMutability": "view",
+    },
 ]
 
 # 1 USDC = 1e6 (6 decimals)
@@ -426,10 +433,20 @@ class EulerV2Adapter(BaseProtocolAdapter):
         if not vault:
             return 0
         w3 = self._get_w3()
-        shares = await vault.functions.balanceOf(
-            w3.to_checksum_address(user_address)
-        ).call()
-        return await vault.functions.convertToAssets(shares).call()
+        user_checksum = w3.to_checksum_address(user_address)
+        shares = await vault.functions.balanceOf(user_checksum).call()
+        if shares == 0:
+            return 0
+
+        assets = await vault.functions.convertToAssets(shares).call()
+        try:
+            max_withdraw = await vault.functions.maxWithdraw(user_checksum).call()
+            if max_withdraw > 0 and max_withdraw < assets:
+                return max_withdraw
+        except Exception as exc:
+            logger.debug("Euler maxWithdraw read failed for %s: %s", user_address, exc)
+
+        return assets
 
     async def get_convert_to_assets_value(self) -> int:
         """Read current convertToAssets(1e18) for daily snapshot persistence."""

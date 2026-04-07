@@ -79,6 +79,13 @@ SILO_VAULT_ABI = [
         "stateMutability": "view",
     },
     {
+        "name": "maxWithdraw",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "maxAssets", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
         "name": "utilizationData",
         "type": "function",
         "inputs": [],
@@ -588,12 +595,27 @@ class SiloAdapter(BaseProtocolAdapter):
         if not vault:
             return 0
         w3 = self._get_w3()
-        shares = await vault.functions.balanceOf(
-            w3.to_checksum_address(user_address)
-        ).call()
+        user_checksum = w3.to_checksum_address(user_address)
+        shares = await vault.functions.balanceOf(user_checksum).call()
         if shares == 0:
             return 0
-        return await vault.functions.convertToAssets(shares).call()
+        assets = await vault.functions.convertToAssets(shares).call()
+
+        # Prefer withdrawable assets when vault limits are active, but keep
+        # visibility of positions even if maxWithdraw reports 0 unexpectedly.
+        try:
+            max_withdraw = await vault.functions.maxWithdraw(user_checksum).call()
+            if max_withdraw > 0 and max_withdraw < assets:
+                return max_withdraw
+        except Exception as exc:
+            logger.debug(
+                "Silo %s maxWithdraw read failed for %s: %s",
+                self.protocol_id,
+                user_address,
+                exc,
+            )
+
+        return assets
 
     async def get_shares(self, user_address: str) -> int:
         """Returns the raw ERC-4626 share balance for redemption paths."""

@@ -1049,8 +1049,8 @@ async def get_portfolio(
             ):
                 tracked_net_principal = reconciled_principal
             else:
-                logger.warning(
-                    "Skipping reconciled principal for %s: before_drift=%s after_drift=%s",
+                logger.info(
+                    "Principal reconciliation kept tracked value for %s: before_drift=%s after_drift=%s",
                     address,
                     before_drift,
                     after_drift,

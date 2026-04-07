@@ -377,6 +377,7 @@ class RateFetcher:
 
             settings = self.settings
             semaphore = asyncio.Semaphore(settings.RPC_CONCURRENCY_LIMIT)
+            rate_fetch_timeout = max(0.5, float(settings.RATE_FETCH_TIMEOUT_SECONDS))
 
             async def _do_fetch(pid: str) -> ProtocolRate:
                 """Execute a single adapter's get_rate() call."""
@@ -386,14 +387,23 @@ class RateFetcher:
                     snapshot_data = self._get_vault_yesterday_snapshot(pid)
                     if snapshot_data is not None:
                         yesterday_value, snapshot_at = snapshot_data
-                        return await adapter.get_rate(
-                            yesterday_snapshot=yesterday_value,
-                            snapshot_at=snapshot_at,
+                        return await asyncio.wait_for(
+                            adapter.get_rate(
+                                yesterday_snapshot=yesterday_value,
+                                snapshot_at=snapshot_at,
+                            ),
+                            timeout=rate_fetch_timeout,
                         )
                     else:
-                        return await adapter.get_rate(yesterday_snapshot=None)
+                        return await asyncio.wait_for(
+                            adapter.get_rate(yesterday_snapshot=None),
+                            timeout=rate_fetch_timeout,
+                        )
                 else:
-                    return await adapter.get_rate()
+                    return await asyncio.wait_for(
+                        adapter.get_rate(),
+                        timeout=rate_fetch_timeout,
+                    )
 
             async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
                 """Run a single adapter fetch under the concurrency semaphore.
@@ -476,12 +486,16 @@ class RateFetcher:
                 return dict(_display_rate_cache)
 
             semaphore = asyncio.Semaphore(self.settings.RPC_CONCURRENCY_LIMIT)
+            rate_fetch_timeout = max(0.5, float(self.settings.RATE_FETCH_TIMEOUT_SECONDS))
 
             async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
                 async with semaphore:
                     adapter = ALL_ADAPTERS[pid]
                     try:
-                        result = await adapter.get_rate()
+                        result = await asyncio.wait_for(
+                            adapter.get_rate(),
+                            timeout=rate_fetch_timeout,
+                        )
                         return pid, result
                     except Exception as exc:
                         err_str = str(exc)
@@ -489,7 +503,10 @@ class RateFetcher:
                             from app.core.rpc import get_rpc_manager
                             get_rpc_manager().report_rate_limit()
                             try:
-                                result = await adapter.get_rate()
+                                result = await asyncio.wait_for(
+                                    adapter.get_rate(),
+                                    timeout=rate_fetch_timeout,
+                                )
                                 return pid, result
                             except Exception as retry_exc:
                                 return pid, retry_exc

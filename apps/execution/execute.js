@@ -233,6 +233,13 @@ const ERC4626_ABI = [
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
   },
+  {
+    name: "maxWithdraw",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "maxAssets", type: "uint256" }],
+  },
 ]
 
 const ERC20_ABI = [
@@ -1028,6 +1035,34 @@ async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddres
         `in ${vaultAddress}. DB allocation is stale — reconciling.`
       )
     }
+
+    let maxWithdrawRaw = null
+    try {
+      maxWithdrawRaw = await publicClient.readContract({
+        address: vaultAddress,
+        abi: ERC4626_ABI,
+        functionName: "maxWithdraw",
+        args: [accountAddress],
+      })
+      if (maxWithdrawRaw === 0n) {
+        throw new Error(
+          `${protocolName} withdrawal skipped: vault ${vaultAddress} reports maxWithdraw=0 for ${accountAddress}.`
+        )
+      }
+    } catch (maxWithdrawError) {
+      if (maxWithdrawError?.message?.includes("withdrawal skipped")) {
+        throw maxWithdrawError
+      }
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "vault_max_withdraw_check_failed",
+        protocol: protocolName,
+        error: maxWithdrawError?.message?.slice(0, 200),
+        timestamp: new Date().toISOString(),
+      }))
+      maxWithdrawRaw = null
+    }
+
     console.log(JSON.stringify({
       level: "info",
       action: "vault_share_balance_verified",
@@ -1035,8 +1070,14 @@ async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddres
       vaultAddress,
       accountAddress,
       shareBalance: shareBalance.toString(),
+      maxWithdrawRaw: maxWithdrawRaw != null ? maxWithdrawRaw.toString() : null,
       timestamp: new Date().toISOString(),
     }))
+
+    return {
+      shareBalance,
+      maxWithdrawRaw,
+    }
   } catch (err) {
     if (err.message?.includes("withdrawal skipped")) {
       throw err // Re-throw our own guard error
@@ -1050,24 +1091,61 @@ async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddres
       error: err?.message?.slice(0, 200),
       timestamp: new Date().toISOString(),
     }))
+
+    return null
   }
 }
 
-function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAccountAddress) {
+function buildErc4626Withdrawal(
+  vaultAddress,
+  amountUSDC,
+  shareBalance,
+  smartAccountAddress,
+  maxWithdrawRaw = null,
+  protocolName = "erc4626"
+) {
   if (amountUSDC === "MAX") {
-    if (!shareBalance) {
+    if (shareBalance == null) {
       throw new Error(`MAX withdrawal from ${vaultAddress} requires shareBalance but none provided`)
     }
+
+    const redeemShares = typeof shareBalance === "bigint" ? shareBalance : BigInt(shareBalance)
+    if (redeemShares <= 0n) {
+      throw new Error(`${protocolName} withdrawal skipped: zero share balance for MAX redeem`)
+    }
+    if (typeof maxWithdrawRaw === "bigint" && maxWithdrawRaw <= 0n) {
+      throw new Error(`${protocolName} withdrawal skipped: vault reports maxWithdraw=0`)
+    }
+
     return {
       to: vaultAddress,
       value: 0n,
       data: encodeFunctionData({
         abi: ERC4626_ABI,
         functionName: "redeem",
-        args: [BigInt(shareBalance), smartAccountAddress, smartAccountAddress],
+        args: [redeemShares, smartAccountAddress, smartAccountAddress],
       }),
     }
   }
+
+  let assetsRaw = parseUnits(String(amountUSDC), 6)
+  if (typeof maxWithdrawRaw === "bigint" && maxWithdrawRaw > 0n && assetsRaw > maxWithdrawRaw) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "vault_withdraw_amount_clamped",
+      protocol: protocolName,
+      vaultAddress,
+      requestedAssetsRaw: assetsRaw.toString(),
+      maxWithdrawRaw: maxWithdrawRaw.toString(),
+      timestamp: new Date().toISOString(),
+    }))
+    assetsRaw = maxWithdrawRaw
+  }
+
+  if (assetsRaw <= 0n) {
+    throw new Error(`${protocolName} withdrawal skipped: non-positive withdraw amount after safety checks`)
+  }
+
   // Known USDC amount → use withdraw(assets) which accepts the USDC amount directly
   return {
     to: vaultAddress,
@@ -1075,7 +1153,7 @@ function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAcc
     data: encodeFunctionData({
       abi: ERC4626_ABI,
       functionName: "withdraw",
-      args: [parseUnits(String(amountUSDC), 6), smartAccountAddress, smartAccountAddress],
+      args: [assetsRaw, smartAccountAddress, smartAccountAddress],
     }),
   }
 }
@@ -1825,20 +1903,60 @@ export async function executeRebalance({
         data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [BigInt(qiTokenAmount)] }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SPARK_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SPARK_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SPARK_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SPARK_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.EULER_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.EULER_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.EULER_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.EULER_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SAVUSD_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SILO_SAVUSD_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SILO_SAVUSD_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SILO_SAVUSD_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SILO_SUSDP_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SILO_SUSDP_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "silo_gami_usdc" && contracts.SILO_GAMI_USDC_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SILO_GAMI_USDC_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SILO_GAMI_USDC_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SILO_GAMI_USDC_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SILO_GAMI_USDC_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "folks" && contracts.FOLKS_SPOKE_COMMON) {
       let folks = resolveFolksRoutingData(withdrawal, contracts, smartAccountAddress)
       const discoveredFolks = await resolveFolksActiveRouting(
