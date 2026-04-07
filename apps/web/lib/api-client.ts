@@ -252,9 +252,15 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
   const isIdempotent = method === "GET" || method === "HEAD";
   const canRetry = isIdempotent || options?.retryable === true;
   const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
-  const backendCandidates = BACKEND_URL_CANDIDATES.length > 0
-    ? BACKEND_URL_CANDIDATES
-    : [BACKEND_URL];
+  // Browser requests always use same-origin /api. This avoids direct client
+  // DNS dependence on backend hostnames and lets Vercel rewrites proxy safely.
+  const candidatePool = typeof window !== "undefined"
+    ? [""]
+    : BACKEND_URL_CANDIDATES;
+
+  const backendCandidates = Array.from(
+    new Set(candidatePool.length > 0 ? candidatePool : [BACKEND_URL]),
+  );
 
   let lastNetworkError: NetworkError | null = null;
   for (const backendBase of backendCandidates) {
