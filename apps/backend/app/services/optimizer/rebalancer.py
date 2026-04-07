@@ -708,17 +708,28 @@ class Rebalancer:
                             )
 
                 adjusted_baseline = max(prev_total - withdrawals_since_snapshot, Decimal("0"))
-                if adjusted_baseline > Decimal("0.01"):
-                    baseline_total = adjusted_baseline
-
                 if withdrawals_since_snapshot > Decimal("0"):
-                    logger.info(
-                        "Circuit-breaker baseline adjusted for %s: previous=$%.2f, withdrawals=$%.2f, adjusted=$%.2f",
-                        account_id,
-                        float(prev_total),
-                        float(withdrawals_since_snapshot),
-                        float(baseline_total),
-                    )
+                    if adjusted_baseline <= Decimal("0.01"):
+                        # Full (or near-full) user withdrawal resets principal lifecycle.
+                        # Use current value as baseline to avoid false "portfolio drop" halts
+                        # when a user later redeposits a small amount.
+                        baseline_total = total_usd
+                        logger.info(
+                            "Circuit-breaker baseline reset for %s after withdrawals: previous=$%.2f, withdrawals=$%.2f, current=$%.2f",
+                            account_id,
+                            float(prev_total),
+                            float(withdrawals_since_snapshot),
+                            float(total_usd),
+                        )
+                    else:
+                        baseline_total = adjusted_baseline
+                        logger.info(
+                            "Circuit-breaker baseline adjusted for %s: previous=$%.2f, withdrawals=$%.2f, adjusted=$%.2f",
+                            account_id,
+                            float(prev_total),
+                            float(withdrawals_since_snapshot),
+                            float(baseline_total),
+                        )
 
                 principal_matches_balance = False
                 try:
