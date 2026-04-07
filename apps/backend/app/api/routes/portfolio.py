@@ -699,7 +699,7 @@ async def _get_idle_usdc(address: str) -> Decimal | None:
 async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | None:
     """Read on-chain underlying balance for a protocol."""
     settings = get_settings()
-    timeout_seconds = max(0.5, float(settings.RATE_FETCH_TIMEOUT_SECONDS))
+    timeout_seconds = max(0.5, float(settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
     for attempt in range(2):
         try:
             adapter = get_adapter(protocol_id)

@@ -195,11 +195,17 @@ export default function SessionKeyStatus() {
         queryClient.invalidateQueries({ queryKey: ["rebalance-history", saAddress] }),
       ]);
 
-      // Best-effort deploy kick so newly granted keys start acting immediately.
-      await api.triggerRebalance(saAddress).catch(() => undefined);
-
       toast.success("Session key granted — agent activated");
-      refetch();
+      void refetch();
+
+      // Best-effort deploy kick so newly granted keys start acting immediately.
+      // Do not await this call, otherwise the UI can stay stuck in "Granting…"
+      // while the backend trigger endpoint runs a full rebalance cycle.
+      void api.triggerRebalance(saAddress).catch((triggerErr) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[SessionKeyStatus] triggerRebalance failed:", triggerErr);
+        }
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to grant session key";
       toast.error(message);

@@ -6,6 +6,7 @@ kept in place but currently disabled behind configuration.
 """
 
 import logging
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
@@ -213,11 +214,24 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
     """
     total_raw = 0
     failed_protocols: list[str] = []
+    settings = get_settings()
+    timeout_seconds = max(0.5, float(settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
 
     for pid, adapter in ACTIVE_ADAPTERS.items():
         try:
-            balance = await adapter.get_balance(smart_account)
+            balance = await asyncio.wait_for(
+                adapter.get_balance(smart_account),
+                timeout=timeout_seconds,
+            )
             total_raw += int(balance)
+        except asyncio.TimeoutError:
+            failed_protocols.append(pid)
+            logger.warning(
+                "Timed out reading %s balance for %s after %.1fs",
+                pid,
+                smart_account,
+                timeout_seconds,
+            )
         except Exception as exc:
             failed_protocols.append(pid)
             logger.warning(
@@ -230,7 +244,6 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
     # Include idle USDC held directly in the smart account so full-withdrawal
     # previews/executions represent the actual amount user can receive.
     try:
-        settings = get_settings()
         w3 = get_shared_async_web3()
         usdc = w3.eth.contract(
             address=w3.to_checksum_address(settings.USDC_ADDRESS),

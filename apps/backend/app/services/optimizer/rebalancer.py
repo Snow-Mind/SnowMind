@@ -277,16 +277,38 @@ class Rebalancer:
         discovered: dict[str, Decimal] = {}
         for pid in protocol_ids:
             try:
-                adapter = get_adapter(pid)
-                if adapter is None:
-                    continue
-                balance_wei = await adapter.get_balance(smart_account_address)
-                balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                balance_usd = await self._read_protocol_balance_usd(
+                    smart_account_address,
+                    pid,
+                )
                 if balance_usd > Decimal("0.50"):
                     discovered[pid] = balance_usd
             except Exception as exc:
                 logger.debug("On-chain balance check for %s/%s failed: %s", smart_account_address, pid, exc)
         return discovered
+
+    async def _read_protocol_balance_usd(
+        self,
+        smart_account_address: str,
+        protocol_id: str,
+    ) -> Decimal:
+        """Read one protocol balance with a bounded timeout."""
+        adapter = get_adapter(protocol_id)
+        if adapter is None:
+            raise RuntimeError(f"Adapter not found for protocol {protocol_id}")
+
+        timeout_seconds = max(0.5, float(self.settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
+        try:
+            balance_wei = await asyncio.wait_for(
+                adapter.get_balance(smart_account_address),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"On-chain read timed out after {timeout_seconds:.1f}s"
+            ) from exc
+
+        return Decimal(str(balance_wei)) / Decimal("1000000")
 
     async def _execute_rebalance_once(
         self,
@@ -558,9 +580,10 @@ class Rebalancer:
             pid = row["protocol_id"]
             # Verify each DB allocation against on-chain balance
             try:
-                adapter = get_adapter(pid)
-                balance_wei = await adapter.get_balance(smart_account_address)
-                onchain_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                onchain_usd = await self._read_protocol_balance_usd(
+                    smart_account_address,
+                    pid,
+                )
                 if abs(onchain_usd - db_amt) > Decimal("0.10"):
                     logger.warning(
                         "Allocation mismatch %s/%s: DB=$%.2f, on-chain=$%.2f — using on-chain",

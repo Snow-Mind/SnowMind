@@ -1134,27 +1134,30 @@ function AgentDetailsModal({
     ? Math.max(Number(portfolio.totalDepositedUsd) + Number(portfolio.totalYieldUsd), 0)
     : 0;
   const fallbackTotalUsdc = Math.max(allocationTotalUsdc, portfolioTotalUsdc, 0);
+  const previewRequestAmountUsdc = Math.max(fallbackTotalUsdc, 0.01);
 
   const displayUserReceivesUsdc = withdrawPreview?.userReceives ?? fallbackTotalUsdc;
   const requestCurrentBalanceUsdc = withdrawPreview?.currentBalance ?? fallbackTotalUsdc;
+  const showUnavailableBalance =
+    !previewLoading
+    && !withdrawPreview
+    && fallbackTotalUsdc <= 0
+    && !!previewError;
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadWithdrawalPreview() {
       if (!smartAccountAddress) return;
-      if (fallbackTotalUsdc <= 0) {
-        setWithdrawPreview(null);
-        setPreviewError(null);
-        return;
-      }
 
       setPreviewLoading(true);
       setPreviewError(null);
       try {
         const data = await api.previewWithdrawal({
           smartAccountAddress,
-          withdrawAmount: fallbackTotalUsdc.toFixed(6),
+          // Probe with a minimum valid amount so we can recover from stale
+          // portfolio snapshots that temporarily report zero.
+          withdrawAmount: previewRequestAmountUsdc.toFixed(6),
           isFullWithdrawal: true,
         });
 
@@ -1164,14 +1167,13 @@ function AgentDetailsModal({
         const parsedReceives = Number(data.userReceives);
 
         setWithdrawPreview({
-          currentBalance: Number.isFinite(parsedCurrent) ? parsedCurrent : fallbackTotalUsdc,
-          userReceives: Number.isFinite(parsedReceives) ? parsedReceives : fallbackTotalUsdc,
+          currentBalance: Number.isFinite(parsedCurrent) ? parsedCurrent : previewRequestAmountUsdc,
+          userReceives: Number.isFinite(parsedReceives) ? parsedReceives : previewRequestAmountUsdc,
         });
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         setPreviewError(msg);
-        setWithdrawPreview(null);
       } finally {
         if (!cancelled) setPreviewLoading(false);
       }
@@ -1181,7 +1183,7 @@ function AgentDetailsModal({
     return () => {
       cancelled = true;
     };
-  }, [smartAccountAddress, fallbackTotalUsdc]);
+  }, [smartAccountAddress, previewRequestAmountUsdc]);
 
   const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
 
@@ -1306,7 +1308,9 @@ function AgentDetailsModal({
                 <span className="font-mono text-sm text-[#5C5550]">
                   {previewLoading
                     ? "Calculating..."
-                    : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
+                    : showUnavailableBalance
+                      ? "Temporarily unavailable"
+                      : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
                 </span>
               </div>
               {previewError && (
@@ -1318,7 +1322,8 @@ function AgentDetailsModal({
               disabled={
                 withdrawStep === "processing"
                 || previewLoading
-                || displayUserReceivesUsdc <= 0
+                || showUnavailableBalance
+                || requestCurrentBalanceUsdc <= 0
               }
               className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
             >

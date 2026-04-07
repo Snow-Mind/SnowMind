@@ -166,6 +166,7 @@ class Settings(BaseSettings):
     CIRCUIT_BREAKER_COOLDOWN_SECONDS: int = 60  # Seconds before half-open retry
     RPC_CONCURRENCY_LIMIT: int = 3       # Max concurrent RPC calls to avoid 429
     RATE_FETCH_TIMEOUT_SECONDS: float = 4.0  # Per-protocol APY read timeout
+    PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS: float = 8.0  # Per-protocol balance read timeout
     TIMESERIES_LIVE_RATE_TIMEOUT_SECONDS: float = 3.5  # /rates/timeseries live-rate timeout
     GAS_COST_ESTIMATE_USD: float = 0.008  # Realistic Avalanche UserOp gas cost
     PROFITABILITY_BREAKEVEN_DAYS: int = 7  # Rebalance allowed if gas is recouped within N days

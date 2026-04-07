@@ -82,6 +82,7 @@ export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const DEFAULT_REQUEST_TIMEOUT_MS = 25_000;
 const AUTH_COOLDOWN_MS = 15_000;
 const AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS = 30_000;
 const AUTH_MISSING_TOKEN_COOLDOWN_MS = 5_000;
@@ -197,8 +198,22 @@ function parseApiErrorMessage(rawBody: string): string {
   return text;
 }
 
-async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit & { retryable?: boolean; timeoutMs?: number },
+): Promise<T> {
   const requiresAuth = !isPublicPath(path);
+
+  const {
+    retryable,
+    timeoutMs,
+    headers: optionHeaders,
+    ...fetchOptions
+  } = options ?? {};
+
+  const requestTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.max(1_000, Math.trunc(timeoutMs as number))
+    : DEFAULT_REQUEST_TIMEOUT_MS;
 
   if (requiresAuth && Date.now() < _authRejectedUntil) {
     throw new APIError(
@@ -250,11 +265,11 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
   const headers: Record<string, string> = {
     ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
     ...(requiresAuth && token && { Authorization: `Bearer ${token}` }),
-    ...(options?.headers as Record<string, string>),
+    ...(optionHeaders as Record<string, string>),
   };
 
   const isIdempotent = method === "GET" || method === "HEAD";
-  const canRetry = isIdempotent || options?.retryable === true;
+  const canRetry = isIdempotent || retryable === true;
   const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
   const browserSafeCandidates = typeof window !== "undefined"
     ? BACKEND_URL_CANDIDATES.filter((entry) => !isAbsoluteHttpUrl(entry))
@@ -282,10 +297,39 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
 
       let res: Response;
       try {
-        res = await fetch(endpoint, { ...options, headers });
-      } catch {
+        const abortController = new AbortController();
+        const upstreamSignal = fetchOptions.signal;
+        if (upstreamSignal) {
+          if (upstreamSignal.aborted) {
+            abortController.abort();
+          } else {
+            upstreamSignal.addEventListener("abort", () => abortController.abort(), { once: true });
+          }
+        }
+
+        const timeoutId = setTimeout(() => {
+          abortController.abort();
+        }, requestTimeoutMs);
+
+        try {
+          res = await fetch(endpoint, {
+            ...fetchOptions,
+            headers,
+            signal: abortController.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (err) {
         const hostLabel = backendBase || "origin-relative API";
-        lastError = new NetworkError(`Network request failed for ${hostLabel}.`);
+        const errorName = err instanceof Error ? err.name : "";
+        if (errorName === "AbortError") {
+          lastError = new NetworkError(
+            `Request to ${hostLabel} timed out after ${(requestTimeoutMs / 1000).toFixed(0)}s.`,
+          );
+        } else {
+          lastError = new NetworkError(`Network request failed for ${hostLabel}.`);
+        }
         if (!canRetry) {
           break;
         }
