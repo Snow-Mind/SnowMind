@@ -376,11 +376,15 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 @router.get("/rates", response_model=list[ProtocolRateResponse])
 @limiter.limit("60/minute")
 async def get_all_rates(request: Request, db: Client = Depends(get_db)):
-    """Fetch live on-chain rates from every known protocol adapter.
+    """Fetch user-facing live on-chain rates from every known protocol adapter.
 
-    Uses TWAP-smoothed APY when available for stable frontend display.
-    Falls back to spot rate, then to last-known-good TWAP snapshot if
-    live fetch failed (circuit breaker open, 429, RPC timeout, etc.).
+    Display policy:
+      1. Prefer live/spot APY from adapters (for dashboard transparency).
+      2. If live fetch fails, fall back to last-known-good TWAP snapshot.
+      3. Apply the same safety cap for UI display.
+
+    Rebalancer policy remains unchanged: optimization and execution continue
+    to use TWAP validation/smoothing in the rebalancer pipeline.
     """
     global _rates_cache
     cache_ttl = max(0, int(get_settings().OPTIMIZER_RATES_CACHE_TTL_SECONDS))
@@ -388,7 +392,7 @@ async def get_all_rates(request: Request, db: Client = Depends(get_db)):
     if cache_ttl > 0 and _rates_cache and _rates_cache[0] > now_mono:
         return [ProtocolRateResponse.model_validate(item) for item in _rates_cache[1]]
 
-    rates = await _rate_fetcher.fetch_all_rates()
+    rates = await _rate_fetcher.fetch_display_rates()
 
     persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
     persisted_scores, stale_protocols = _filter_fresh_persisted_scores(persisted_scores)
@@ -439,15 +443,8 @@ async def get_all_rates(request: Request, db: Client = Depends(get_db)):
                 )
                 continue
 
-        # Prefer TWAP-smoothed APY over noisy spot rate for display
+        # Display live APY for UI; fall back already handled above if missing.
         display_apy = rate.apy if rate else Decimal("0")
-        twap_apy = twap_buffer.get_twap_effective_apy(pid)
-        if twap_apy is not None and twap_apy > Decimal("0"):
-            display_apy = twap_apy
-
-        # Cap displayed APY at sanity bound (25%) — never show inflated values
-        # to users even if transient spike landed in the TWAP buffer.
-        display_apy = min(display_apy, Decimal("0.25"))
 
         out.append(
             ProtocolRateResponse(

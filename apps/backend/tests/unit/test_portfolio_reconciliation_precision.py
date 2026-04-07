@@ -218,3 +218,84 @@ async def test_reconcile_principal_tracking_falls_back_to_rpc_logs() -> None:
     assert db.tracking_query.upsert_payload is not None
     assert db.tracking_query.upsert_payload["cumulative_deposited"] == "5.000000"
     assert db.tracking_query.upsert_payload["cumulative_net_withdrawn"] == "2.000000"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_principal_tracking_uses_activity_logs_when_owner_missing() -> None:
+    portfolio._principal_reconcile_cooldowns.clear()
+
+    smart = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+    usdc = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    settings = MagicMock()
+    settings.USDC_ADDRESS = usdc
+    settings.SNOWTRACE_API_KEY = ""
+    settings.SNOWTRACE_API_URL = "https://api.snowtrace.io/api"
+
+    db = _FakeDB()
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio._collect_principal_from_snowtrace",
+        new=AsyncMock(return_value=None),
+    ) as snowtrace_mock, patch(
+        "app.api.routes.portfolio._collect_principal_from_rebalance_receipts",
+        new=AsyncMock(return_value=None),
+    ) as receipt_mock, patch(
+        "app.api.routes.portfolio._collect_principal_from_rpc_logs",
+        new=AsyncMock(return_value=None),
+    ) as rpc_mock, patch(
+        "app.api.routes.portfolio._collect_principal_from_activity_rows",
+        new=AsyncMock(return_value=(Decimal("100"), Decimal("50"))),
+    ) as activity_mock:
+        reconciled = await portfolio._reconcile_principal_tracking_from_chain(
+            db=db,
+            account_id="acct-1",
+            smart_address=smart,
+            owner_address="",
+        )
+
+    assert reconciled == Decimal("50.000000")
+    assert snowtrace_mock.await_count == 0
+    assert receipt_mock.await_count == 0
+    assert rpc_mock.await_count == 0
+    assert activity_mock.await_count == 1
+    assert db.tracking_query.upsert_payload is not None
+    assert db.tracking_query.upsert_payload["cumulative_deposited"] == "100.000000"
+    assert db.tracking_query.upsert_payload["cumulative_net_withdrawn"] == "50.000000"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_principal_tracking_uses_snowtrace_outstanding_principal() -> None:
+    portfolio._principal_reconcile_cooldowns.clear()
+
+    smart = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+    owner = "0xe476858cf5fba6d45bc6f7c082edc5d3c4737a48"
+    usdc = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    settings = MagicMock()
+    settings.USDC_ADDRESS = usdc
+    settings.SNOWTRACE_API_KEY = "test-key"
+    settings.SNOWTRACE_API_URL = "https://api.snowtrace.io/api"
+
+    db = _FakeDB()
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio._collect_principal_from_snowtrace",
+        new=AsyncMock(return_value=(Decimal("20"), Decimal("15"), Decimal("10"))),
+    ), patch(
+        "app.api.routes.portfolio._collect_principal_from_rebalance_receipts",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.api.routes.portfolio._collect_principal_from_rpc_logs",
+        new=AsyncMock(return_value=None),
+    ):
+        reconciled = await portfolio._reconcile_principal_tracking_from_chain(
+            db=db,
+            account_id="acct-1",
+            smart_address=smart,
+            owner_address=owner,
+        )
+
+    # Lifetime net is 5, but current-cycle outstanding principal is 10.
+    assert reconciled == Decimal("10.000000")
+    assert db.tracking_query.upsert_payload is not None
+    assert db.tracking_query.upsert_payload["cumulative_deposited"] == "20.000000"
+    assert db.tracking_query.upsert_payload["cumulative_net_withdrawn"] == "10.000000"

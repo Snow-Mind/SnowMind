@@ -238,7 +238,7 @@ async def _collect_principal_from_snowtrace(
     smart_address: str,
     owner_address: str,
     usdc_address: str,
-) -> tuple[Decimal, Decimal] | None:
+) -> tuple[Decimal, Decimal, Decimal] | None:
     """Collect lifetime owner<->smart USDC transfers from Snowtrace API."""
     settings = get_settings()
     api_key = (settings.SNOWTRACE_API_KEY or "").strip()
@@ -252,6 +252,7 @@ async def _collect_principal_from_snowtrace(
 
     cumulative_deposited = Decimal("0")
     cumulative_withdrawn = Decimal("0")
+    outstanding_principal = Decimal("0")
 
     async with httpx.AsyncClient(timeout=_SNOWTRACE_TIMEOUT_SECONDS) as client:
         for page in range(1, _SNOWTRACE_MAX_PAGES + 1):
@@ -309,8 +310,14 @@ async def _collect_principal_from_snowtrace(
 
                 if source == owner_l and destination == smart_l:
                     cumulative_deposited += amount_usdc
+                    outstanding_principal += amount_usdc
                 elif source == smart_l and destination == owner_l:
                     cumulative_withdrawn += amount_usdc
+                    outstanding_principal -= amount_usdc
+                    if outstanding_principal < Decimal("0"):
+                        # Once principal is fully withdrawn, realized gains
+                        # should not reduce principal for the next deposit cycle.
+                        outstanding_principal = Decimal("0")
 
             if len(rows) < _SNOWTRACE_PAGE_SIZE:
                 break
@@ -324,7 +331,7 @@ async def _collect_principal_from_snowtrace(
 
     if cumulative_deposited <= Decimal("0") and cumulative_withdrawn <= Decimal("0"):
         return None
-    return cumulative_deposited, cumulative_withdrawn
+    return cumulative_deposited, cumulative_withdrawn, outstanding_principal
 
 
 async def _fetch_transfer_logs(
@@ -445,6 +452,59 @@ async def _collect_principal_from_rpc_logs(
         return None
 
 
+async def _collect_principal_from_activity_rows(
+    db: Client,
+    account_id: str,
+) -> tuple[Decimal, Decimal] | None:
+    """Collect principal flow from executed activity rows.
+
+    Fallback source used when owner metadata is missing/stale or transfer-log
+    collection is unavailable. It sums explicit user-wallet flow markers:
+      - deposits:   from_protocol == "user_wallet"
+            - withdrawals: to_protocol in {"user_wallet", "user_eoa"}
+    """
+    try:
+        rows = (
+            db.table("rebalance_logs")
+            .select("from_protocol, to_protocol, amount_moved")
+            .eq("account_id", account_id)
+            .eq("status", "executed")
+            .not_.is_("amount_moved", "null")
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Activity-row principal collection failed for account_id=%s: %s",
+            account_id,
+            exc,
+        )
+        return None
+
+    cumulative_deposited = Decimal("0")
+    cumulative_withdrawn = Decimal("0")
+
+    for row in rows.data or []:
+        try:
+            amount = Decimal(str(row.get("amount_moved") or "0"))
+        except Exception:
+            continue
+        if amount <= Decimal("0"):
+            continue
+
+        from_protocol = str(row.get("from_protocol") or "")
+        to_protocol = str(row.get("to_protocol") or "")
+
+        if from_protocol == "user_wallet":
+            cumulative_deposited += amount
+        if to_protocol in {"user_wallet", "user_eoa"}:
+            cumulative_withdrawn += amount
+
+    if cumulative_deposited <= Decimal("0") and cumulative_withdrawn <= Decimal("0"):
+        return None
+
+    return cumulative_deposited, cumulative_withdrawn
+
+
 async def _reconcile_principal_tracking_from_chain(
     db: Client,
     account_id: str,
@@ -467,45 +527,83 @@ async def _reconcile_principal_tracking_from_chain(
     try:
         settings = get_settings()
         usdc_address = settings.USDC_ADDRESS
+        owner_normalized = owner_address.lower().strip()
+        owner_usable = owner_normalized.startswith("0x") and len(owner_normalized) == 42
 
         cumulative_deposited: Decimal | None = None
         cumulative_withdrawn: Decimal | None = None
+        snowtrace_outstanding: Decimal | None = None
         source_used = "receipt_logs"
 
-        snowtrace_totals = await _collect_principal_from_snowtrace(
-            smart_address=smart_address,
-            owner_address=owner_address,
-            usdc_address=usdc_address,
-        )
-        if snowtrace_totals is not None:
-            cumulative_deposited, cumulative_withdrawn = snowtrace_totals
-            source_used = "snowtrace"
-        else:
-            receipt_totals = await _collect_principal_from_rebalance_receipts(
-                db=db,
-                account_id=account_id,
+        if owner_usable:
+            snowtrace_totals = await _collect_principal_from_snowtrace(
                 smart_address=smart_address,
-                owner_address=owner_address,
+                owner_address=owner_normalized,
                 usdc_address=usdc_address,
             )
+            if snowtrace_totals is not None:
+                if len(snowtrace_totals) == 3:
+                    cumulative_deposited, cumulative_withdrawn, snowtrace_outstanding = snowtrace_totals
+                else:
+                    cumulative_deposited, cumulative_withdrawn = snowtrace_totals
+                source_used = "snowtrace"
+
+        if cumulative_deposited is not None and cumulative_withdrawn is not None:
+            pass
+        else:
+            receipt_totals: tuple[Decimal, Decimal] | None = None
+            if owner_usable:
+                receipt_totals = await _collect_principal_from_rebalance_receipts(
+                    db=db,
+                    account_id=account_id,
+                    smart_address=smart_address,
+                    owner_address=owner_normalized,
+                    usdc_address=usdc_address,
+                )
             if receipt_totals is not None:
                 cumulative_deposited, cumulative_withdrawn = receipt_totals
             else:
-                rpc_totals = await _collect_principal_from_rpc_logs(
-                    smart_address=smart_address,
-                    owner_address=owner_address,
-                    usdc_address=usdc_address,
-                )
-                if rpc_totals is None:
-                    _principal_reconcile_cooldowns[cooldown_key] = (
-                        time.monotonic() + _PRINCIPAL_RECONCILE_RETRY_SECONDS
+                rpc_totals: tuple[Decimal, Decimal] | None = None
+                if owner_usable:
+                    rpc_totals = await _collect_principal_from_rpc_logs(
+                        smart_address=smart_address,
+                        owner_address=owner_normalized,
+                        usdc_address=usdc_address,
                     )
-                    return None
-                cumulative_deposited, cumulative_withdrawn = rpc_totals
-                source_used = "rpc_logs"
+                if rpc_totals is None:
+                    activity_totals = await _collect_principal_from_activity_rows(
+                        db=db,
+                        account_id=account_id,
+                    )
+                    if activity_totals is None:
+                        _principal_reconcile_cooldowns[cooldown_key] = (
+                            time.monotonic() + _PRINCIPAL_RECONCILE_RETRY_SECONDS
+                        )
+                        return None
+                    cumulative_deposited, cumulative_withdrawn = activity_totals
+                    source_used = "activity_logs"
+                else:
+                    cumulative_deposited, cumulative_withdrawn = rpc_totals
+                    source_used = "rpc_logs"
 
         deposited_q = cumulative_deposited.quantize(Decimal("0.000001"))
         withdrawn_q = cumulative_withdrawn.quantize(Decimal("0.000001"))
+
+        if snowtrace_outstanding is not None:
+            outstanding_q = snowtrace_outstanding.quantize(Decimal("0.000001"))
+            lifetime_net_q = max(deposited_q - withdrawn_q, Decimal("0"))
+            if outstanding_q > lifetime_net_q:
+                adjusted_withdrawn = max(deposited_q - outstanding_q, Decimal("0"))
+                adjusted_withdrawn_q = adjusted_withdrawn.quantize(Decimal("0.000001"))
+                logger.warning(
+                    "Adjusting principal baseline for %s: lifetime_net=%s outstanding=%s withdrawn %s->%s",
+                    smart_address,
+                    lifetime_net_q,
+                    outstanding_q,
+                    withdrawn_q,
+                    adjusted_withdrawn_q,
+                )
+                withdrawn_q = adjusted_withdrawn_q
 
         if persist:
             db.table("account_yield_tracking").upsert(
@@ -602,11 +700,9 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | Non
 async def _get_live_apys() -> dict[str, Decimal]:
     """Get display APYs aligned with /optimizer/rates behavior.
 
-    Uses the same smoothing/fallback policy as rates endpoint:
-      1. Prefer TWAP APY when available.
-      2. Fall back to fresh spot APY from fetch_all_rates.
-      3. Fall back to last cached TWAP snapshot when live fetch is missing.
-      4. Apply same display safety cap (25%).
+    Uses live display rates first, with conservative fallback:
+      1. Prefer fresh live APY from fetch_display_rates.
+      2. Fall back to last cached TWAP snapshot when live fetch is missing.
 
     This keeps portfolio allocations, optimizer preview, and dashboard rate cards
     consistent under transient RPC failures.
@@ -614,22 +710,18 @@ async def _get_live_apys() -> dict[str, Decimal]:
     from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
     try:
         fetcher = RateFetcher()
-        rates = await fetcher.fetch_all_rates()
+        rates = await fetcher.fetch_display_rates()
         apys: dict[str, Decimal] = {}
 
         for pid in ACTIVE_ADAPTERS.keys():
             rate = rates.get(pid)
             if rate is not None:
-                display_apy = rate.apy
-                twap_apy = twap_buffer.get_twap_effective_apy(pid)
-                if twap_apy is not None and twap_apy > Decimal("0"):
-                    display_apy = twap_apy
-                apys[pid] = min(display_apy, Decimal("0.25"))
+                apys[pid] = rate.apy
                 continue
 
             cached = twap_buffer.get_latest(pid)
             if cached is not None:
-                apys[pid] = min(cached.effective_apy, Decimal("0.25"))
+                apys[pid] = cached.effective_apy
 
         return apys
     except Exception as exc:
@@ -848,7 +940,7 @@ async def get_portfolio(
     # Undercount trigger: tracked principal below current value shortly after
     # a fresh owner->smart funding transfer (common onboarding drift signal).
     reconcile_principal = False
-    if tracked_net_principal is not None and owner_address:
+    if tracked_net_principal is not None:
         principal_overcount = (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
         principal_undercount = (total_current_value - tracked_net_principal) > _PRINCIPAL_RECONCILE_UNDERCOUNT_DRIFT_USDC
 

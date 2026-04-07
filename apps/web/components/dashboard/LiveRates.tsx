@@ -144,7 +144,10 @@ export default function LiveRates({
               Protocol Rates
             </h2>
             <p className="text-xs text-muted-foreground">
-              APY comparison across protocols
+              Live on-chain APY comparison across protocols
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Optimizer and auto-rebalance decisions use TWAP-smoothed rates for safety.
             </p>
             <p className="text-[10px] text-muted-foreground">
               Rebalance cadence for current deposit size: every {rebalanceIntervalLabel}

@@ -64,6 +64,9 @@ class _FakeFetcher:
     async def fetch_all_rates(self):
         return self._rates
 
+    async def fetch_display_rates(self):
+        return self._rates
+
 
 @pytest.mark.asyncio
 async def test_get_all_rates_uses_persisted_risk_breakdown(monkeypatch) -> None:
@@ -234,3 +237,52 @@ async def test_get_all_rates_recomputes_when_persisted_snapshot_is_stale(monkeyp
     assert out[0].risk_score == Decimal("5")
     assert out[0].risk_breakdown is not None
     assert out[0].risk_breakdown.liquidity == 0
+
+
+@pytest.mark.asyncio
+async def test_get_all_rates_uses_live_display_apy_not_twap(monkeypatch) -> None:
+    rates = {
+        "aave_v3": ProtocolRate(
+            protocol_id="aave_v3",
+            apy=Decimal("0.031"),
+            effective_apy=Decimal("0.031"),
+            tvl_usd=Decimal("100000000"),
+            utilization_rate=Decimal("0.70"),
+            fetched_at=1234.0,
+        )
+    }
+
+    monkeypatch.setattr(optimizer_routes, "_rate_fetcher", _FakeFetcher(rates))
+    monkeypatch.setattr(
+        optimizer_routes,
+        "ALL_ADAPTERS",
+        {"aave_v3": SimpleNamespace(name="Aave V3", is_active=True)},
+    )
+    monkeypatch.setattr(
+        optimizer_routes,
+        "ACTIVE_ADAPTERS",
+        {"aave_v3": SimpleNamespace(name="Aave V3", is_active=True)},
+    )
+    monkeypatch.setattr(
+        optimizer_routes._risk_scorer,
+        "get_latest_persisted_scores",
+        lambda _db: {"aave_v3": _score("aave_v3", "7", 2, 2, 1, 1, 1)},
+    )
+    monkeypatch.setattr(
+        optimizer_routes._risk_scorer,
+        "compute_scores_from_rates",
+        lambda _db, _rates: {},
+    )
+
+    # Route should ignore TWAP for display when live rate exists.
+    monkeypatch.setattr(
+        optimizer_routes.twap_buffer,
+        "get_twap_effective_apy",
+        lambda _pid: Decimal("0.019"),
+    )
+
+    optimizer_routes._rates_cache = None
+    out = await optimizer_routes.get_all_rates(_make_request(), SimpleNamespace())
+
+    assert len(out) == 1
+    assert out[0].current_apy == Decimal("0.031")

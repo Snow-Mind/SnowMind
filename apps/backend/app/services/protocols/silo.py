@@ -73,6 +73,29 @@ SILO_VAULT_ABI = [
         "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     },
+    {
+        "name": "utilizationData",
+        "type": "function",
+        "inputs": [],
+        "outputs": [
+            {
+                "type": "tuple",
+                "components": [
+                    {"name": "collateralAssets", "type": "uint256"},
+                    {"name": "debtAssets", "type": "uint256"},
+                    {"name": "interestRateTimestamp", "type": "uint64"},
+                ],
+            }
+        ],
+        "stateMutability": "view",
+    },
+    {
+        "name": "siloConfig",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+    },
 ]
 
 # 1 USDC = 1e6 (6 decimals)
@@ -94,6 +117,70 @@ _ERC20_BALANCE_ABI = [
         "stateMutability": "view",
     }
 ]
+
+# SiloConfig ABI slice for interest-model/fee lookup
+_SILO_CONFIG_ABI = [
+    {
+        "name": "getConfig",
+        "type": "function",
+        "inputs": [{"name": "_silo", "type": "address"}],
+        "outputs": [
+            {
+                "type": "tuple",
+                "components": [
+                    {"name": "daoFee", "type": "uint256"},
+                    {"name": "deployerFee", "type": "uint256"},
+                    {"name": "silo", "type": "address"},
+                    {"name": "token", "type": "address"},
+                    {"name": "protectedShareToken", "type": "address"},
+                    {"name": "collateralShareToken", "type": "address"},
+                    {"name": "debtShareToken", "type": "address"},
+                    {"name": "solvencyOracle", "type": "address"},
+                    {"name": "maxLtvOracle", "type": "address"},
+                    {"name": "interestRateModel", "type": "address"},
+                    {"name": "maxLtv", "type": "uint256"},
+                    {"name": "lt", "type": "uint256"},
+                    {"name": "liquidationTargetLtv", "type": "uint256"},
+                    {"name": "liquidationFee", "type": "uint256"},
+                    {"name": "flashloanFee", "type": "uint256"},
+                    {"name": "hookReceiver", "type": "address"},
+                    {"name": "callBeforeQuote", "type": "bool"},
+                ],
+            }
+        ],
+        "stateMutability": "view",
+    }
+]
+
+# IRM ABI slice for current borrow APR
+_INTEREST_RATE_MODEL_ABI = [
+    {
+        "name": "getCurrentInterestRate",
+        "type": "function",
+        "inputs": [
+            {"name": "_silo", "type": "address"},
+            {"name": "_blockTimestamp", "type": "uint256"},
+        ],
+        "outputs": [{"name": "rcur", "type": "uint256"}],
+        "stateMutability": "view",
+    }
+]
+
+WAD = Decimal("1e18")
+
+
+def _compute_silo_depositor_apr(
+    borrow_apr: Decimal,
+    utilization: Decimal,
+    dao_fee_wad: Decimal,
+    deployer_fee_wad: Decimal,
+) -> Decimal:
+    """Compute live depositor APR from Silo borrow APR/utilization/fees."""
+    util_clamped = max(Decimal("0"), min(utilization, Decimal("1")))
+    fee_fraction = (dao_fee_wad + deployer_fee_wad) / WAD
+    fee_clamped = max(Decimal("0"), min(fee_fraction, Decimal("1")))
+    apr = borrow_apr * util_clamped * (Decimal("1") - fee_clamped)
+    return max(Decimal("0"), apr)
 
 
 class SiloAdapter(BaseProtocolAdapter):
@@ -133,6 +220,75 @@ class SiloAdapter(BaseProtocolAdapter):
             abi=SILO_VAULT_ABI,
         )
 
+    async def _read_live_depositor_apr(
+        self,
+        vault,
+    ) -> tuple[Decimal | None, Decimal | None]:
+        """Read live depositor APR from Silo's on-chain IRM.
+
+        Formula (matches market UI):
+          depositor_apr = borrow_apr * utilization * (1 - dao_fee - deployer_fee)
+        where all fee and rate scalars are WAD (1e18).
+        """
+        try:
+            w3 = self._get_w3()
+
+            utilization_raw = await vault.functions.utilizationData().call()
+            collateral_assets = Decimal(str(utilization_raw[0]))
+            debt_assets = Decimal(str(utilization_raw[1]))
+            utilization = (
+                debt_assets / collateral_assets
+                if collateral_assets > Decimal("0")
+                else Decimal("0")
+            )
+            utilization = max(Decimal("0"), min(utilization, Decimal("1")))
+
+            silo_config_address = await vault.functions.siloConfig().call()
+            if not silo_config_address:
+                return None, utilization
+
+            config_contract = w3.eth.contract(
+                address=w3.to_checksum_address(silo_config_address),
+                abi=_SILO_CONFIG_ABI,
+            )
+            cfg = await config_contract.functions.getConfig(
+                w3.to_checksum_address(self.vault_address)
+            ).call()
+
+            dao_fee = Decimal(str(cfg[0] if len(cfg) > 0 else 0))
+            deployer_fee = Decimal(str(cfg[1] if len(cfg) > 1 else 0))
+            irm_address = cfg[9] if len(cfg) > 9 else None
+            if not irm_address:
+                return None, utilization
+
+            irm_contract = w3.eth.contract(
+                address=w3.to_checksum_address(irm_address),
+                abi=_INTEREST_RATE_MODEL_ABI,
+            )
+            latest_block = await w3.eth.get_block("latest")
+            block_timestamp = int(latest_block["timestamp"])
+            borrow_apr_raw = await irm_contract.functions.getCurrentInterestRate(
+                w3.to_checksum_address(self.vault_address),
+                block_timestamp,
+            ).call()
+
+            borrow_apr = Decimal(str(borrow_apr_raw)) / WAD
+            depositor_apr = _compute_silo_depositor_apr(
+                borrow_apr=borrow_apr,
+                utilization=utilization,
+                dao_fee_wad=dao_fee,
+                deployer_fee_wad=deployer_fee,
+            )
+
+            return depositor_apr, utilization
+        except Exception as exc:
+            logger.warning(
+                "Silo live APR read failed for %s: %s",
+                self.protocol_id,
+                exc,
+            )
+            return None, None
+
     # ── Rate reading ──────────────────────────────────────────────────────────
 
     async def get_rate(
@@ -140,12 +296,10 @@ class SiloAdapter(BaseProtocolAdapter):
         yesterday_snapshot: Decimal | None = None,
         snapshot_at: str | None = None,
     ) -> ProtocolRate:
-        """Compute APY using convertToAssets snapshot delta with ACTUAL elapsed
-        time (not hardcoded 24h).
+        """Compute APY using live IRM APR (UI-aligned), fallback to share-price growth.
 
-        Primary: When yesterday_snapshot is provided (1e18-scale convertToAssets
-        value from ~24h ago), APY = (1 + growth)^(365/elapsed_days) - 1.
-        Fallback: Observes share-price change over ≥60s.
+        Primary: live on-chain depositor APR from Silo interest-rate model.
+        Fallback: convertToAssets snapshot delta / short-horizon share-price growth.
         """
         import datetime as _dt
         vault = self._get_vault()
@@ -168,8 +322,22 @@ class SiloAdapter(BaseProtocolAdapter):
         total_assets_raw = await vault.functions.totalAssets().call()
         tvl = Decimal(str(total_assets_raw)) / ONE_USDC
 
+        now = time.time()
+
+        live_apy, utilization_rate = await self._read_live_depositor_apr(vault)
+        if live_apy is not None:
+            self._cached_apy = live_apy
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=self._cached_apy,
+                effective_apy=self._cached_apy,
+                tvl_usd=tvl,
+                utilization_rate=utilization_rate,
+                fetched_at=now,
+            )
+
         # Compute utilization: cash = USDC sitting idle in vault, borrowed = totalAssets - cash
-        utilization_rate: Decimal | None = None
+        # Fallback path only when live IRM read fails.
         if total_assets_raw > 0:
             try:
                 settings = get_settings()
@@ -188,7 +356,6 @@ class SiloAdapter(BaseProtocolAdapter):
             except Exception as exc:
                 logger.warning("Silo utilization calculation failed for %s: %s", self.protocol_id, exc)
 
-        now = time.time()
         today_value = Decimal(str(current_assets))  # raw 1e18-scale value
 
         # ── Primary: 24h snapshot delta ──────────────────────────────────
@@ -306,23 +473,19 @@ class SiloAdapter(BaseProtocolAdapter):
                 details={"reason": f"Health check RPC failed: {exc}"},
             )
 
-        # Check utilization: cash = USDC.balanceOf(vault), utilization = 1 - cash/totalAssets
+        # Check utilization using Silo's utilizationData.
         utilization: Decimal | None = None
         status = ProtocolStatus.HEALTHY
         is_deposit_safe = True
         try:
-            settings = get_settings()
-            w3 = self._get_w3()
-            usdc_contract = w3.eth.contract(
-                address=w3.to_checksum_address(settings.USDC_ADDRESS),
-                abi=_ERC20_BALANCE_ABI,
+            utilization_raw = await vault.functions.utilizationData().call()
+            collateral_assets = Decimal(str(utilization_raw[0]))
+            debt_assets = Decimal(str(utilization_raw[1]))
+            utilization = (
+                debt_assets / collateral_assets
+                if collateral_assets > Decimal("0")
+                else Decimal("0")
             )
-            cash_raw = await usdc_contract.functions.balanceOf(
-                w3.to_checksum_address(self.vault_address)
-            ).call()
-            cash = Decimal(str(cash_raw))
-            total = Decimal(str(total_assets))
-            utilization = (total - cash) / total
             utilization = max(Decimal("0"), min(utilization, Decimal("1")))
 
             if utilization > Decimal("0.90"):
@@ -345,28 +508,19 @@ class SiloAdapter(BaseProtocolAdapter):
         )
 
     async def get_utilization(self) -> Decimal | None:
-        """Read utilization from vault totalAssets and idle USDC cash."""
+        """Read utilization from Silo's native utilizationData."""
         vault = self._get_vault()
         if not vault or not self.vault_address:
             return None
 
-        total_assets_raw = await vault.functions.totalAssets().call()
-        total_assets = Decimal(str(total_assets_raw))
-        if total_assets <= 0:
-            return Decimal("0")
-
-        settings = get_settings()
-        w3 = self._get_w3()
-        usdc_contract = w3.eth.contract(
-            address=w3.to_checksum_address(settings.USDC_ADDRESS),
-            abi=_ERC20_BALANCE_ABI,
+        utilization_raw = await vault.functions.utilizationData().call()
+        collateral_assets = Decimal(str(utilization_raw[0]))
+        debt_assets = Decimal(str(utilization_raw[1]))
+        utilization = (
+            debt_assets / collateral_assets
+            if collateral_assets > Decimal("0")
+            else Decimal("0")
         )
-        cash_raw = await usdc_contract.functions.balanceOf(
-            w3.to_checksum_address(self.vault_address)
-        ).call()
-
-        cash = Decimal(str(cash_raw))
-        utilization = (total_assets - cash) / total_assets
         return max(Decimal("0"), min(utilization, Decimal("1")))
 
     # ── Snapshot helper ──────────────────────────────────────────────────

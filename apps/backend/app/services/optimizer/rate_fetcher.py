@@ -31,6 +31,11 @@ _rate_cache: dict[str, ProtocolRate] = {}
 _rate_cache_timestamp: float = 0.0
 _RATE_CACHE_TTL_SECONDS: float = 45.0  # Serve cached rates for 45s
 
+# Separate cache for UI display rates (live/spot, no 24h snapshot injection)
+_display_rate_cache: dict[str, ProtocolRate] = {}
+_display_rate_cache_timestamp: float = 0.0
+_DISPLAY_RATE_CACHE_TTL_SECONDS: float = 20.0
+
 # ERC-4626 vault adapters that use 24h convertToAssets snapshots for stable APY
 _VAULT_SNAPSHOT_PROTOCOLS = {"spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"}
 
@@ -362,6 +367,67 @@ class RateFetcher:
     async def fetch_active_rates(self) -> dict[str, ProtocolRate]:
         """Backward-compatible alias retained for legacy scheduler/routes."""
         return await self.fetch_all_rates()
+
+    async def fetch_display_rates(self) -> dict[str, ProtocolRate]:
+        """Fetch live/spot rates for user-facing APY display.
+
+        Unlike ``fetch_all_rates`` (optimizer pipeline), this path does not inject
+        24h snapshots for ERC-4626 vaults. It calls adapter ``get_rate()`` directly
+        so dashboard rates reflect live on-chain values as closely as possible.
+        """
+        global _display_rate_cache, _display_rate_cache_timestamp
+
+        now = time.time()
+        if _display_rate_cache and (now - _display_rate_cache_timestamp) < _DISPLAY_RATE_CACHE_TTL_SECONDS:
+            return dict(_display_rate_cache)
+
+        semaphore = asyncio.Semaphore(self.settings.RPC_CONCURRENCY_LIMIT)
+
+        async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
+            async with semaphore:
+                adapter = ALL_ADAPTERS[pid]
+                try:
+                    result = await adapter.get_rate()
+                    return pid, result
+                except Exception as exc:
+                    err_str = str(exc)
+                    if "429" in err_str or "Too Many Requests" in err_str:
+                        from app.core.rpc import get_rpc_manager
+                        get_rpc_manager().report_rate_limit()
+                        try:
+                            result = await adapter.get_rate()
+                            return pid, result
+                        except Exception as retry_exc:
+                            return pid, retry_exc
+                    return pid, exc
+
+        pids_to_fetch = [
+            pid for pid in ALL_ADAPTERS
+            if not circuit_breaker.is_open(pid)
+        ]
+
+        if not pids_to_fetch:
+            return {}
+
+        raw_results = await asyncio.gather(
+            *[_throttled_fetch(pid) for pid in pids_to_fetch]
+        )
+
+        results: dict[str, ProtocolRate] = {}
+        for pid, result in raw_results:
+            if isinstance(result, Exception):
+                logger.warning("Display-rate fetch failed for %s: %s", pid, result)
+                circuit_breaker.record_failure(pid)
+            else:
+                results[pid] = result
+                circuit_breaker.record_success(pid)
+
+        if results:
+            _display_rate_cache.clear()
+            _display_rate_cache.update(results)
+            _display_rate_cache_timestamp = time.time()
+
+        return results
 
     def get_twap_effective_apys(self) -> dict[str, Decimal]:
         """Return TWAP-smoothed effective APYs for all protocols with samples."""
