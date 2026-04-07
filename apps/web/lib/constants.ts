@@ -4,13 +4,44 @@ import { avalanche } from 'viem/chains'
 export const CHAIN = avalanche
 export const CHAIN_ID = 43114
 
-const DEFAULT_BACKEND_URL =
-  process.env.NODE_ENV === "production"
-    ? "https://snowmindbackend-production-10ed.up.railway.app"
-    : "http://localhost:8000"
+const DEFAULT_PRODUCTION_BACKEND_URL = "https://api.snowmind.xyz";
+const LEGACY_PRODUCTION_BACKEND_URL = "https://snowmindbackend-production-10ed.up.railway.app";
+const DEFAULT_DEVELOPMENT_BACKEND_URL = "http://localhost:8000";
 
-export const BACKEND_URL =
-  (process.env.NEXT_PUBLIC_BACKEND_URL ?? DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+function normalizeBackendUrl(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, "");
+}
+
+function parseBackendFallbacks(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((entry) => normalizeBackendUrl(entry))
+    .filter((entry): entry is string => entry !== null);
+}
+
+const defaultBackendUrl =
+  process.env.NODE_ENV === "production"
+    ? DEFAULT_PRODUCTION_BACKEND_URL
+    : DEFAULT_DEVELOPMENT_BACKEND_URL;
+
+export const BACKEND_URL_CANDIDATES = Array.from(
+  new Set(
+    [
+      normalizeBackendUrl(process.env.NEXT_PUBLIC_BACKEND_URL),
+      normalizeBackendUrl(defaultBackendUrl),
+      ...parseBackendFallbacks(process.env.NEXT_PUBLIC_BACKEND_FALLBACK_URLS),
+      normalizeBackendUrl(
+        process.env.NODE_ENV === "production" ? LEGACY_PRODUCTION_BACKEND_URL : undefined,
+      ),
+    ].filter((entry): entry is string => entry !== null),
+  ),
+);
+
+export const BACKEND_URL = BACKEND_URL_CANDIDATES[0] ?? defaultBackendUrl;
 
 export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? "";
 

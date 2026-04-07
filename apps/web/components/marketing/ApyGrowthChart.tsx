@@ -9,7 +9,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from "recharts";
-import { BACKEND_URL } from "@/lib/constants";
+import { api } from "@/lib/api-client";
 import SafeResponsiveContainer from "@/components/ui/safe-responsive-container";
 
 interface TimeseriesPoint {
@@ -32,9 +32,7 @@ export default function ApyGrowthChart() {
   useEffect(() => {
     async function fetchTimeseries() {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/v1/optimizer/rates/timeseries`);
-        if (!res.ok) throw new Error("Failed to fetch");
-        const raw: TimeseriesPoint[] = await res.json();
+        const raw = await api.getApyTimeseries() as TimeseriesPoint[];
 
         const mapped: ChartData[] = raw.map((p) => {
           const d = new Date(p.date);

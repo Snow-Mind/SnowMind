@@ -1,7 +1,24 @@
 import type { NextConfig } from "next";
 
+const rawBackendProxyTarget =
+  process.env.BACKEND_URL
+  ?? process.env.NEXT_PUBLIC_BACKEND_URL
+  ?? (process.env.NODE_ENV === "production"
+    ? "https://api.snowmind.xyz"
+    : "http://localhost:8000");
+
+const backendProxyTarget = rawBackendProxyTarget.replace(/\/+$/, "");
+
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${backendProxyTarget}/api/:path*`,
+      },
+    ];
+  },
   async redirects() {
     return [
       {

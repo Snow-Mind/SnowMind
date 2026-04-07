@@ -1,4 +1,4 @@
-import { BACKEND_URL } from "./constants";
+import { BACKEND_URL, BACKEND_URL_CANDIDATES } from "./constants";
 import type {
   GetPortfolioResponse,
   RunOptimizerResponse,
@@ -252,45 +252,65 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
   const isIdempotent = method === "GET" || method === "HEAD";
   const canRetry = isIdempotent || options?.retryable === true;
   const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
+  const backendCandidates = BACKEND_URL_CANDIDATES.length > 0
+    ? BACKEND_URL_CANDIDATES
+    : [BACKEND_URL];
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+  let lastNetworkError: NetworkError | null = null;
+  for (const backendBase of backendCandidates) {
+    let lastError: Error | null = null;
+    const endpoint = `${backendBase}${path}`;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+      }
+
+      let res: Response;
+      try {
+        res = await fetch(endpoint, { ...options, headers });
+      } catch {
+        const hostLabel = backendBase || "origin-relative API";
+        lastError = new NetworkError(`Network request failed for ${hostLabel}.`);
+        if (!canRetry) {
+          break;
+        }
+        continue;
+      }
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          setAuthCooldown(AUTH_COOLDOWN_MS);
+        }
+        if (res.status === 429) {
+          setAuthCooldown(AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS);
+        }
+        if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
+          continue;
+        }
+        const text = await res.text().catch(() => "Unknown error");
+        const message = parseApiErrorMessage(text);
+        throw new APIError(res.status, `HTTP_${res.status}`, message);
+      }
+
+      if (requiresAuth) {
+        _authRejectedUntil = 0;
+      }
+
+      return res.json() as Promise<T>;
     }
 
-    let res: Response;
-    try {
-      res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
-    } catch {
-      lastError = new NetworkError("Network request failed. Check your connection.");
-      if (!canRetry) throw lastError;
+    if (lastError instanceof NetworkError) {
+      lastNetworkError = lastError;
       continue;
     }
 
-    if (!res.ok) {
-      if (res.status === 401) {
-        setAuthCooldown(AUTH_COOLDOWN_MS);
-      }
-      if (res.status === 429) {
-        setAuthCooldown(AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS);
-      }
-      if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
-        continue;
-      }
-      const text = await res.text().catch(() => "Unknown error");
-      const message = parseApiErrorMessage(text);
-      throw new APIError(res.status, `HTTP_${res.status}`, message);
+    if (lastError) {
+      throw lastError;
     }
-
-    if (requiresAuth) {
-      _authRejectedUntil = 0;
-    }
-
-    return res.json() as Promise<T>;
   }
 
-  throw lastError ?? new NetworkError("Request failed after retries.");
+  throw lastNetworkError ?? new NetworkError("Request failed after retries.");
 }
 
 // ── API client ─────────────────────────────────────────────

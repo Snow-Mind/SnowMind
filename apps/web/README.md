@@ -53,7 +53,9 @@ pnpm dev        # starts on http://localhost:3000
 See `apps/web/.env.example` for required variables:
 - `NEXT_PUBLIC_PRIVY_APP_ID` — Privy application ID
 - `NEXT_PUBLIC_ZERODEV_PROJECT_ID` — ZeroDev project ID
-- `NEXT_PUBLIC_API_URL` — Backend API URL
+- `NEXT_PUBLIC_BACKEND_URL` — Browser-visible backend API origin
+- `BACKEND_URL` — Server-side rewrite target for `/api/*`
+- `NEXT_PUBLIC_BACKEND_FALLBACK_URLS` — Optional comma-separated fallback API origins
 - `NEXT_PUBLIC_PIMLICO_API_KEY` — Pimlico bundler key
 
 ## Deployment
