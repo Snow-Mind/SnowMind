@@ -1,8 +1,9 @@
 """
 Spark Savings adapter — ERC-4626 vault on Avalanche C-Chain (spUSDC).
 
-APY Source:      convertToAssets(1e6) delta vs 24h-ago snapshot × 365
-Effective APY:   gross_apy × 1.0 (convertToAssets already includes deployment ratio)
+APY Source (primary): vault.vsr() converted from RAY-per-second to APY
+APY Source (fallback): convertToAssets snapshot/share-price growth
+Effective APY:       gross_apy × 1.0 (convertToAssets already includes deployment ratio)
 
 AVALANCHE-SPECIFIC CHANGES (PSM3 architecture):
 - Avalanche uses PSM3, NOT Ethereum's DssLitePsm/UsdsPsmWrapper.
@@ -54,6 +55,18 @@ LIQUIDITY_PROBE_ADDRESS = "0x0000000000000000000000000000000000000001"
 SHARE_PRICE_QUERY_AMOUNT = 10**18
 SHARE_PRICE_QUERY_DECIMAL = Decimal(str(SHARE_PRICE_QUERY_AMOUNT))
 SECONDS_PER_YEAR = Decimal("31536000")
+RAY = Decimal("1e27")
+
+
+def _ray_per_second_to_apy(vsr_ray_per_second: Decimal) -> Decimal:
+    """Convert Spark VSR (RAY-per-second) into APY."""
+    if vsr_ray_per_second <= Decimal("0"):
+        return Decimal("0")
+    per_second_rate = vsr_ray_per_second / RAY
+    if per_second_rate <= Decimal("0"):
+        return Decimal("0")
+    apy = (per_second_rate ** SECONDS_PER_YEAR) - Decimal("1")
+    return max(Decimal("0"), apy)
 
 # ── Minimal ABI slices ──────────────────────────────────────────────────────
 
@@ -105,6 +118,13 @@ SPARK_VAULT_ABI = [
         "type": "function",
         "inputs": [{"name": "owner", "type": "address"}],
         "outputs": [{"name": "maxAssets", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "vsr",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     },
 ]
@@ -190,9 +210,9 @@ class SparkAdapter(BaseProtocolAdapter):
         """
         Calculate Spark effective APY on Avalanche.
 
-        Primary:  Use convertToAssets delta over the ACTUAL elapsed time since
-                  the snapshot (not a hardcoded 24h assumption). This eliminates
-                  APY inflation when the snapshot is older than 24h.
+        Primary:  Use native Spark VSR (vault.vsr) converted from RAY/s to APY.
+        Fallback: Use convertToAssets delta over actual elapsed snapshot time,
+              then share-price growth cache.
 
         effective_apy = gross_apy × 1.0  (convertToAssets already reflects the
                         effective depositor yield after the 90/10 split)
@@ -218,11 +238,21 @@ class SparkAdapter(BaseProtocolAdapter):
         total_assets_raw = await vault.functions.totalAssets().call()
         tvl = Decimal(str(total_assets_raw)) / Decimal("1e6")  # USDC 6 decimals
 
-        # Calculate gross APY — prefer 24h DB snapshot, fall back to share-price-growth
+        # Calculate gross APY — prefer native Spark VSR, then snapshot/share-growth fallback.
         gross_apy = Decimal("0")
+        used_native_vsr = False
+
+        try:
+            vsr_raw = await vault.functions.vsr().call()
+            gross_apy = _ray_per_second_to_apy(Decimal(str(vsr_raw)))
+            self._cached_apy = gross_apy
+            used_native_vsr = True
+        except Exception as exc:
+            logger.warning("Spark native VSR read failed, using fallback APY path: %s", exc)
+
         use_snapshot = False
 
-        if yesterday_snapshot is not None and yesterday_snapshot > 0:
+        if (not used_native_vsr) and yesterday_snapshot is not None and yesterday_snapshot > 0:
             # Guard against scale mismatch: old snapshots used 1e6 scale
             # (values < 10^12), new ones use 1e18 scale (values > 10^12).
             if yesterday_snapshot < Decimal("1000000000000"):
@@ -274,7 +304,7 @@ class SparkAdapter(BaseProtocolAdapter):
                     growth, elapsed_days, gross_apy,
                 )
 
-        if not use_snapshot:
+        if (not used_native_vsr) and (not use_snapshot):
             # Fallback: short-term share-price-growth estimation
             # Same pattern as Euler/Silo cached APY — observes price change over ≥60s
             now = time.time()
