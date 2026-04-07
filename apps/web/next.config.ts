@@ -4,7 +4,7 @@ const rawBackendProxyTarget =
   process.env.BACKEND_URL
   ?? process.env.NEXT_PUBLIC_BACKEND_URL
   ?? (process.env.NODE_ENV === "production"
-    ? "https://api.snowmind.xyz"
+    ? "https://snowmindbackend-production-10ed.up.railway.app"
     : "http://localhost:8000");
 
 const backendProxyTarget = rawBackendProxyTarget.replace(/\/+$/, "");

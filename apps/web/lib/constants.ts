@@ -4,8 +4,7 @@ import { avalanche } from 'viem/chains'
 export const CHAIN = avalanche
 export const CHAIN_ID = 43114
 
-const DEFAULT_PRODUCTION_BACKEND_URL = "https://api.snowmind.xyz";
-const LEGACY_PRODUCTION_BACKEND_URL = "https://snowmindbackend-production-10ed.up.railway.app";
+const DEFAULT_PRODUCTION_BACKEND_URL = "https://snowmindbackend-production-10ed.up.railway.app";
 const DEFAULT_DEVELOPMENT_BACKEND_URL = "http://localhost:8000";
 
 function normalizeBackendUrl(value: string | undefined): string | null {
@@ -34,9 +33,6 @@ export const BACKEND_URL_CANDIDATES = Array.from(
       normalizeBackendUrl(process.env.NEXT_PUBLIC_BACKEND_URL),
       normalizeBackendUrl(defaultBackendUrl),
       ...parseBackendFallbacks(process.env.NEXT_PUBLIC_BACKEND_FALLBACK_URLS),
-      normalizeBackendUrl(
-        process.env.NODE_ENV === "production" ? LEGACY_PRODUCTION_BACKEND_URL : undefined,
-      ),
     ].filter((entry): entry is string => entry !== null),
   ),
 );
