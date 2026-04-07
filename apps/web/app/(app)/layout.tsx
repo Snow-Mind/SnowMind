@@ -45,6 +45,7 @@ function TopBar({
   smartAccountAddress,
   eoaAddress,
   isAgentActive,
+  hideAgentActions,
   onDeposit,
   onAgentDetails,
   onDisconnect,
@@ -52,6 +53,7 @@ function TopBar({
   smartAccountAddress: string | null;
   eoaAddress: string | null;
   isAgentActive: boolean;
+  hideAgentActions: boolean;
   onDeposit: () => void;
   onAgentDetails: () => void;
   onDisconnect: () => void;
@@ -74,7 +76,7 @@ function TopBar({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
-        {isAgentActive && (
+        {isAgentActive && !hideAgentActions && (
           <button
             onClick={onDeposit}
             className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
@@ -116,7 +118,7 @@ function TopBar({
 
                 {/* Menu items */}
                 <div className="py-1">
-                  {isAgentActive && smartAccountAddress && (
+                  {isAgentActive && !hideAgentActions && smartAccountAddress && (
                     <button
                       onClick={() => { setAccountOpen(false); onAgentDetails(); }}
                       className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
@@ -125,7 +127,7 @@ function TopBar({
                       Agent account details
                     </button>
                   )}
-                  {isAgentActive && (
+                  {isAgentActive && !hideAgentActions && (
                     <button
                       onClick={() => { setAccountOpen(false); router.push("/settings"); }}
                       className="flex w-full items-center gap-2.5 px-4 py-2.5 text-xs text-[#1A1715] transition-colors hover:bg-[#F5F0EB]"
@@ -489,6 +491,7 @@ export default function AppLayout({
           smartAccountAddress={effectiveSmartAccountAddress}
           eoaAddress={eoaAddress}
           isAgentActive={isAgentActive}
+          hideAgentActions={pathname === "/onboarding"}
           onDeposit={() => setShowDeposit(true)}
           onAgentDetails={() => setShowAgentDetails(true)}
           onDisconnect={handleDisconnect}

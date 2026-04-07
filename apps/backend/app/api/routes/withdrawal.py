@@ -206,7 +206,41 @@ async def _get_account(db: Client, address: str) -> dict:
     return result.data[0]
 
 
-async def _get_on_chain_balance(smart_account: str) -> Decimal:
+def _canonical_protocol_id(raw_protocol_id: object) -> str:
+    pid = str(raw_protocol_id or "").strip().lower()
+    if pid == "aave":
+        return "aave_v3"
+    if pid in {"folks_finance_xchain", "folks_finance"}:
+        return "folks"
+    return pid
+
+
+def _load_expected_active_protocols(db: Client, account_id: str) -> set[str]:
+    """Return protocol ids that currently have material allocation for account."""
+    try:
+        rows = (
+            db.table("allocations")
+            .select("protocol_id, amount_usdc")
+            .eq("account_id", account_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("Failed to load allocations for %s: %s", account_id, exc)
+        return set()
+
+    expected: set[str] = set()
+    for row in rows.data or []:
+        try:
+            amount = Decimal(str(row.get("amount_usdc") or "0"))
+        except Exception:
+            continue
+        if amount <= Decimal("0.01"):
+            continue
+        expected.add(_canonical_protocol_id(row.get("protocol_id")))
+    return expected
+
+
+async def _get_on_chain_balance(db: Client, account_id: str, smart_account: str) -> Decimal:
     """
     Read total on-chain balance across all protocols.
 
@@ -214,6 +248,7 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
     """
     total_raw = 0
     failed_protocols: list[str] = []
+    expected_protocols = _load_expected_active_protocols(db, account_id)
     settings = get_settings()
     timeout_seconds = max(0.5, float(settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
 
@@ -225,7 +260,8 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
             )
             total_raw += int(balance)
         except asyncio.TimeoutError:
-            failed_protocols.append(pid)
+            if pid in expected_protocols:
+                failed_protocols.append(pid)
             logger.warning(
                 "Timed out reading %s balance for %s after %.1fs",
                 pid,
@@ -233,7 +269,8 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
                 timeout_seconds,
             )
         except Exception as exc:
-            failed_protocols.append(pid)
+            if pid in expected_protocols:
+                failed_protocols.append(pid)
             logger.warning(
                 "Failed to read %s balance for %s: %s",
                 pid,
@@ -547,7 +584,7 @@ async def preview_withdrawal(
     verify_account_ownership(_auth, account, db=db)
 
     # Read on-chain balance
-    current_balance = await _get_on_chain_balance(address)
+    current_balance = await _get_on_chain_balance(db, str(account["id"]), address)
     if current_balance <= Decimal("0"):
         raise HTTPException(
             status_code=400,
@@ -648,7 +685,7 @@ async def execute_withdrawal(
         logger.warning("Lock check failed for %s: %s — proceeding", address, exc)
 
     # Read on-chain balance
-    current_balance = await _get_on_chain_balance(address)
+    current_balance = await _get_on_chain_balance(db, str(account["id"]), address)
     if current_balance <= Decimal("0"):
         raise HTTPException(status_code=400, detail="No balance to withdraw")
 

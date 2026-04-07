@@ -41,6 +41,8 @@ _USDC_QUANT = Decimal("0.000001")
 _UTILIZATION_READ_MAX_ATTEMPTS = 3
 _UTILIZATION_READ_BASE_BACKOFF_SECONDS = 0.25
 _MIN_EMERGENCY_UTILIZATION_THRESHOLD = Decimal("0.92")
+_FAILURE_BACKOFF_BASE_SECONDS = 120
+_FAILURE_BACKOFF_MAX_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ class UtilizationMonitor:
             pid: deque(maxlen=_HISTORY_SIZE) for pid in _MONITORED_PROTOCOLS
         }
         self._cooldowns: dict[tuple[str, str], datetime] = {}
+        self._failure_counts: dict[tuple[str, str], int] = {}
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -377,16 +380,27 @@ class UtilizationMonitor:
                     amount_usdc=float(amount_usdc),
                 )
             except Exception as exc:
+                failure_count = self._failure_counts.get(cooldown_key, 0) + 1
+                self._failure_counts[cooldown_key] = failure_count
+                backoff_seconds = min(
+                    _FAILURE_BACKOFF_MAX_SECONDS,
+                    _FAILURE_BACKOFF_BASE_SECONDS * (2 ** (failure_count - 1)),
+                )
+                self._cooldowns[cooldown_key] = now + timedelta(seconds=backoff_seconds)
                 logger.error(
-                    "Utilization-triggered withdrawal failed for account=%s protocol=%s: %s",
+                    "Utilization-triggered withdrawal failed for account=%s protocol=%s: %s "
+                    "(failure_count=%d, cooldown=%ds)",
                     position.account_id,
                     protocol_id,
                     exc,
+                    failure_count,
+                    backoff_seconds,
                 )
                 return
 
         cooldown_seconds = max(0, int(self.settings.EMERGENCY_WITHDRAWAL_COOLDOWN))
         self._cooldowns[cooldown_key] = now + timedelta(seconds=cooldown_seconds)
+        self._failure_counts.pop(cooldown_key, None)
 
         logger.warning(
             "Emergency partial withdrawal executed for account=%s protocol=%s amount=$%.6f tx=%s",

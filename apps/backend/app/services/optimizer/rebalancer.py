@@ -1808,9 +1808,22 @@ class Rebalancer:
         db = get_supabase()
         amount = Decimal(str(amount_usdc))
 
-        session_key = get_active_session_key(db, UUID(account_id))
-        if not session_key:
+        session_key_record = get_active_session_key_record(db, UUID(account_id))
+        if not session_key_record:
             raise ValueError(f"No active session key for account {account_id}")
+
+        serialized_permission = session_key_record["serialized_permission"]
+        session_private_key = session_key_record.get("session_private_key", "")
+        if not session_private_key:
+            raise ValueError(
+                f"Active session key for {account_id} is missing private key material"
+            )
+
+        allowed_protocols = set(session_key_record.get("allowed_protocols") or [])
+        if allowed_protocols and protocol_id not in allowed_protocols:
+            raise ValueError(
+                f"Session key for {account_id} does not allow protocol {protocol_id}"
+            )
 
         # Build withdrawal instruction
         entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount)}
@@ -1821,10 +1834,11 @@ class Rebalancer:
             entry["qiTokenAmount"] = str(qi_amount)
 
         tx_hash = await self._call_execution_service(
-            serialized_permission=session_key,
+            serialized_permission=serialized_permission,
             smart_account_address=smart_account_address,
             withdrawals=[entry],
             deposits=[],
+            session_private_key=session_private_key,
             account_id=account_id,
         )
 

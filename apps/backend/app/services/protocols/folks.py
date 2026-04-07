@@ -7,6 +7,7 @@ intentionally disabled to prevent unsafe call construction.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from decimal import Decimal
@@ -31,6 +32,7 @@ _RATE_SCALE = Decimal("1e18")
 _HOURS_PER_YEAR = 8760
 _MAX_UINT32 = (1 << 32) - 1
 _ROUTE_CACHE_TTL_SECONDS = 120.0
+_ROUTE_TIMEOUT_CACHE_TTL_SECONDS = 30.0
 
 
 # HubPool read ABI
@@ -183,10 +185,16 @@ class FolksAdapter(BaseProtocolAdapter):
         self.loan_nonce = int(getattr(settings, "FOLKS_LOAN_NONCE", 1))
         configured_account_scan = int(getattr(settings, "FOLKS_ACCOUNT_NONCE_SCAN_MAX", 128))
         configured_loan_scan = int(getattr(settings, "FOLKS_LOAN_NONCE_SCAN_MAX", 8))
+        configured_resolve_timeout = float(
+            getattr(settings, "FOLKS_ROUTE_RESOLVE_TIMEOUT_SECONDS", 6.5)
+        )
         # Recovery guard: older Folks accounts may use high nonces. Keep account
         # scan floor high enough to rediscover existing positions.
         self.account_nonce_scan_max = min(max(configured_account_scan, 128), 512)
         self.loan_nonce_scan_max = min(max(configured_loan_scan, 4), 64)
+        # Bound route resolution so portfolio/withdraw requests do not stall on
+        # exhaustive nonce scans under RPC degradation.
+        self.route_resolve_timeout_seconds = max(1.0, configured_resolve_timeout)
         self._route_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 
         if not self.hub_pool_address:
@@ -311,9 +319,15 @@ class FolksAdapter(BaseProtocolAdapter):
 
         return True, route
 
-    def _set_cached_route(self, user_address: str, route: dict[str, Any] | None) -> None:
+    def _set_cached_route(
+        self,
+        user_address: str,
+        route: dict[str, Any] | None,
+        ttl_seconds: float = _ROUTE_CACHE_TTL_SECONDS,
+    ) -> None:
         key = user_address.lower()
-        self._route_cache[key] = (time.time() + _ROUTE_CACHE_TTL_SECONDS, route)
+        safe_ttl = max(1.0, float(ttl_seconds))
+        self._route_cache[key] = (time.time() + safe_ttl, route)
 
     async def _lookup_account_id(self, checksum_user: str) -> str | None:
         account_manager = self._get_account_manager()
@@ -368,13 +382,19 @@ class FolksAdapter(BaseProtocolAdapter):
 
         w3 = self._get_w3()
         checksum_user = w3.to_checksum_address(user_address)
-        account_nonce_candidates = self._build_nonce_candidates(self.account_nonce, self.account_nonce_scan_max)
-        loan_nonce_candidates = self._build_nonce_candidates(self.loan_nonce, self.loan_nonce_scan_max)
+        scan_deadline = time.monotonic() + max(1.0, self.route_resolve_timeout_seconds - 0.5)
 
         account_ids: list[tuple[str, int, str]] = []
         seen_account_ids: set[str] = set()
+        account_manager = self._get_account_manager()
 
         looked_up_account_id = await self._lookup_account_id(checksum_user)
+        lookup_succeeded = looked_up_account_id is not None
+        account_scan_max = self.account_nonce_scan_max if lookup_succeeded else min(self.account_nonce_scan_max, 16)
+        loan_scan_max = self.loan_nonce_scan_max if lookup_succeeded else min(self.loan_nonce_scan_max, 8)
+        account_nonce_candidates = self._build_nonce_candidates(self.account_nonce, account_scan_max)
+        loan_nonce_candidates = self._build_nonce_candidates(self.loan_nonce, loan_scan_max)
+
         if looked_up_account_id:
             normalized = looked_up_account_id.lower()
             seen_account_ids.add(normalized)
@@ -395,9 +415,15 @@ class FolksAdapter(BaseProtocolAdapter):
 
         fallback_active_route: dict[str, Any] | None = None
         for account_id, account_nonce, source in account_ids:
+            if time.monotonic() >= scan_deadline:
+                logger.debug(
+                    "Folks route scan budget exceeded for %s; caching fallback route",
+                    user_address,
+                )
+                break
+
             account_created = True
             if source != "registered":
-                account_manager = self._get_account_manager()
                 if account_manager is not None:
                     try:
                         account_created = bool(
@@ -409,6 +435,9 @@ class FolksAdapter(BaseProtocolAdapter):
                 continue
 
             for loan_nonce in loan_nonce_candidates:
+                if time.monotonic() >= scan_deadline:
+                    break
+
                 loan_id = self._build_loan_id(account_id, loan_nonce)
                 try:
                     loan_active = bool(await loan_manager.functions.isUserLoanActive(loan_id).call())
@@ -578,7 +607,31 @@ class FolksAdapter(BaseProtocolAdapter):
         return (shares * total_deposit_raw) // total_supply
 
     async def get_shares(self, user_address: str) -> int:
-        route = await self._resolve_active_position(user_address)
+        try:
+            route = await asyncio.wait_for(
+                self._resolve_active_position(user_address),
+                timeout=self.route_resolve_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Folks route resolution timed out for %s after %.1fs; falling back to wallet shares",
+                user_address,
+                self.route_resolve_timeout_seconds,
+            )
+            self._set_cached_route(
+                user_address,
+                None,
+                ttl_seconds=_ROUTE_TIMEOUT_CACHE_TTL_SECONDS,
+            )
+            route = None
+        except Exception as exc:
+            logger.warning(
+                "Folks route resolution failed for %s: %s; falling back to wallet shares",
+                user_address,
+                exc,
+            )
+            route = None
+
         if route and int(route.get("f_token_balance", 0)) > 0:
             return int(route["f_token_balance"])
 

@@ -59,6 +59,7 @@ Expected tables (after all migrations):
 | 019 | `019_add_assistant_chat_sessions.sql` | Add persistent assistant session metadata for rename/delete-backed conversation management |
 | 020 | `020_add_silo_gami_protocol.sql` | Seed `silo_gami_usdc` in `protocol_health` for monitoring and risk pipelines |
 | 021 | `021_add_folks_protocol.sql` | Seed `folks` in `protocol_health` for monitoring and risk pipelines |
+| 022 | `022_seed_all_supported_protocols.sql` | Ensure all currently supported protocols exist in `protocol_health` for monitoring/risk/rebalance pipelines |
 
 ## Creating a new migration
 
