@@ -634,6 +634,8 @@ async def execute_withdrawal(
                 "FOLKS_USDC_LOAN_TYPE_ID": settings.FOLKS_USDC_LOAN_TYPE_ID,
                 "FOLKS_ACCOUNT_NONCE": settings.FOLKS_ACCOUNT_NONCE,
                 "FOLKS_LOAN_NONCE": settings.FOLKS_LOAN_NONCE,
+                "FOLKS_ACCOUNT_NONCE_SCAN_MAX": settings.FOLKS_ACCOUNT_NONCE_SCAN_MAX,
+                "FOLKS_LOAN_NONCE_SCAN_MAX": settings.FOLKS_LOAN_NONCE_SCAN_MAX,
                 "USDC": settings.USDC_ADDRESS,
                 "TREASURY": settings.TREASURY_ADDRESS,
             },

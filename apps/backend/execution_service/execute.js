@@ -362,6 +362,16 @@ const FOLKS_ACCOUNT_MANAGER_READ_ABI = [
     inputs: [{ name: "accountId", type: "bytes32" }],
     outputs: [{ name: "", type: "bool" }],
   },
+  {
+    name: "getAccountIdOfAddressOnChain",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "addr", type: "bytes32" },
+      { name: "chainId", type: "uint16" },
+    ],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
 ]
 
 const FOLKS_LOAN_MANAGER_READ_ABI = [
@@ -371,6 +381,38 @@ const FOLKS_LOAN_MANAGER_READ_ABI = [
     stateMutability: "view",
     inputs: [{ name: "loanId", type: "bytes32" }],
     outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "getUserLoan",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "loanId", type: "bytes32" }],
+    outputs: [
+      { name: "accountId", type: "bytes32" },
+      { name: "loanTypeId", type: "uint16" },
+      { name: "colPools", type: "uint8[]" },
+      { name: "borPools", type: "uint8[]" },
+      {
+        name: "collaterals",
+        type: "tuple[]",
+        components: [
+          { name: "balance", type: "uint256" },
+          { name: "rewardIndex", type: "uint256" },
+        ],
+      },
+      {
+        name: "borrows",
+        type: "tuple[]",
+        components: [
+          { name: "amount", type: "uint256" },
+          { name: "balance", type: "uint256" },
+          { name: "lastInterestIndex", type: "uint256" },
+          { name: "stableInterestRate", type: "uint256" },
+          { name: "lastStableUpdateTimestamp", type: "uint256" },
+          { name: "rewardIndex", type: "uint256" },
+        ],
+      },
+    ],
   },
 ]
 
@@ -1046,12 +1088,63 @@ function parsePositiveInt(rawValue, fallback) {
   return rounded
 }
 
-function normalizeFolksNonce(rawValue, fallbackInt) {
+function parseFolksNonceInt(rawValue, fallbackInt) {
   if (typeof rawValue === "string" && rawValue.trim().toLowerCase().startsWith("0x")) {
-    return pad(rawValue.trim(), { size: 4 })
+    try {
+      const parsed = Number(BigInt(rawValue.trim()))
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.trunc(parsed)
+      }
+    } catch {
+      return fallbackInt
+    }
   }
-  const nonceInt = parsePositiveInt(rawValue, fallbackInt)
+  return parsePositiveInt(rawValue, fallbackInt)
+}
+
+function normalizeFolksNonce(rawValue, fallbackInt) {
+  const nonceInt = parseFolksNonceInt(rawValue, fallbackInt)
   return pad(toHex(BigInt(nonceInt)), { size: 4 })
+}
+
+function buildFolksNonceCandidates(primaryNonceInt, scanMaxRaw) {
+  const scanMax = Math.min(Math.max(parsePositiveInt(scanMaxRaw, 4), 0), 32)
+  const ordered = []
+  const seen = new Set()
+  const push = (value) => {
+    const normalized = Math.max(0, Math.trunc(Number(value)))
+    if (!seen.has(normalized)) {
+      seen.add(normalized)
+      ordered.push(normalized)
+    }
+  }
+
+  push(primaryNonceInt)
+  for (let nonce = 0; nonce <= scanMax; nonce += 1) {
+    push(nonce)
+  }
+  return ordered
+}
+
+function buildFolksAccountIdCanonical(smartAccountAddress, chainId, accountNonceHex) {
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 })
+  const addressBytes32 = pad(smartAccountAddress, { size: 32 })
+  return keccak256(concat([addressBytes32, chainIdBytes, accountNonceHex]))
+}
+
+function buildFolksAccountIdLegacy(smartAccountAddress, chainId, accountNonceHex) {
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 })
+  return keccak256(concat([smartAccountAddress, chainIdBytes, accountNonceHex]))
+}
+
+function buildFolksLoanId(accountId, loanNonceHex) {
+  return keccak256(concat([accountId, loanNonceHex]))
+}
+
+function isZeroBytes32(value) {
+  if (typeof value !== "string") return false
+  if (!value.startsWith("0x")) return false
+  return /^0x0{64}$/i.test(value)
 }
 
 function buildFolksMessageParams() {
@@ -1065,51 +1158,255 @@ function buildFolksMessageParams() {
 }
 
 function resolveFolksRoutingData(source, contracts, smartAccountAddress) {
-  const accountNonce = normalizeFolksNonce(
+  const accountNonceInt = parseFolksNonceInt(
     source?.folksAccountNonce ?? contracts.FOLKS_ACCOUNT_NONCE,
     1,
   )
-  const loanNonce = normalizeFolksNonce(
+  const loanNonceInt = parseFolksNonceInt(
     source?.folksLoanNonce ?? contracts.FOLKS_LOAN_NONCE,
     1,
   )
+  const accountNonce = normalizeFolksNonce(accountNonceInt, 1)
+  const loanNonce = normalizeFolksNonce(loanNonceInt, 1)
   const chainId = parsePositiveInt(contracts.FOLKS_HUB_CHAIN_ID, 100)
   const poolId = parsePositiveInt(contracts.FOLKS_USDC_POOL_ID, 1)
   const loanTypeId = parsePositiveInt(contracts.FOLKS_USDC_LOAN_TYPE_ID, 2)
 
-  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 })
-  const accountId = source?.folksAccountId || keccak256(concat([
-    smartAccountAddress,
-    chainIdBytes,
-    accountNonce,
-  ]))
-  const loanId = source?.folksLoanId || keccak256(concat([accountId, loanNonce]))
+  const canonicalAccountId = buildFolksAccountIdCanonical(smartAccountAddress, chainId, accountNonce)
+  const legacyAccountId = buildFolksAccountIdLegacy(smartAccountAddress, chainId, accountNonce)
+  const accountId = source?.folksAccountId || canonicalAccountId
+  const loanId = source?.folksLoanId || buildFolksLoanId(accountId, loanNonce)
 
   return {
     accountId,
     loanId,
     accountNonce,
     loanNonce,
+    accountNonceInt,
+    loanNonceInt,
+    canonicalAccountId,
+    legacyAccountId,
     chainId,
     poolId,
     loanTypeId,
   }
 }
 
-async function readFolksUnderlyingBalance(publicClient, contracts, smartAccountAddress) {
+async function readFolksLoanFTokenBalance(publicClient, loanManager, loanId, poolId) {
+  const userLoan = await publicClient.readContract({
+    address: loanManager,
+    abi: FOLKS_LOAN_MANAGER_READ_ABI,
+    functionName: "getUserLoan",
+    args: [loanId],
+  })
+
+  const colPools = Array.isArray(userLoan?.[2]) ? userLoan[2] : []
+  const collaterals = Array.isArray(userLoan?.[4]) ? userLoan[4] : []
+  for (let idx = 0; idx < colPools.length; idx += 1) {
+    if (Number(colPools[idx]) !== Number(poolId)) continue
+    const collateral = collaterals[idx]
+    if (Array.isArray(collateral) && collateral.length > 0) {
+      return BigInt(collateral[0] || 0n)
+    }
+    if (collateral && typeof collateral === "object" && "balance" in collateral) {
+      return BigInt(collateral.balance || 0n)
+    }
+    return 0n
+  }
+
+  return 0n
+}
+
+async function resolveFolksActiveRouting(publicClient, contracts, smartAccountAddress, source = {}) {
+  const accountManager = contracts.FOLKS_ACCOUNT_MANAGER
+  const loanManager = contracts.FOLKS_LOAN_MANAGER
+  if (!loanManager || loanManager === zeroAddress) {
+    return null
+  }
+
+  const base = resolveFolksRoutingData(source, contracts, smartAccountAddress)
+  const accountNonceCandidates = buildFolksNonceCandidates(
+    base.accountNonceInt,
+    contracts.FOLKS_ACCOUNT_NONCE_SCAN_MAX,
+  )
+  const loanNonceCandidates = buildFolksNonceCandidates(
+    base.loanNonceInt,
+    contracts.FOLKS_LOAN_NONCE_SCAN_MAX,
+  )
+
+  const accountCandidates = []
+  const seenAccountIds = new Set()
+  const pushAccountCandidate = (accountId, accountNonceInt, kind) => {
+    if (!accountId || seenAccountIds.has(accountId.toLowerCase())) return
+    seenAccountIds.add(accountId.toLowerCase())
+    accountCandidates.push({ accountId, accountNonceInt, kind })
+  }
+
+  if (source?.folksAccountId) {
+    pushAccountCandidate(source.folksAccountId, base.accountNonceInt, "explicit")
+  }
+
+  if (accountManager && accountManager !== zeroAddress) {
+    try {
+      const registeredAccountId = await publicClient.readContract({
+        address: accountManager,
+        abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+        functionName: "getAccountIdOfAddressOnChain",
+        args: [pad(smartAccountAddress, { size: 32 }), base.chainId],
+      })
+      if (!isZeroBytes32(registeredAccountId)) {
+        pushAccountCandidate(registeredAccountId, base.accountNonceInt, "registered")
+      }
+    } catch {
+      // Ignore and continue with deterministic candidates.
+    }
+  }
+
+  for (const accountNonceInt of accountNonceCandidates) {
+    const accountNonceHex = normalizeFolksNonce(accountNonceInt, base.accountNonceInt)
+    pushAccountCandidate(
+      buildFolksAccountIdCanonical(smartAccountAddress, base.chainId, accountNonceHex),
+      accountNonceInt,
+      "canonical",
+    )
+    pushAccountCandidate(
+      buildFolksAccountIdLegacy(smartAccountAddress, base.chainId, accountNonceHex),
+      accountNonceInt,
+      "legacy",
+    )
+  }
+
+  const accountCreatedCache = new Map()
+  let fallbackAccountRoute = null
+  let fallbackActiveRoute = null
+
+  for (const accountCandidate of accountCandidates) {
+    let accountCreated = true
+    if (accountManager && accountManager !== zeroAddress && accountCandidate.kind !== "registered") {
+      const cacheKey = accountCandidate.accountId.toLowerCase()
+      if (accountCreatedCache.has(cacheKey)) {
+        accountCreated = accountCreatedCache.get(cacheKey)
+      } else {
+        try {
+          accountCreated = Boolean(await publicClient.readContract({
+            address: accountManager,
+            abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+            functionName: "isAccountCreated",
+            args: [accountCandidate.accountId],
+          }))
+        } catch {
+          accountCreated = false
+        }
+        accountCreatedCache.set(cacheKey, accountCreated)
+      }
+    }
+
+    if (!accountCreated) continue
+
+    if (!fallbackAccountRoute) {
+      fallbackAccountRoute = {
+        ...base,
+        accountId: accountCandidate.accountId,
+        accountNonce: normalizeFolksNonce(accountCandidate.accountNonceInt, base.accountNonceInt),
+        accountNonceInt: accountCandidate.accountNonceInt,
+        loanNonce: normalizeFolksNonce(base.loanNonceInt, base.loanNonceInt),
+        loanNonceInt: base.loanNonceInt,
+        loanId: buildFolksLoanId(
+          accountCandidate.accountId,
+          normalizeFolksNonce(base.loanNonceInt, base.loanNonceInt),
+        ),
+        accountCreated: true,
+        loanActive: false,
+        fTokenBalance: 0n,
+      }
+    }
+
+    for (const loanNonceInt of loanNonceCandidates) {
+      const loanNonceHex = normalizeFolksNonce(loanNonceInt, base.loanNonceInt)
+      const loanId =
+        source?.folksLoanId && source?.folksAccountId && source.folksAccountId.toLowerCase() === accountCandidate.accountId.toLowerCase()
+          ? source.folksLoanId
+          : buildFolksLoanId(accountCandidate.accountId, loanNonceHex)
+
+      let loanActive = false
+      try {
+        loanActive = Boolean(await publicClient.readContract({
+          address: loanManager,
+          abi: FOLKS_LOAN_MANAGER_READ_ABI,
+          functionName: "isUserLoanActive",
+          args: [loanId],
+        }))
+      } catch {
+        loanActive = false
+      }
+      if (!loanActive) continue
+
+      let fTokenBalance = 0n
+      try {
+        fTokenBalance = await readFolksLoanFTokenBalance(
+          publicClient,
+          loanManager,
+          loanId,
+          base.poolId,
+        )
+      } catch {
+        fTokenBalance = 0n
+      }
+
+      const route = {
+        ...base,
+        accountId: accountCandidate.accountId,
+        accountNonce: normalizeFolksNonce(accountCandidate.accountNonceInt, base.accountNonceInt),
+        accountNonceInt: accountCandidate.accountNonceInt,
+        loanId,
+        loanNonce: loanNonceHex,
+        loanNonceInt,
+        accountCreated: true,
+        loanActive: true,
+        fTokenBalance,
+      }
+
+      if (fTokenBalance > 0n) {
+        return route
+      }
+      if (!fallbackActiveRoute) {
+        fallbackActiveRoute = route
+      }
+    }
+  }
+
+  return fallbackActiveRoute || fallbackAccountRoute
+}
+
+async function readFolksUnderlyingBalance(publicClient, contracts, smartAccountAddress, source = {}) {
   const hubPool = contracts.FOLKS_USDC_HUB_POOL
   if (!hubPool || hubPool === zeroAddress) {
     return 0n
   }
 
   try {
-    const [shares, totalSupply, depositData] = await Promise.all([
-      publicClient.readContract({
+    const activeRoute = await resolveFolksActiveRouting(
+      publicClient,
+      contracts,
+      smartAccountAddress,
+      source,
+    )
+
+    let shareBalance = BigInt(activeRoute?.fTokenBalance || 0n)
+    if (shareBalance <= 0n) {
+      const walletShares = await publicClient.readContract({
         address: hubPool,
         abi: FOLKS_HUB_POOL_READ_ABI,
         functionName: "balanceOf",
         args: [smartAccountAddress],
-      }),
+      })
+      shareBalance = BigInt(walletShares || 0n)
+    }
+    if (shareBalance <= 0n) {
+      return 0n
+    }
+
+    const [totalSupply, depositData] = await Promise.all([
       publicClient.readContract({
         address: hubPool,
         abi: FOLKS_HUB_POOL_READ_ABI,
@@ -1122,7 +1419,6 @@ async function readFolksUnderlyingBalance(publicClient, contracts, smartAccountA
       }),
     ])
 
-    const shareBalance = BigInt(shares || 0n)
     const totalShareSupply = BigInt(totalSupply || 0n)
     const totalDeposits = BigInt((Array.isArray(depositData) ? depositData[1] : 0n) || 0n)
     if (shareBalance <= 0n || totalShareSupply <= 0n || totalDeposits <= 0n) {
@@ -1152,6 +1448,19 @@ async function resolveFolksDepositMode(
   if (mode === "deposit") return "deposit"
 
   const folks = folksRoutingData || resolveFolksRoutingData({}, contracts, smartAccountAddress)
+  const discoveredRoute = await resolveFolksActiveRouting(
+    publicClient,
+    contracts,
+    smartAccountAddress,
+    folks,
+  )
+  if (discoveredRoute?.accountCreated) {
+    Object.assign(folks, discoveredRoute)
+  }
+  if (discoveredRoute?.loanActive) {
+    return "deposit"
+  }
+
   const accountManager = contracts.FOLKS_ACCOUNT_MANAGER
   const loanManager = contracts.FOLKS_LOAN_MANAGER
   if (
@@ -1161,6 +1470,27 @@ async function resolveFolksDepositMode(
     loanManager !== zeroAddress
   ) {
     try {
+      const accountIdsToCheck = [folks.accountId]
+      if (folks.legacyAccountId && folks.legacyAccountId.toLowerCase() !== folks.accountId.toLowerCase()) {
+        accountIdsToCheck.push(folks.legacyAccountId)
+      }
+
+      const accountCreatedFlags = await Promise.all(accountIdsToCheck.map((accountId) =>
+        publicClient.readContract({
+          address: accountManager,
+          abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+          functionName: "isAccountCreated",
+          args: [accountId],
+        })
+      ))
+
+      const primaryAccountCreated = Boolean(accountCreatedFlags[0])
+      const legacyAccountCreated = Boolean(accountCreatedFlags[1])
+      if (!primaryAccountCreated && legacyAccountCreated) {
+        folks.accountId = folks.legacyAccountId
+        folks.loanId = buildFolksLoanId(folks.accountId, folks.loanNonce)
+      }
+
       const [accountCreated, loanActive] = await Promise.all([
         publicClient.readContract({
           address: accountManager,
@@ -1510,10 +1840,25 @@ export async function executeRebalance({
       await verifyVaultShareBalance(execPublicClient, contracts.SILO_GAMI_USDC_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SILO_GAMI_USDC_VAULT, amountUSDC, shareBalance, smartAccountAddress))
     } else if (protocol === "folks" && contracts.FOLKS_SPOKE_COMMON) {
-      const folks = resolveFolksRoutingData(withdrawal, contracts, smartAccountAddress)
+      let folks = resolveFolksRoutingData(withdrawal, contracts, smartAccountAddress)
+      const discoveredFolks = await resolveFolksActiveRouting(
+        execPublicClient,
+        contracts,
+        smartAccountAddress,
+        withdrawal,
+      )
+      if (discoveredFolks) {
+        folks = { ...folks, ...discoveredFolks }
+      }
+
       let withdrawAmountRaw = 0n
       if (amountUSDC === "MAX") {
-        withdrawAmountRaw = await readFolksUnderlyingBalance(execPublicClient, contracts, smartAccountAddress)
+        withdrawAmountRaw = await readFolksUnderlyingBalance(
+          execPublicClient,
+          contracts,
+          smartAccountAddress,
+          folks,
+        )
         if (withdrawAmountRaw <= 0n && fallbackAmountUSDC != null) {
           withdrawAmountRaw = parseUnits(String(fallbackAmountUSDC), 6)
         }
@@ -2785,14 +3130,27 @@ export async function executeWithdrawal({
     })
   }
 
-  const folksShareBalance = BigInt(balances?.folksShareBalance || "0")
   if (
     contracts.FOLKS_SPOKE_COMMON &&
-    contracts.FOLKS_SPOKE_COMMON !== "0x0000000000000000000000000000000000000000" &&
-    folksShareBalance > 0n
+    contracts.FOLKS_SPOKE_COMMON !== "0x0000000000000000000000000000000000000000"
   ) {
-    const folks = resolveFolksRoutingData(balances, contracts, smartAccountAddress)
-    const folksWithdrawRaw = await readFolksUnderlyingBalance(wdPublicClient, contracts, smartAccountAddress)
+    let folks = resolveFolksRoutingData(balances, contracts, smartAccountAddress)
+    const discoveredFolks = await resolveFolksActiveRouting(
+      wdPublicClient,
+      contracts,
+      smartAccountAddress,
+      balances,
+    )
+    if (discoveredFolks) {
+      folks = { ...folks, ...discoveredFolks }
+    }
+
+    const folksWithdrawRaw = await readFolksUnderlyingBalance(
+      wdPublicClient,
+      contracts,
+      smartAccountAddress,
+      folks,
+    )
     if (folksWithdrawRaw > 0n) {
       calls.push({
         to: contracts.FOLKS_SPOKE_COMMON,
