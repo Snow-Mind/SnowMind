@@ -319,7 +319,7 @@ export const PROTOCOL_CONFIG = {
     description: 'Hub-and-spoke cross-chain lending protocol, routed via Avalanche hub pool',
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.FOLKS_SPOKE_USDC),
-    vaultUrl: 'https://xapp.folks.finance/lending',
+    vaultUrl: 'https://xapp.folks.finance/',
   },
 } as const
 

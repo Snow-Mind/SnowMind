@@ -375,6 +375,9 @@ class RateFetcher:
                 if isinstance(result, Exception):
                     logger.warning("Rate fetch failed for %s: %s", pid, result)
                     circuit_breaker.record_failure(pid)
+                elif not self.validate_rate(result):
+                    logger.warning("Rate fetch rejected for %s due to validation failure", pid)
+                    circuit_breaker.record_failure(pid)
                 else:
                     results[pid] = result
                     circuit_breaker.record_success(pid)
@@ -447,6 +450,9 @@ class RateFetcher:
                 if isinstance(result, Exception):
                     logger.warning("Display-rate fetch failed for %s: %s", pid, result)
                     circuit_breaker.record_failure(pid)
+                elif not self.validate_rate(result):
+                    logger.warning("Display-rate fetch rejected for %s due to validation failure", pid)
+                    circuit_breaker.record_failure(pid)
                 else:
                     results[pid] = result
                     circuit_breaker.record_success(pid)
@@ -490,10 +496,28 @@ class RateFetcher:
         Rejects negative APY, absurdly high APY (>200%), and negative TVL.
         Allows 0% APY (e.g. Spark base layer when no snapshot delta is available).
         """
+        if not rate.apy.is_finite() or not rate.effective_apy.is_finite() or not rate.tvl_usd.is_finite():
+            logger.warning(
+                "Rate for %s rejected: non-finite value(s) apy=%s effective_apy=%s tvl=%s",
+                rate.protocol_id,
+                rate.apy,
+                rate.effective_apy,
+                rate.tvl_usd,
+            )
+            return False
         if rate.apy < Decimal("0"):
+            return False
+        if rate.effective_apy < Decimal("0"):
             return False
         if rate.apy > Decimal("2.0"):  # 200% — likely a data error
             logger.warning("Rate for %s rejected: APY=%s exceeds 200%%", rate.protocol_id, rate.apy)
+            return False
+        if rate.effective_apy > Decimal("2.0"):  # 200% — likely a data error
+            logger.warning(
+                "Rate for %s rejected: effective APY=%s exceeds 200%%",
+                rate.protocol_id,
+                rate.effective_apy,
+            )
             return False
         if rate.tvl_usd < Decimal("0"):
             return False

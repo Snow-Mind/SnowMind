@@ -241,6 +241,7 @@ class SiloAdapter(BaseProtocolAdapter):
             utilization_raw = await vault.functions.utilizationData().call()
             collateral_assets = Decimal(str(utilization_raw[0]))
             debt_assets = Decimal(str(utilization_raw[1]))
+            interest_rate_timestamp = int(utilization_raw[2]) if len(utilization_raw) > 2 else 0
             utilization = (
                 debt_assets / collateral_assets
                 if collateral_assets > Decimal("0")
@@ -270,8 +271,9 @@ class SiloAdapter(BaseProtocolAdapter):
                 address=w3.to_checksum_address(irm_address),
                 abi=_INTEREST_RATE_MODEL_ABI,
             )
-            latest_block = await w3.eth.get_block("latest")
-            block_timestamp = int(latest_block["timestamp"])
+            # Use timestamp emitted by utilizationData() to avoid RPC block
+            # decoding edge cases while staying anchored to on-chain state.
+            block_timestamp = interest_rate_timestamp if interest_rate_timestamp > 0 else int(time.time())
             borrow_apr_raw = await irm_contract.functions.getCurrentInterestRate(
                 w3.to_checksum_address(self.vault_address),
                 block_timestamp,

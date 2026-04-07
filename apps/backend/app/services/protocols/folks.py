@@ -27,7 +27,6 @@ _ONE = Decimal("1")
 _ZERO = Decimal("0")
 _ONE_USDC = Decimal("1000000")
 _RATE_SCALE = Decimal("1e18")
-_SECONDS_PER_HOUR = Decimal("3600")
 _HOURS_PER_YEAR = 8760
 
 
@@ -126,11 +125,17 @@ class FolksAdapter(BaseProtocolAdapter):
         )
 
     @staticmethod
-    def _compute_hourly_compounded_apy(rate_per_second: Decimal) -> Decimal:
-        """Folks SDK-equivalent APY: (1 + r * 3600)^8760 - 1."""
-        if rate_per_second <= _ZERO:
+    def _compute_hourly_compounded_apy(annual_rate: Decimal) -> Decimal:
+        """Compute APY from annual WAD-scaled deposit rate.
+
+        Folks hub pool `getDepositData().interestRate` is annualized with 1e18
+        precision. Convert annual rate -> hourly APR and compound hourly.
+        """
+        if annual_rate <= _ZERO:
             return _ZERO
-        hourly_factor = _ONE + (rate_per_second * _SECONDS_PER_HOUR)
+
+        hourly_rate = annual_rate / Decimal(str(_HOURS_PER_YEAR))
+        hourly_factor = _ONE + hourly_rate
         if hourly_factor <= _ZERO:
             return _ZERO
         return max((hourly_factor ** _HOURS_PER_YEAR) - _ONE, _ZERO)
@@ -149,8 +154,8 @@ class FolksAdapter(BaseProtocolAdapter):
             stable_borrow_raw = int(stable_borrow_data[4])
 
             tvl_usd = Decimal(str(total_deposit_raw)) / _ONE_USDC
-            rate_per_second = Decimal(str(deposit_rate_raw)) / _RATE_SCALE
-            apy = self._compute_hourly_compounded_apy(rate_per_second)
+            annual_rate = Decimal(str(deposit_rate_raw)) / _RATE_SCALE
+            apy = self._compute_hourly_compounded_apy(annual_rate)
 
             utilization_rate: Decimal | None = None
             if total_deposit_raw > 0:
