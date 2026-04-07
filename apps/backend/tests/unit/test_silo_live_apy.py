@@ -101,6 +101,18 @@ class _FakeWeb3:
         return value
 
 
+class _FakeGetRateVaultFunctions:
+    def convertToAssets(self, _shares):
+        return _FakeAsyncCall(10**18)
+
+    def totalAssets(self):
+        return _FakeAsyncCall(2_000_000)
+
+
+class _FakeGetRateVault:
+    functions = _FakeGetRateVaultFunctions()
+
+
 @pytest.mark.asyncio
 async def test_silo_live_apr_uses_onchain_timestamp_without_get_block() -> None:
     captured: dict[str, int] = {}
@@ -113,3 +125,22 @@ async def test_silo_live_apr_uses_onchain_timestamp_without_get_block() -> None:
     assert captured["block_timestamp"] == 1712345678
     assert utilization == Decimal("0.5")
     assert apr == Decimal("0.025")
+
+
+@pytest.mark.asyncio
+async def test_silo_v2_keeps_cached_live_apr_when_live_read_fails() -> None:
+    adapter = SiloAdapter(vault_address="0xvault")
+    adapter.protocol_id = "silo_savusd_usdc"
+    adapter._cached_apy = Decimal("0.066")
+    adapter._get_vault = lambda: _FakeGetRateVault()  # type: ignore[method-assign]
+
+    async def _no_live_apr(_vault):
+        return None, None
+
+    adapter._read_live_depositor_apr = _no_live_apr  # type: ignore[method-assign]
+    adapter._get_w3 = lambda: (_ for _ in ()).throw(RuntimeError("rpc unavailable"))  # type: ignore[method-assign]
+
+    rate = await adapter.get_rate()
+
+    assert rate.apy == Decimal("0.066")
+    assert rate.effective_apy == Decimal("0.066")

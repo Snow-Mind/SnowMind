@@ -25,6 +25,11 @@ from app.services.protocols.base import ProtocolRate
 
 logger = logging.getLogger("snowmind.rate_fetcher")
 
+_MIN_REASONABLE_APY = Decimal("0")
+_MAX_REASONABLE_APY = Decimal("2.0")
+_MIN_REASONABLE_FETCHED_AT = 1577836800.0  # 2020-01-01
+_MAX_REASONABLE_FETCHED_AT = 4102444800.0  # 2100-01-01
+
 # ── Response-level cache for rate fetches ────────────────────────────────────
 # Prevents Infura 429 storms when /rates is polled rapidly by the frontend.
 _rate_cache: dict[str, ProtocolRate] = {}
@@ -170,44 +175,101 @@ class TWAPBuffer:
     def sample_count(self, protocol_id: str) -> int:
         return len(self._samples.get(protocol_id, []))
 
+    @staticmethod
+    def _is_snapshot_sane(snapshot: TWAPSnapshot) -> bool:
+        """Validate persisted snapshot values before restoring them into memory."""
+        if (
+            not snapshot.apy.is_finite()
+            or not snapshot.effective_apy.is_finite()
+            or not snapshot.tvl_usd.is_finite()
+        ):
+            return False
+        if snapshot.apy < _MIN_REASONABLE_APY or snapshot.apy > _MAX_REASONABLE_APY:
+            return False
+        if (
+            snapshot.effective_apy < _MIN_REASONABLE_APY
+            or snapshot.effective_apy > _MAX_REASONABLE_APY
+        ):
+            return False
+        if snapshot.tvl_usd < Decimal("0"):
+            return False
+        if (
+            snapshot.fetched_at < _MIN_REASONABLE_FETCHED_AT
+            or snapshot.fetched_at > _MAX_REASONABLE_FETCHED_AT
+        ):
+            return False
+        return True
+
     def load_from_db(self) -> None:
         """Load persisted TWAP snapshots from DB on startup."""
         if self._loaded_from_db:
             return
         try:
             db = get_supabase()
-            for pid in ALL_ADAPTERS:
+        except Exception as exc:
+            logger.warning("Failed to initialize TWAP snapshot DB client: %s", exc)
+            self._loaded_from_db = True
+            return
+
+        for pid in ALL_ADAPTERS:
+            try:
                 result = (
                     db.table("twap_snapshots")
                     .select("*")
                     .eq("protocol_id", pid)
+                    # Exclude pathological historical rows at query-time so JSON
+                    # parsing never sees giant numeric payloads.
+                    .gte("apy", str(_MIN_REASONABLE_APY))
+                    .lte("apy", str(_MAX_REASONABLE_APY))
+                    .gte("effective_apy", str(_MIN_REASONABLE_APY))
+                    .lte("effective_apy", str(_MAX_REASONABLE_APY))
+                    .gte("fetched_at", _MIN_REASONABLE_FETCHED_AT)
+                    .lte("fetched_at", _MAX_REASONABLE_FETCHED_AT)
                     .order("fetched_at", desc=True)
                     .limit(self.max_snapshots)
                     .execute()
                 )
-                if result.data:
-                    # Reverse to chronological order
-                    for row in reversed(result.data):
-                        self._samples[pid].append(TWAPSnapshot(
-                            protocol_id=row["protocol_id"],
-                            apy=Decimal(str(row["apy"])),
-                            effective_apy=Decimal(str(row["effective_apy"])),
-                            tvl_usd=Decimal(str(row["tvl_usd"])),
-                            utilization_rate=(
-                                Decimal(str(row["utilization_rate"]))
-                                if row.get("utilization_rate") is not None
-                                else None
-                            ),
-                            fetched_at=float(row["fetched_at"]),
-                        ))
-                    logger.info(
-                        "Loaded %d TWAP snapshots for %s from DB",
-                        len(result.data),
-                        pid,
+            except Exception as exc:
+                logger.warning("Failed to load TWAP snapshots for %s from DB: %s", pid, exc)
+                continue
+
+            loaded_count = 0
+            dropped_count = 0
+            for row in reversed(result.data or []):
+                try:
+                    snapshot = TWAPSnapshot(
+                        protocol_id=row["protocol_id"],
+                        apy=Decimal(str(row["apy"])),
+                        effective_apy=Decimal(str(row["effective_apy"])),
+                        tvl_usd=Decimal(str(row["tvl_usd"])),
+                        utilization_rate=(
+                            Decimal(str(row["utilization_rate"]))
+                            if row.get("utilization_rate") is not None
+                            else None
+                        ),
+                        fetched_at=float(row["fetched_at"]),
                     )
-            self._loaded_from_db = True
-        except Exception as exc:
-            logger.warning("Failed to load TWAP snapshots from DB: %s", exc)
+                except Exception:
+                    dropped_count += 1
+                    continue
+
+                if not self._is_snapshot_sane(snapshot):
+                    dropped_count += 1
+                    continue
+
+                self._samples[pid].append(snapshot)
+                loaded_count += 1
+
+            if loaded_count > 0:
+                logger.info("Loaded %d TWAP snapshots for %s from DB", loaded_count, pid)
+            if dropped_count > 0:
+                logger.warning(
+                    "Dropped %d invalid TWAP snapshots for %s during startup restore",
+                    dropped_count,
+                    pid,
+                )
+
+        self._loaded_from_db = True
 
     def _persist_snapshot(self, snapshot: TWAPSnapshot) -> None:
         """Persist a snapshot to DB."""
@@ -505,14 +567,14 @@ class RateFetcher:
                 rate.tvl_usd,
             )
             return False
-        if rate.apy < Decimal("0"):
+        if rate.apy < _MIN_REASONABLE_APY:
             return False
-        if rate.effective_apy < Decimal("0"):
+        if rate.effective_apy < _MIN_REASONABLE_APY:
             return False
-        if rate.apy > Decimal("2.0"):  # 200% — likely a data error
+        if rate.apy > _MAX_REASONABLE_APY:  # 200% — likely a data error
             logger.warning("Rate for %s rejected: APY=%s exceeds 200%%", rate.protocol_id, rate.apy)
             return False
-        if rate.effective_apy > Decimal("2.0"):  # 200% — likely a data error
+        if rate.effective_apy > _MAX_REASONABLE_APY:  # 200% — likely a data error
             logger.warning(
                 "Rate for %s rejected: effective APY=%s exceeds 200%%",
                 rate.protocol_id,

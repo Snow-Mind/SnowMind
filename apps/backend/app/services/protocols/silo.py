@@ -363,6 +363,19 @@ class SiloAdapter(BaseProtocolAdapter):
             except Exception as exc:
                 logger.warning("Silo utilization calculation failed for %s: %s", self.protocol_id, exc)
 
+        # For Silo V2 markets, prefer last known live IRM APR over share-price
+        # fallback when live reads fail transiently. This keeps dashboard APR
+        # aligned with protocol UI instead of drifting during RPC hiccups.
+        if self.protocol_id != "silo_gami_usdc" and self._cached_apy > Decimal("0"):
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=self._cached_apy,
+                effective_apy=self._cached_apy,
+                tvl_usd=tvl,
+                utilization_rate=utilization_rate,
+                fetched_at=now,
+            )
+
         today_value = Decimal(str(current_assets))  # raw 1e18-scale value
 
         # ── Primary: 24h snapshot delta ──────────────────────────────────

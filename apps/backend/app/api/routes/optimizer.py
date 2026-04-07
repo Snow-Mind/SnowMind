@@ -153,7 +153,10 @@ def _resolve_rate_risk(
     persisted_scores: dict[str, RiskScoreResult],
     computed_scores: dict[str, RiskScoreResult],
 ) -> tuple[Decimal, RiskBreakdownResponse | None]:
-    score = persisted_scores.get(protocol_id) or computed_scores.get(protocol_id)
+    # Prefer live-computed scores when available so rate responses reflect
+    # current on-chain liquidity/yield conditions instead of potentially stale
+    # daily snapshots.
+    score = computed_scores.get(protocol_id) or persisted_scores.get(protocol_id)
     if score is not None:
         return score.score, _risk_breakdown_response(score)
     return _risk_scorer.compute_risk_score(protocol_id), None
@@ -490,14 +493,9 @@ async def _build_all_rates_response(db: Client) -> list[ProtocolRateResponse]:
             len(stale_protocols),
             ",".join(sorted(stale_protocols)),
         )
-    missing_score_inputs = {
-        pid: rate
-        for pid, rate in rates.items()
-        if pid not in persisted_scores
-    }
     computed_scores = (
-        await _risk_scorer.compute_scores_from_rates(db, missing_score_inputs)
-        if missing_score_inputs
+        await _risk_scorer.compute_scores_from_rates(db, rates)
+        if rates
         else {}
     )
 
