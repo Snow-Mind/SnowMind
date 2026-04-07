@@ -220,6 +220,7 @@ class SnowMindScheduler:
                 "errors": 0,
                 "no_session_key": 0,
             }
+            scheduler_watchdog.record_tick()
             return
 
         active_keys = (
@@ -256,6 +257,7 @@ class SnowMindScheduler:
                 "errors": 0,
                 "no_session_key": skipped_no_key,
             }
+            scheduler_watchdog.record_tick()
             return
 
         now = datetime.now(timezone.utc)
@@ -302,6 +304,7 @@ class SnowMindScheduler:
                 "no_session_key": skipped_no_key,
                 "cadence_deferred": cadence_deferred,
             }
+            scheduler_watchdog.record_tick()
             return
 
         logger.info(
