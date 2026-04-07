@@ -8,6 +8,7 @@ import {
 import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants"
 import {
   createPublicClient,
+  decodeEventLog,
   decodeErrorResult,
   decodeFunctionResult,
   fallback,
@@ -273,6 +274,16 @@ const FOLKS_MESSAGE_PARAMS_COMPONENTS = [
   { name: "returnGasLimit", type: "uint256" },
 ]
 
+const FOLKS_MESSAGE_RECEIVED_COMPONENTS = [
+  { name: "messageId", type: "bytes32" },
+  { name: "sourceChainId", type: "uint16" },
+  { name: "sourceAddress", type: "bytes32" },
+  { name: "handler", type: "bytes32" },
+  { name: "payload", type: "bytes" },
+  { name: "returnAdapterId", type: "uint16" },
+  { name: "returnGasLimit", type: "uint256" },
+]
+
 const FOLKS_SPOKE_COMMON_ABI = [
   {
     name: "createAccount",
@@ -298,6 +309,30 @@ const FOLKS_SPOKE_COMMON_ABI = [
       { name: "chainId", type: "uint16" },
       { name: "amount", type: "uint256" },
       { name: "isFAmount", type: "bool" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "retryMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reverseMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
     ],
     outputs: [],
   },
@@ -327,6 +362,30 @@ const FOLKS_SPOKE_USDC_ABI = [
       { name: "accountId", type: "bytes32" },
       { name: "loanId", type: "bytes32" },
       { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "retryMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reverseMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
     ],
     outputs: [],
   },
@@ -423,6 +482,47 @@ const FOLKS_LOAN_MANAGER_READ_ABI = [
   },
 ]
 
+const FOLKS_MESSAGE_MANAGER_ABI = [
+  {
+    name: "failedMessages",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+    ],
+    outputs: [{ name: "messageHash", type: "bytes32" }],
+  },
+  {
+    name: "seenMessages",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+    ],
+    outputs: [{ name: "hasBeenSeen", type: "bool" }],
+  },
+]
+
+const FOLKS_MESSAGE_FAILED_EVENT_ABI = {
+  anonymous: false,
+  inputs: [
+    { indexed: false, name: "adapterId", type: "uint16" },
+    { indexed: true, name: "messageId", type: "bytes32" },
+    { indexed: false, name: "reason", type: "bytes" },
+    {
+      indexed: false,
+      name: "message",
+      type: "tuple",
+      components: FOLKS_MESSAGE_RECEIVED_COMPONENTS,
+    },
+    { indexed: false, name: "messageHash", type: "bytes32" },
+  ],
+  name: "MessageFailed",
+  type: "event",
+}
+
 const FOLKS_DEFAULT_MESSAGE_PARAMS = Object.freeze({
   adapterId: 1,
   returnAdapterId: 1,
@@ -465,6 +565,22 @@ function formatUsdcRaw(rawAmount) {
   const whole = value / USDC_BASE_UNITS
   const fraction = (value % USDC_BASE_UNITS).toString().padStart(6, "0")
   return `${whole.toString()}.${fraction}`
+}
+
+function bytes32ToAddress(value) {
+  const normalized = String(value || "").toLowerCase().replace(/^0x/, "")
+  if (normalized.length !== 64) {
+    throw new Error(`Invalid bytes32 value: ${value}`)
+  }
+  return `0x${normalized.slice(-40)}`
+}
+
+function normalizeRecoveryAction(rawAction) {
+  const normalized = String(rawAction || "reverse").trim().toLowerCase()
+  if (normalized !== "reverse" && normalized !== "retry") {
+    throw new Error(`Unsupported Folks recovery action: ${rawAction}`)
+  }
+  return normalized
 }
 
 function extractFolksMessageFailures(receipt) {
@@ -3160,6 +3276,298 @@ export async function executeRebalance({
       causeCauseDetails: err?.cause?.cause?.details?.slice(0, 300),
       timestamp: new Date().toISOString(),
     }))
+    throw new Error(formatExecutionError(err))
+  }
+}
+
+export async function executeFolksRecovery({
+  serializedPermission,
+  sessionPrivateKey,
+  smartAccountAddress,
+  contracts,
+  recoveries,
+}) {
+  if (!ZERODEV_ID) {
+    throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
+  }
+
+  if (!contracts?.FOLKS_MESSAGE_MANAGER || contracts.FOLKS_MESSAGE_MANAGER === zeroAddress) {
+    throw new Error("FOLKS_MESSAGE_MANAGER is required for Folks recovery")
+  }
+  if (!Array.isArray(recoveries) || recoveries.length === 0) {
+    throw new Error("recoveries must include at least one failed message")
+  }
+
+  let blobHasEnableSig = false
+  try {
+    const decoded = JSON.parse(Buffer.from(serializedPermission, "base64").toString("utf-8"))
+    blobHasEnableSig = !!decoded.enableSignature && decoded.enableSignature.length > 2
+  } catch {
+    // Ignore parse errors; getKernelClient will fail with a clearer message.
+  }
+
+  const useEnableFirst = blobHasEnableSig
+  const { client: kernelClient, publicClient: recoveryPublicClient, permissionAccountAddress } = await getKernelClient(
+    serializedPermission,
+    sessionPrivateKey || "",
+    { withPaymaster: true, forceRegularMode: !useEnableFirst },
+  )
+
+  if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+    throw new Error(
+      `Session key/account mismatch: permissionAccount=${permissionAccountAddress} sender=${smartAccountAddress}`,
+    )
+  }
+
+  const normalizedSmart = smartAccountAddress.toLowerCase().replace(/^0x/, "")
+  const smartMarker = normalizedSmart.padStart(64, "0")
+  const expectedHub = contracts.FOLKS_HUB ? String(contracts.FOLKS_HUB).toLowerCase() : null
+  const messageManager = String(contracts.FOLKS_MESSAGE_MANAGER).toLowerCase()
+
+  const sourceMap = new Map()
+  if (contracts.FOLKS_SPOKE_COMMON && contracts.FOLKS_SPOKE_COMMON !== zeroAddress) {
+    sourceMap.set(String(contracts.FOLKS_SPOKE_COMMON).toLowerCase(), {
+      address: contracts.FOLKS_SPOKE_COMMON,
+      abi: FOLKS_SPOKE_COMMON_ABI,
+    })
+  }
+  if (contracts.FOLKS_SPOKE_USDC && contracts.FOLKS_SPOKE_USDC !== zeroAddress) {
+    sourceMap.set(String(contracts.FOLKS_SPOKE_USDC).toLowerCase(), {
+      address: contracts.FOLKS_SPOKE_USDC,
+      abi: FOLKS_SPOKE_USDC_ABI,
+    })
+  }
+  if (sourceMap.size === 0) {
+    throw new Error("FOLKS_SPOKE_COMMON or FOLKS_SPOKE_USDC must be configured")
+  }
+
+  const calls = []
+  const verifiedMessages = []
+  const seenKeys = new Set()
+
+  for (const rawRecovery of recoveries) {
+    const txHash = String(rawRecovery?.txHash || "").trim().toLowerCase()
+    const messageId = String(rawRecovery?.messageId || "").trim().toLowerCase()
+    const action = normalizeRecoveryAction(rawRecovery?.action)
+
+    if (!(txHash.startsWith("0x") && txHash.length === 66)) {
+      throw new Error(`Invalid recovery txHash: ${txHash}`)
+    }
+    if (!(messageId.startsWith("0x") && messageId.length === 66)) {
+      throw new Error(`Invalid recovery messageId: ${messageId}`)
+    }
+
+    const dedupeKey = `${txHash}:${messageId}:${action}`
+    if (seenKeys.has(dedupeKey)) {
+      throw new Error(`Duplicate recovery entry: ${dedupeKey}`)
+    }
+    seenKeys.add(dedupeKey)
+
+    const receipt = await recoveryPublicClient.getTransactionReceipt({ hash: txHash })
+    let matched = null
+
+    for (const log of receipt.logs || []) {
+      if (String(log?.address || "").toLowerCase() !== messageManager) {
+        continue
+      }
+
+      try {
+        const decoded = decodeEventLog({
+          abi: [FOLKS_MESSAGE_FAILED_EVENT_ABI],
+          data: log.data,
+          topics: log.topics,
+        })
+        if (decoded?.eventName !== "MessageFailed") {
+          continue
+        }
+        const decodedMessageId = String(decoded.args?.messageId || "").toLowerCase()
+        if (decodedMessageId !== messageId) {
+          continue
+        }
+        matched = decoded.args
+        break
+      } catch {
+        // Keep scanning logs for the requested messageId.
+      }
+    }
+
+    if (!matched) {
+      throw new Error(`MessageFailed event not found for tx=${txHash} messageId=${messageId}`)
+    }
+
+    const adapterId = Number(matched.adapterId)
+    if (!Number.isInteger(adapterId) || adapterId < 0 || adapterId > 65535) {
+      throw new Error(`Invalid adapterId for message ${messageId}`)
+    }
+
+    const sourceAddress = bytes32ToAddress(matched.message.sourceAddress)
+    const handlerAddress = bytes32ToAddress(matched.message.handler)
+    const source = sourceMap.get(sourceAddress.toLowerCase())
+    if (!source) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: unsupported source address ${sourceAddress}`,
+      )
+    }
+    if (expectedHub && handlerAddress.toLowerCase() !== expectedHub) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: unexpected handler ${handlerAddress}`,
+      )
+    }
+
+    const payloadHex = String(matched.message.payload || "0x").toLowerCase().replace(/^0x/, "")
+    if (!payloadHex.includes(smartMarker)) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: payload does not reference smart account ${smartAccountAddress}`,
+      )
+    }
+
+    const [seenOnchain, failedHash] = await Promise.all([
+      recoveryPublicClient.readContract({
+        address: contracts.FOLKS_MESSAGE_MANAGER,
+        abi: FOLKS_MESSAGE_MANAGER_ABI,
+        functionName: "seenMessages",
+        args: [adapterId, messageId],
+      }),
+      recoveryPublicClient.readContract({
+        address: contracts.FOLKS_MESSAGE_MANAGER,
+        abi: FOLKS_MESSAGE_MANAGER_ABI,
+        functionName: "failedMessages",
+        args: [adapterId, messageId],
+      }),
+    ])
+
+    const failedHashNormalized = String(failedHash || "").toLowerCase()
+    const eventHashNormalized = String(matched.messageHash || "").toLowerCase()
+    if (!seenOnchain) {
+      throw new Error(`Rejected recovery for ${messageId}: message is not marked as seen on-chain`)
+    }
+    if (failedHashNormalized === FOLKS_ZERO_BYTES32.toLowerCase()) {
+      throw new Error(`Rejected recovery for ${messageId}: message is no longer in failedMessages`)
+    }
+    if (failedHashNormalized !== eventHashNormalized) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: failed hash mismatch (on-chain ${failedHashNormalized}, event ${eventHashNormalized})`,
+      )
+    }
+
+    calls.push({
+      to: source.address,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: source.abi,
+        functionName: action === "retry" ? "retryMessage" : "reverseMessage",
+        args: [adapterId, messageId, matched.message, "0x"],
+      }),
+    })
+    verifiedMessages.push({ adapterId, messageId, action })
+  }
+
+  if (calls.length === 0) {
+    throw new Error("No validated Folks recovery calls were generated")
+  }
+
+  const submitAndVerify = async (client, publicClient, context) => {
+    const txHash = await client.sendTransaction({ calls })
+    await waitForConfirmedSuccess(publicClient, txHash, smartAccountAddress, context)
+
+    for (const item of verifiedMessages) {
+      const afterHash = await publicClient.readContract({
+        address: contracts.FOLKS_MESSAGE_MANAGER,
+        abi: FOLKS_MESSAGE_MANAGER_ABI,
+        functionName: "failedMessages",
+        args: [item.adapterId, item.messageId],
+      })
+      if (String(afterHash || "").toLowerCase() !== FOLKS_ZERO_BYTES32.toLowerCase()) {
+        throw new Error(
+          `Folks recovery did not clear failed message ${item.messageId} (adapter=${item.adapterId})`,
+        )
+      }
+    }
+
+    return txHash
+  }
+
+  try {
+    const txHash = await submitAndVerify(
+      kernelClient,
+      recoveryPublicClient,
+      useEnableFirst ? "folks_recovery_primary_enable_mode" : "folks_recovery_primary_regular_mode",
+    )
+    return {
+      txHash,
+      explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+      recoveredMessageIds: verifiedMessages.map((item) => item.messageId),
+      recoveredCount: verifiedMessages.length,
+    }
+  } catch (err) {
+    const allText = [err?.shortMessage, err?.message, err?.details,
+      err?.cause?.message, err?.cause?.details]
+      .filter(Boolean).join(" ").toLowerCase()
+
+    const isPermissionRelated = (
+      allText.includes("aa24") ||
+      allText.includes("signature error") ||
+      allText.includes("enablenotapproved") ||
+      allText.includes("duplicate permissionhash") ||
+      allText.includes("invalidnonce") ||
+      allText.includes("call policy") ||
+      (allText.includes("useroperation reverted") && allText.includes("simulation"))
+    )
+
+    if (isPermissionRelated) {
+      const retryForceRegular = useEnableFirst
+      try {
+        const { client: retryClient, publicClient: retryPublicClient } = await getKernelClient(
+          serializedPermission,
+          sessionPrivateKey || "",
+          { withPaymaster: true, forceRegularMode: retryForceRegular },
+        )
+        const retryTxHash = await submitAndVerify(
+          retryClient,
+          retryPublicClient,
+          `folks_recovery_permission_mode_retry_${retryForceRegular ? "regular" : "enable"}`,
+        )
+        return {
+          txHash: retryTxHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
+          recoveredMessageIds: verifiedMessages.map((item) => item.messageId),
+          recoveredCount: verifiedMessages.length,
+        }
+      } catch (retryErr) {
+        throw new Error(
+          `Folks recovery failed in both modes. ` +
+          `Primary (${useEnableFirst ? "enable" : "regular"}): ${err?.shortMessage || err?.message || "unknown"} | ` +
+          `Retry (${retryForceRegular ? "regular" : "enable"}): ${retryErr?.shortMessage || retryErr?.message || "unknown"}`,
+        )
+      }
+    }
+
+    if (isLikelyPaymasterError(err) || isValidateUserOpRevert(err)) {
+      try {
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(
+          serializedPermission,
+          sessionPrivateKey || "",
+          { withPaymaster: false, forceRegularMode: !useEnableFirst },
+        )
+        const txHash = await submitAndVerify(
+          noPaymasterClient,
+          noPaymasterPublicClient,
+          "folks_recovery_no_paymaster_retry",
+        )
+        return {
+          txHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+          recoveredMessageIds: verifiedMessages.map((item) => item.messageId),
+          recoveredCount: verifiedMessages.length,
+        }
+      } catch (retryErr) {
+        throw new Error(
+          formatExecutionError(err)
+          + ` [no-paymaster retry also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}]`,
+        )
+      }
+    }
+
     throw new Error(formatExecutionError(err))
   }
 }

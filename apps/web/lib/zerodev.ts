@@ -157,6 +157,16 @@ const FOLKS_MESSAGE_PARAMS_COMPONENTS = [
   { name: "returnGasLimit", type: "uint256" },
 ] as const
 
+const FOLKS_MESSAGE_RECEIVED_COMPONENTS = [
+  { name: "messageId", type: "bytes32" },
+  { name: "sourceChainId", type: "uint16" },
+  { name: "sourceAddress", type: "bytes32" },
+  { name: "handler", type: "bytes32" },
+  { name: "payload", type: "bytes" },
+  { name: "returnAdapterId", type: "uint16" },
+  { name: "returnGasLimit", type: "uint256" },
+] as const
+
 export const FOLKS_SPOKE_COMMON_ABI = [
   {
     name: "createAccount", type: "function", stateMutability: "payable",
@@ -178,6 +188,30 @@ export const FOLKS_SPOKE_COMMON_ABI = [
       { name: "chainId", type: "uint16" },
       { name: "amount", type: "uint256" },
       { name: "isFAmount", type: "bool" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "retryMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reverseMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
     ],
     outputs: [],
   },
@@ -203,6 +237,30 @@ export const FOLKS_SPOKE_USDC_ABI = [
       { name: "accountId", type: "bytes32" },
       { name: "loanId", type: "bytes32" },
       { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "retryMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reverseMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
     ],
     outputs: [],
   },
@@ -925,6 +983,42 @@ export async function grantAndSerializeSessionKey(
         abi: FOLKS_SPOKE_COMMON_ABI,
         functionName: "withdraw",
         args: [null, null, null, null, null, null, null],
+      },
+
+      // Folks SpokeCommon — retry failed bridge message (recovery path)
+      {
+        target: contracts.FOLKS_SPOKE_COMMON,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_COMMON_ABI,
+        functionName: "retryMessage",
+        args: [null, null, null, null],
+      },
+
+      // Folks SpokeCommon — reverse failed bridge message (refund path)
+      {
+        target: contracts.FOLKS_SPOKE_COMMON,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_COMMON_ABI,
+        functionName: "reverseMessage",
+        args: [null, null, null, null],
+      },
+
+      // Folks SpokeUSDC — retry failed bridge message (recovery path)
+      {
+        target: contracts.FOLKS_SPOKE_USDC,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_USDC_ABI,
+        functionName: "retryMessage",
+        args: [null, null, null, null],
+      },
+
+      // Folks SpokeUSDC — reverse failed bridge message (refund path)
+      {
+        target: contracts.FOLKS_SPOKE_USDC,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_USDC_ABI,
+        functionName: "reverseMessage",
+        args: [null, null, null, null],
       },
 
     // USDC.transfer — fee collection to treasury AND user withdrawal to EOA.

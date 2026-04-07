@@ -8,6 +8,7 @@ kept in place but currently disabled behind configuration.
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from eth_account import Account
@@ -128,6 +129,62 @@ class WithdrawalExecuteResponse(BaseModel):
     agent_fee: str = Field(..., alias="agentFee")
     user_receives: str = Field(..., alias="userReceives")
     account_deactivated: bool = Field(..., alias="accountDeactivated")
+    message: str
+    model_config = {"populate_by_name": True}
+
+
+class FolksRecoveryMessageRequest(BaseModel):
+    """One failed Folks message that should be retried/reversed."""
+    tx_hash: str = Field(..., alias="txHash")
+    message_id: str = Field(..., alias="messageId")
+    action: Literal["reverse", "retry"] = Field("reverse", alias="action")
+    model_config = {"populate_by_name": True}
+
+    @field_validator("tx_hash")
+    @classmethod
+    def validate_tx_hash(cls, v: str) -> str:
+        value = str(v or "").strip().lower()
+        if not (value.startswith("0x") and len(value) == 66):
+            raise ValueError("tx_hash must be a 32-byte hex string")
+        return value
+
+    @field_validator("message_id")
+    @classmethod
+    def validate_message_id(cls, v: str) -> str:
+        value = str(v or "").strip().lower()
+        if not (value.startswith("0x") and len(value) == 66):
+            raise ValueError("message_id must be a 32-byte hex string")
+        return value
+
+
+class FolksRecoveryExecuteRequest(BaseModel):
+    """Request body to recover failed Folks bridge messages."""
+    smart_account_address: str = Field(..., alias="smartAccountAddress")
+    recoveries: list[FolksRecoveryMessageRequest] = Field(..., alias="recoveries")
+    owner_signature: str | None = Field(None, alias="ownerSignature")
+    signature_message: str | None = Field(None, alias="signatureMessage")
+    signature_timestamp: int | None = Field(None, alias="signatureTimestamp")
+    model_config = {"populate_by_name": True}
+
+    @field_validator("recoveries")
+    @classmethod
+    def validate_recoveries(cls, v: list[FolksRecoveryMessageRequest]) -> list[FolksRecoveryMessageRequest]:
+        if not v:
+            raise ValueError("recoveries must include at least one failed message")
+        if len(v) > 4:
+            raise ValueError("recoveries supports at most 4 messages per request")
+        dedup = {(item.tx_hash, item.message_id, item.action) for item in v}
+        if len(dedup) != len(v):
+            raise ValueError("recoveries contains duplicate entries")
+        return v
+
+
+class FolksRecoveryExecuteResponse(BaseModel):
+    """Response after Folks recovery transaction is submitted."""
+    status: str
+    tx_hash: str | None = Field(None, alias="txHash")
+    recovered_message_ids: list[str] = Field(default_factory=list, alias="recoveredMessageIds")
+    recovered_count: int = Field(0, alias="recoveredCount")
     message: str
     model_config = {"populate_by_name": True}
 
@@ -387,6 +444,76 @@ def _verify_withdrawal_authorization(req: WithdrawalExecuteRequest, account: dic
         )
 
 
+def _build_folks_recovery_authorization_message(
+    *,
+    smart_account_address: str,
+    owner_address: str,
+    recoveries: list[FolksRecoveryMessageRequest],
+    signature_timestamp: int,
+) -> str:
+    recovery_lines = [
+        f"{entry.action}|{entry.tx_hash.lower()}|{entry.message_id.lower()}"
+        for entry in recoveries
+    ]
+    return "\n".join([
+        "SnowMind Folks Recovery Authorization",
+        f"Smart Account: {smart_account_address.lower()}",
+        f"Owner: {owner_address.lower()}",
+        "Recoveries:",
+        *recovery_lines,
+        "Chain ID: 43114",
+        f"Timestamp: {signature_timestamp}",
+    ])
+
+
+def _verify_folks_recovery_authorization(req: FolksRecoveryExecuteRequest, account: dict) -> None:
+    """Require a fresh owner signature before recovering failed Folks messages."""
+    owner_address_raw = str(account.get("owner_address") or "").strip()
+    if not owner_address_raw:
+        raise HTTPException(status_code=400, detail="Account owner address missing")
+
+    owner_signature = (req.owner_signature or "").strip()
+    signature_message = (req.signature_message or "").strip()
+    signature_timestamp = req.signature_timestamp
+
+    if not owner_signature or not signature_message or signature_timestamp is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Folks recovery authorization signature is required",
+        )
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if abs(now_ts - int(signature_timestamp)) > _WITHDRAW_SIGNATURE_TTL_SECONDS:
+        raise HTTPException(
+            status_code=401,
+            detail="Folks recovery authorization expired. Please sign again.",
+        )
+
+    expected_message = _build_folks_recovery_authorization_message(
+        smart_account_address=req.smart_account_address,
+        owner_address=owner_address_raw,
+        recoveries=req.recoveries,
+        signature_timestamp=int(signature_timestamp),
+    )
+    if signature_message != expected_message:
+        raise HTTPException(status_code=400, detail="Folks recovery authorization payload mismatch")
+
+    try:
+        recovered = Account.recover_message(
+            encode_defunct(text=expected_message),
+            signature=owner_signature,
+        )
+    except Exception as exc:
+        logger.warning("Invalid Folks recovery signature for %s: %s", req.smart_account_address, exc)
+        raise HTTPException(status_code=400, detail="Invalid Folks recovery signature")
+
+    if recovered.lower() != owner_address_raw.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Folks recovery signature does not match account owner",
+        )
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/preview", response_model=WithdrawalPreviewResponse)
@@ -626,6 +753,8 @@ async def execute_withdrawal(
                 "SILO_GAMI_USDC_VAULT": settings.SILO_GAMI_USDC_VAULT,
                 "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
                 "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+                "FOLKS_HUB": settings.FOLKS_HUB,
+                "FOLKS_MESSAGE_MANAGER": settings.FOLKS_MESSAGE_MANAGER,
                 "FOLKS_ACCOUNT_MANAGER": settings.FOLKS_ACCOUNT_MANAGER,
                 "FOLKS_LOAN_MANAGER": settings.FOLKS_LOAN_MANAGER,
                 "FOLKS_USDC_HUB_POOL": settings.FOLKS_USDC_HUB_POOL,
@@ -740,3 +869,111 @@ async def execute_withdrawal(
             status_code=500,
             detail="An error occurred during withdrawal. Your funds are safe.",
         )
+
+
+@router.post("/folks/recover", response_model=FolksRecoveryExecuteResponse)
+async def recover_failed_folks_messages(
+    request: Request,
+    req: FolksRecoveryExecuteRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Recover failed Folks bridge messages via strict on-chain verified reverse/retry."""
+    address = validate_eth_address(req.smart_account_address)
+    account = await _get_account(db, address)
+    verify_account_ownership(_auth, account, db=db)
+    _verify_folks_recovery_authorization(req, account)
+
+    session_info = get_active_session_key_record(db, UUID(account["id"]))
+    if not session_info:
+        raise HTTPException(
+            status_code=400,
+            detail="No active session key found. Re-grant session key first",
+        )
+
+    serialized_permission = session_info.get("serialized_permission") or ""
+    session_private_key = session_info.get("session_private_key") or ""
+    if not serialized_permission:
+        raise HTTPException(status_code=400, detail="Active session key is missing serialized permission")
+
+    allowed_protocols = [str(item).lower() for item in (session_info.get("allowed_protocols") or [])]
+    if allowed_protocols and "folks" not in allowed_protocols:
+        raise HTTPException(
+            status_code=403,
+            detail="Active session key is not permitted for Folks operations. Re-grant session key.",
+        )
+
+    settings = get_settings()
+    payload = {
+        "serializedPermission": serialized_permission,
+        "sessionPrivateKey": session_private_key,
+        "smartAccountAddress": address,
+        "recoveries": [
+            {
+                "txHash": item.tx_hash,
+                "messageId": item.message_id,
+                "action": item.action,
+            }
+            for item in req.recoveries
+        ],
+        "contracts": {
+            "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
+            "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+            "FOLKS_HUB": settings.FOLKS_HUB,
+            "FOLKS_HUB_CHAIN_ID": settings.FOLKS_HUB_CHAIN_ID,
+            "FOLKS_MESSAGE_MANAGER": settings.FOLKS_MESSAGE_MANAGER,
+            "USDC": settings.USDC_ADDRESS,
+        },
+    }
+
+    execution = ExecutionService()
+    try:
+        result = await execution.execute_folks_recovery(payload)
+    except Exception as exc:
+        err_msg = str(exc)
+        err_lc = err_msg.lower()
+        if (
+            "serializedsessionkey" in err_lc
+            or "no signer" in err_lc
+            or "session key/account mismatch" in err_lc
+        ):
+            revoke_session_key(db, UUID(account["id"]))
+            raise HTTPException(
+                status_code=400,
+                detail="Session key invalid and has been revoked. Please re-authorize.",
+            )
+        if "call policy" in err_lc or "permission" in err_lc:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Session key does not have Folks recovery permissions. "
+                    "Re-grant session key and retry recovery."
+                ),
+            )
+        logger.error("Execution service returned an error for Folks recovery: %s", err_msg)
+        raise HTTPException(
+            status_code=502,
+            detail="Folks recovery execution failed — please try again",
+        )
+
+    tx_hash = result.get("txHash")
+    recovered_message_ids = [str(item).lower() for item in (result.get("recoveredMessageIds") or [])]
+
+    db.table("rebalance_logs").insert({
+        "account_id": account["id"],
+        "status": "executed",
+        "skip_reason": None,
+        "from_protocol": "folks_recovery",
+        "to_protocol": "smart_account",
+        "amount_moved": "0",
+        "tx_hash": tx_hash,
+        "apr_improvement": None,
+    }).execute()
+
+    return FolksRecoveryExecuteResponse(
+        status="executed",
+        txHash=tx_hash,
+        recoveredMessageIds=recovered_message_ids,
+        recoveredCount=int(result.get("recoveredCount") or len(recovered_message_ids)),
+        message="Folks failed-message recovery submitted.",
+    )

@@ -3,7 +3,7 @@ import {
   pruneNonces,
   verifyInternalRequest,
 } from "./auth.js"
-import { executeRebalance, executeWithdrawal } from "./execute.js"
+import { executeFolksRecovery, executeRebalance, executeWithdrawal } from "./execute.js"
 
 const VERSION = "1.5.1"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
@@ -290,6 +290,18 @@ function validateWithdrawalBody(body) {
   return errors
 }
 
+function validateFolksRecoveryBody(body) {
+  const errors = []
+  if (!body.serializedPermission) errors.push("serializedPermission is required")
+  if (!body.sessionPrivateKey) errors.push("sessionPrivateKey is required")
+  if (!body.smartAccountAddress) errors.push("smartAccountAddress is required")
+  if (!body.contracts?.FOLKS_MESSAGE_MANAGER) errors.push("contracts.FOLKS_MESSAGE_MANAGER is required")
+  if (!Array.isArray(body.recoveries) || body.recoveries.length === 0) {
+    errors.push("recoveries must be a non-empty array")
+  }
+  return errors
+}
+
 // ── Deep error extractor — surfaces buried revert reasons from bundler errors ──
 function extractErrorComponents(err) {
   const components = {
@@ -428,6 +440,69 @@ app.post("/execute/withdrawal", async (req, res) => {
     console.error(JSON.stringify({
       level: "error",
       action: "withdrawal_failed",
+      smartAccountAddress: req.body.smartAccountAddress,
+      ...errComponents,
+      durationMs: Date.now() - startMs,
+      timestamp: new Date().toISOString(),
+    }))
+    const status = err.message?.includes("timed out") ? 504 : 500
+    res.status(status).json({ error: err.message, code: err.code || "UNKNOWN" })
+  } finally {
+    activeOps--
+    clearSender(sender)
+  }
+})
+
+app.post("/execute/folks-recovery", async (req, res) => {
+  const startMs = Date.now()
+  const validationErrors = validateFolksRecoveryBody(req.body)
+  if (validationErrors.length > 0) {
+    return res.status(400).json({ error: "Validation failed", details: validationErrors })
+  }
+
+  if (activeOps >= MAX_CONCURRENT_OPS) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "folks_recovery_global_concurrency_rejected",
+      smartAccountAddress: req.body.smartAccountAddress,
+      activeOps,
+      maxConcurrentOps: MAX_CONCURRENT_OPS,
+      timestamp: new Date().toISOString(),
+    }))
+    return res.status(429).json({ error: "Too many concurrent operations, retry later" })
+  }
+
+  const sender = req.body.smartAccountAddress?.toLowerCase()
+  if (isSenderActive(sender)) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "folks_recovery_dedup_rejected",
+      smartAccountAddress: req.body.smartAccountAddress,
+      message: "Another operation is already in-flight for this sender",
+      timestamp: new Date().toISOString(),
+    }))
+    return res.status(409).json({ error: "Operation already in-flight for this account" })
+  }
+  markSenderActive(sender)
+  activeOps++
+
+  try {
+    const result = await withTimeout(executeFolksRecovery(req.body), EXECUTION_TIMEOUT_MS)
+    console.log(JSON.stringify({
+      level: "info",
+      action: "folks_recovery_executed",
+      smartAccountAddress: req.body.smartAccountAddress,
+      txHash: result.txHash,
+      recoveredCount: result.recoveredCount || 0,
+      durationMs: Date.now() - startMs,
+      timestamp: new Date().toISOString(),
+    }))
+    res.json(result)
+  } catch (err) {
+    const errComponents = extractErrorComponents(err)
+    console.error(JSON.stringify({
+      level: "error",
+      action: "folks_recovery_failed",
       smartAccountAddress: req.body.smartAccountAddress,
       ...errComponents,
       durationMs: Date.now() - startMs,

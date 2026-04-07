@@ -87,6 +87,8 @@ class ExecutionService:
                 "SILO_GAMI_USDC_VAULT": settings.SILO_GAMI_USDC_VAULT,
                 "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
                 "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+                "FOLKS_HUB": settings.FOLKS_HUB,
+                "FOLKS_MESSAGE_MANAGER": settings.FOLKS_MESSAGE_MANAGER,
                 "FOLKS_ACCOUNT_MANAGER": settings.FOLKS_ACCOUNT_MANAGER,
                 "FOLKS_LOAN_MANAGER": settings.FOLKS_LOAN_MANAGER,
                 "FOLKS_USDC_HUB_POOL": settings.FOLKS_USDC_HUB_POOL,
@@ -113,3 +115,9 @@ class ExecutionService:
         payload: dict,
     ) -> dict:
         return await self._post("/execute/withdrawal", payload)
+
+    async def execute_folks_recovery(
+        self,
+        payload: dict,
+    ) -> dict:
+        return await self._post("/execute/folks-recovery", payload)
