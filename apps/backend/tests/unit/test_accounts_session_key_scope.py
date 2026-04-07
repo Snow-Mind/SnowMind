@@ -27,18 +27,26 @@ def _build_db_with_latest_protocols(latest_protocols: list[str] | None):
     return db
 
 
+def test_default_scope_excludes_opt_in_protocols() -> None:
+    assert "silo_gami_usdc" not in _DEFAULT_ALLOWED_PROTOCOLS
+    assert "folks" not in _DEFAULT_ALLOWED_PROTOCOLS
+
+
 def test_normalize_allowed_protocols_dedupes_and_canonicalizes() -> None:
     normalized = _normalize_allowed_protocols([
         "AAVE",
         "aave_v3",
         "BENQI",
+        "folks_finance_xchain",
+        "folks_finance",
+        "folks",
         "unknown",
         "",
         "spark",
         "spark",
     ])
 
-    assert normalized == ["aave_v3", "benqi", "spark"]
+    assert normalized == ["aave_v3", "benqi", "folks", "spark"]
 
 
 def test_resolve_uses_requested_scope_when_provided() -> None:
@@ -47,6 +55,18 @@ def test_resolve_uses_requested_scope_when_provided() -> None:
     resolved = _resolve_allowed_protocols(db, "acct-1", ["spark", "aave"])
 
     assert resolved == ["spark", "aave_v3"]
+
+
+def test_resolve_canonicalizes_folks_aliases_when_scope_is_provided() -> None:
+    db = _build_db_with_latest_protocols(["benqi"])  # should be ignored
+
+    resolved = _resolve_allowed_protocols(
+        db,
+        "acct-1",
+        ["folks_finance_xchain", "folks_finance", "folks"],
+    )
+
+    assert resolved == ["folks"]
 
 
 def test_resolve_reuses_latest_scope_when_request_omits_scope() -> None:

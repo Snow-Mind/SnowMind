@@ -1,12 +1,17 @@
 """Silo V2 adapter — ERC-4626 vault interface on Avalanche.
 
-Supports two isolated lending markets:
+Supports isolated lending vaults:
   - savUSD/USDC  vault = 0x606fe9a70338e798a292CA22C1F28C829F24048E (bUSDC-142)
   - sUSDp/USDC   vault = 0x8ad697a333569ca6f04c8c063e9807747ef169c1 (bUSDC-162)
+    - Gami USDC    vault = 0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5 (Silo V3 curator vault)
 
-Both vaults implement the standard ERC-4626 interface:
+These vaults implement the standard ERC-4626 interface:
   deposit(assets, receiver) / redeem(shares, receiver, owner)
   convertToAssets(shares) / totalAssets()
+
+The Gami Silo V3 vault is ERC-4626-compatible but does not expose Silo V2
+helpers like utilizationData()/siloConfig(). The dedicated adapter below
+intentionally avoids those calls and reports utilization as unavailable.
 
 Note: Silo V2 USDC vaults have a non-1:1 share-to-asset ratio.
 Shares have 6 decimals (same as USDC) but each share is worth ~0.001 USDC.
@@ -608,3 +613,83 @@ class SiloSUSDpAdapter(SiloAdapter):
     def __init__(self) -> None:
         settings = get_settings()
         super().__init__(vault_address=settings.SILO_SUSDP_VAULT)
+
+
+class SiloGamiUSDCAdapter(SiloAdapter):
+    """Silo V3 Gami USDC curator vault on Avalanche."""
+
+    protocol_id = "silo_gami_usdc"
+    name = "Silo V3 (Gami USDC)"
+    is_active = True
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        super().__init__(vault_address=settings.SILO_GAMI_USDC_VAULT)
+
+    async def _read_live_depositor_apr(self, vault) -> tuple[Decimal | None, Decimal | None]:
+        """Gami vault doesn't expose Silo V2 IRM helpers; use share-price APY path."""
+        del vault
+        return None, None
+
+    async def get_utilization(self) -> Decimal | None:
+        """Utilization is not exposed by the Gami vault interface."""
+        return None
+
+    async def get_health(self) -> ProtocolHealth:
+        """Health check for ERC-4626 compatibility and non-zero vault state."""
+        vault = self._get_vault()
+        if not vault:
+            return ProtocolHealth(
+                protocol_id=self.protocol_id,
+                status=ProtocolStatus.EXCLUDED,
+                is_deposit_safe=False,
+                is_withdrawal_safe=False,
+                utilization=None,
+                details={"reason": "Vault not configured"},
+            )
+
+        try:
+            total_assets = await vault.functions.totalAssets().call()
+            if total_assets == 0:
+                return ProtocolHealth(
+                    protocol_id=self.protocol_id,
+                    status=ProtocolStatus.EMERGENCY,
+                    is_deposit_safe=False,
+                    is_withdrawal_safe=True,
+                    utilization=None,
+                    details={"reason": "totalAssets is zero — vault may be drained"},
+                )
+
+            test_assets = await vault.functions.convertToAssets(
+                SHARE_PRICE_QUERY_AMOUNT
+            ).call()
+            if test_assets <= 0:
+                return ProtocolHealth(
+                    protocol_id=self.protocol_id,
+                    status=ProtocolStatus.DEPOSITS_DISABLED,
+                    is_deposit_safe=False,
+                    is_withdrawal_safe=True,
+                    utilization=None,
+                    details={
+                        "reason": "Share price is zero — possible loss event",
+                        "convertToAssets": str(test_assets),
+                    },
+                )
+        except Exception as exc:
+            return ProtocolHealth(
+                protocol_id=self.protocol_id,
+                status=ProtocolStatus.EMERGENCY,
+                is_deposit_safe=False,
+                is_withdrawal_safe=False,
+                utilization=None,
+                details={"reason": f"Health check RPC failed: {exc}"},
+            )
+
+        return ProtocolHealth(
+            protocol_id=self.protocol_id,
+            status=ProtocolStatus.HEALTHY,
+            is_deposit_safe=True,
+            is_withdrawal_safe=True,
+            utilization=None,
+            details={"note": "Utilization unavailable for Silo V3 Gami vault interface"},
+        )

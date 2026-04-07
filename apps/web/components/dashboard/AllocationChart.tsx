@@ -21,7 +21,9 @@ interface AllocationChartProps {
 
 function canonicalProtocolId(rawProtocolId: string): string {
   const normalized = (rawProtocolId || "").trim().toLowerCase();
-  return normalized === "aave" ? "aave_v3" : normalized;
+  if (normalized === "aave") return "aave_v3";
+  if (normalized === "folks_finance_xchain" || normalized === "folks_finance") return "folks";
+  return normalized;
 }
 
 export default function AllocationChart({

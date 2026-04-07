@@ -12,8 +12,8 @@ Think of it as a yield routing layer with your risk rules, not ours. Every user 
 
 **Key facts:**
 - Chain: Avalanche C-Chain (mainnet, chain ID 43114)
-- Supported protocols: Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo (savUSD/USDC, sUSDp/USDC)
-- Default-enabled: All protocols (Aave V3, Benqi, Spark, Euler V2, Silo savUSD/USDC, Silo sUSDp/USDC)
+- Supported protocols: Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo (savUSD/USDC, sUSDp/USDC, V3 Gami USDC), Folks Finance xChain
+- Default onboarding selection: Aave V3, Benqi, Spark, Euler V2, Silo savUSD/USDC, Silo sUSDp/USDC (Silo V3 Gami and Folks are optional)
 - Asset: Native USDC only (`0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E`)
 - Non-custodial: User's EOA owns the smart account. SnowMind has scoped permissions only.
 - Agent fee: 10% of profit, charged proportionally on every withdrawal
@@ -75,7 +75,8 @@ Think of it as a yield routing layer with your risk rules, not ours. Every user 
                        │    ├─► Benqi qiUSDCn   │
                        │    ├► Spark spUSDC    │
                        │    ├► Euler V2 Vault  │
-                       │    └► Silo Vaults     │
+                       │    ├► Silo Vaults     │
+                       │    └► Folks xChain    │
                        │                        │
                        │  SnowMindRegistry      │
                        │  EntryPoint v0.7       │
@@ -144,7 +145,7 @@ Spark on Avalanche uses PSM3 (`0x7566debc906C17338524a414343FA61bca26a843`), NOT
 - **Contracts**: savUSD/USDC `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` (market 142), sUSDp/USDC `0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca` (market 162)
 - **Type**: Isolated lending markets — each market has its own risk parameters
 - **Interface**: ERC-4626 compatible `deposit(assets, receiver)` / `redeem(shares, receiver, owner)`
-- **Risk Score**: Dynamic /9 model — static subtotal savUSD 4/5, sUSDp 2/5, plus daily Liquidity/Yield add-on (/4)
+- **Risk Score**: Dynamic /9 model — static subtotal savUSD 4/5, sUSDp 3/5, plus daily Liquidity/Yield add-on (/4)
 - **Status**: Fully active in optimizer; opt-in only (user must explicitly enable in onboarding UI)
 
 ---
@@ -191,7 +192,9 @@ Every user selects which markets (protocols) the agent is allowed to use and cho
 | Spark | Yes | 4 | Dynamic /9 (adds daily Liquidity + Yield) |
 | Euler V2 (9Summits) | Yes | 2 | Dynamic /9 (adds daily Liquidity + Yield) |
 | Silo savUSD/USDC | Yes | 4 | Dynamic /9 (adds daily Liquidity + Yield) |
-| Silo sUSDp/USDC | Yes | 2 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Silo sUSDp/USDC | Yes | 3 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Silo V3 Gami USDC | No (Opt-In) | 0 | Dynamic /9 (adds daily Liquidity + Yield) |
+| Folks Finance xChain | No (Opt-In) | 4 | Dynamic /9 (adds daily Liquidity + Yield) |
 
 **Diversification Preferences:**
 | Preference | Behavior |
@@ -308,24 +311,23 @@ SCHEDULER FIRES (configurable interval, default 30 min in production)
    twap_apy[protocol] = average(last_3_snapshots)
    Write current rates to rate_snapshots NOW (before any decision)
 
-10. VELOCITY CHECK [Aave and Benqi only — NOT Spark]
+10. VELOCITY CHECK [all non-Spark protocols]
     delta = |current_apy - snapshot_30min_ago| / snapshot_30min_ago
     If delta > 25%: exclude protocol this cycle, increment circuit_breaker_counter
     Spark is exempt: governance rate changes are expected step changes
 
-11. EXPLOIT DETECTION [Aave and Benqi only — NOT Spark]
-    Load yesterday_avg from daily_apy_snapshots
-    If twap_apy > 2× yesterday_avg AND utilization > 0.90:
-      → EXPLOIT_SUSPECTED
-      → Exclude from new deposits
-      → If existing position > 0: EMERGENCY_EXIT (bypass 6h time gate)
-    Spark exempt: no utilization curve, no borrow-side exploit vector
+11. LIQUIDITY STRESS DETECTION [all non-Spark protocols]
+        Read current utilization from protocol health checks
+        If utilization > 0.90:
+            → Exclude from new deposits
+            → If existing position > 0: FORCED_REBALANCE (bypass beat-margin/time-cooldown gates)
+        Spark exempt: fixed-rate savings flow and different liquidity mechanics
 
-12. SANITY BOUND [Aave and Benqi only — NOT Spark]
+12. SANITY BOUND [all non-Spark protocols]
     If twap_apy > 25%: exclude (unrealistic, possible oracle attack)
     Spark exempt: governed rate will never approach 25%
 
-13. CIRCUIT BREAKER [all 3 protocols]
+13. CIRCUIT BREAKER [all supported protocols]
     If consecutive_rpc_failures >= 3: exclude
     Resets on first successful execution involving this protocol
 
@@ -336,8 +338,9 @@ SCHEDULER FIRES (configurable interval, default 30 min in production)
     (Does NOT force-exit existing positions by itself)
     Spark exempt: step changes from governance are expected and meaningful
 
-15. TVL CAP AUTO-WITHDRAW CHECK [Aave and Benqi only — NOT Spark]
-    current_share = current_position / protocol_tvl
+15. TVL CAP AUTO-WITHDRAW CHECK [all non-Spark protocols]
+    available_liquidity = protocol_tvl × (1 - utilization)
+    current_share = current_position / available_liquidity
     If current_share > 0.075:
       → Set max_new_allocation = 0
       → Flag FORCED_REBALANCE to reduce to exactly 7.5% cap
@@ -382,7 +385,7 @@ User visits snowmind.xyz. Privy handles authentication — MetaMask, social logi
 ZeroDev deploys a Kernel v3.1 ERC-4337 smart account on Avalanche. The user's EOA becomes the permanent owner. Same owner always gets the same smart account address (deterministic CREATE2 deployment).
 
 ### Step 3: Choose Strategy
-User selects which markets (protocols) the optimizer is allowed to use by toggling each one on/off. All protocols are default-enabled: Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo savUSD/USDC, Silo sUSDp/USDC.
+User selects which markets (protocols) the optimizer is allowed to use by toggling each one on/off. Default onboarding selection includes Aave V3, Benqi, Spark, Euler V2 (9Summits), Silo savUSD/USDC, and Silo sUSDp/USDC, with Silo V3 Gami and Folks available as optional markets.
 
 User also picks a diversification preference:
 - **Max Yield**: 100% in the single best protocol
@@ -417,7 +420,8 @@ User signs a session key during the activation step. This is a limited-permissio
 - `qiUSDCn.mint()` and `qiUSDCn.redeem()` (Benqi)
 - `spUSDC.deposit()` and `spUSDC.redeem()` (Spark)
 - `eulerVault.deposit()` and `eulerVault.redeem()` (Euler V2 / 9Summits)
-- `siloVault.deposit()` and `siloVault.redeem()` (Silo savUSD/USDC + sUSDp/USDC)
+- `siloVault.deposit()` and `siloVault.redeem()` (Silo savUSD/USDC + sUSDp/USDC + V3 Gami USDC)
+- `folksSpokeCommon.createAccount()` / `folksSpokeCommon.withdraw()` and `folksSpokeUSDC.createLoanAndDeposit()` / `folksSpokeUSDC.deposit()` (Folks Finance xChain)
 - `USDC.approve()` on all protocol contracts
 - `USDC.transfer()` to SNOWMIND_TREASURY (agent fee, amount-capped)
 - `USDC.transfer()` to user's EOA (withdrawal — read from on-chain owner, NEVER from DB)
@@ -497,7 +501,7 @@ Charging fee only at full withdrawal allows any user to extract all earned yield
 ```
 Layer 1: On-Chain Session Key Call Policy (Kernel v3.1)
   ├─ Whitelisted functions only (supply, withdraw, mint, redeem, approve, transfer)
-  ├─ Whitelisted contracts only (Aave V3, Benqi, Spark, Euler V2, Silo savUSD, Silo sUSDp, USDC)
+    ├─ Whitelisted contracts only (Aave V3, Benqi, Spark, Euler V2, Silo savUSD, Silo sUSDp, Silo V3 Gami, Folks spoke contracts, USDC)
   ├─ USDC.transfer only to TREASURY and userEOA (two destinations, both verified)
   ├─ userEOA address read from on-chain owner record — NEVER from Supabase
   ├─ Amount cap on treasury transfer
@@ -592,7 +596,7 @@ CREATE TABLE session_keys (
 CREATE TABLE allocations (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id          uuid REFERENCES accounts(id),
-    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark', 'euler_v2', 'silo_*'
+    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark', 'euler_v2', 'silo_*', 'silo_gami_usdc', 'folks'
     usdc_amount         numeric(30, 6) NOT NULL,
     updated_at          timestamptz DEFAULT now(),
     UNIQUE(account_id, protocol)
@@ -671,7 +675,7 @@ CREATE TABLE session_key_audit (
 -- User allocation preferences
 CREATE TABLE user_preferences (
     account_id          uuid REFERENCES accounts(id),
-    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark', 'euler_v2', 'silo_*'
+    protocol            text NOT NULL,              -- 'aave', 'benqi', 'spark', 'euler_v2', 'silo_*', 'silo_gami_usdc', 'folks'
     enabled             boolean DEFAULT true,
     max_pct             numeric(5, 4),              -- 0.5000 = 50% cap
     updated_at          timestamptz DEFAULT now(),
@@ -887,14 +891,14 @@ ZeroDev paymaster must be funded. If it runs empty, all UserOperations fail sile
 | Feature | Giza | ZyFai | SnowMind |
 |---|---|---|---|
 | Chain | Base/Mode + expanding | ZKSync + expanding | Avalanche (native depth) |
-| Protocols | Multi-protocol | Multi-protocol | Aave V3, Benqi, Spark, Euler V2, Silo |
+| Protocols | Multi-protocol | Multi-protocol | Aave V3, Benqi, Spark, Euler V2, Silo (savUSD, sUSDp, V3 Gami), Folks Finance xChain |
 | Allocation strategy | Autonomous agent (ARMA model) | ML-driven strategy tiers | Pure APY ranking + safety gates |
 | User customization | None | Strategy tier selection | Market selection, diversification pref, protocol toggle |
 | Token / incentives | $GIZA token, Swarms | rZFI yield campaign (28-42% APY) | Beta fee-free, points TBD |
 | Fee model | Management fee | Performance fee | Agent fee (10% of profit) |
 | Custodial? | Non-custodial | Non-custodial | Non-custodial |
 
-**SnowMind's differentiation:** Automated yield optimization with your risk rules, not ours. Every user selects allowed markets and diversification preference — enforced by on-chain call policies. Euler V2 and Silo are available as opt-in markets for users who want higher-risk/higher-reward options. The agent supports 6 protocols across lending pools (Aave, Benqi), fixed-rate vaults (Spark), curated vaults (Euler/9Summits), and isolated markets (Silo).
+**SnowMind's differentiation:** Automated yield optimization with your risk rules, not ours. Every user selects allowed markets and diversification preference — enforced by on-chain call policies. Euler V2, Silo V3 Gami, and Folks can be run as opt-in markets for users who want expanded opportunity/risk profiles. The agent supports 8 protocols across lending pools (Aave, Benqi, Folks), fixed-rate savings/vault flows (Spark), curated vaults (Euler/9Summits, Silo V3 Gami), and isolated markets (Silo savUSD and Silo sUSDp).
 
 ---
 

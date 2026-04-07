@@ -767,6 +767,20 @@ const ERC4626_CONVERT_ABI = [
     inputs: [{ name: "shares", type: "uint256" }], outputs: [{ name: "assets", type: "uint256" }] },
 ] as const;
 
+const FOLKS_HUB_POOL_READ_ABI = [
+  { name: "balanceOf", type: "function", stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+  { name: "totalSupply", type: "function", stateMutability: "view",
+    inputs: [], outputs: [{ name: "", type: "uint256" }] },
+  { name: "getDepositData", type: "function", stateMutability: "view",
+    inputs: [], outputs: [
+      { name: "optimalUtilisationRatio", type: "uint256" },
+      { name: "totalAmount", type: "uint256" },
+      { name: "interestRate", type: "uint256" },
+      { name: "interestIndex", type: "uint256" },
+    ] },
+] as const;
+
 /**
  * Read total USDC value across ALL protocol positions + idle balance.
  * Also returns raw share balances needed for on-chain redeem calls.
@@ -776,7 +790,7 @@ async function readAllProtocolBalances(
   smartAddr: `0x${string}`,
 ) {
   // Read all balances in parallel
-  const [idleBalance, qiBalance, aaveBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares] = await Promise.all([
+  const [idleBalance, qiBalance, aaveBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares, siloGamiShares, folksShares] = await Promise.all([
     publicClient.readContract({ address: CONTRACTS.USDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.BENQI_POOL, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.AAVE_AUSDC, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
@@ -784,6 +798,8 @@ async function readAllProtocolBalances(
     publicClient.readContract({ address: CONTRACTS.EULER_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.SILO_SAVUSD_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
     publicClient.readContract({ address: CONTRACTS.SILO_SUSDP_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.SILO_GAMI_USDC_VAULT, abi: BALANCE_OF_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
+    publicClient.readContract({ address: CONTRACTS.FOLKS_USDC_HUB_POOL, abi: FOLKS_HUB_POOL_READ_ABI, functionName: "balanceOf", args: [smartAddr] }).catch(() => 0n),
   ]);
 
   // Convert share tokens → USDC value
@@ -827,13 +843,45 @@ async function readAllProtocolBalances(
     } catch { /* fallback: 0 */ }
   }
 
+  let siloGamiUsdc = 0;
+  if ((siloGamiShares as bigint) > 0n) {
+    try {
+      const assets = await publicClient.readContract({ address: CONTRACTS.SILO_GAMI_USDC_VAULT, abi: ERC4626_CONVERT_ABI, functionName: "convertToAssets", args: [siloGamiShares as bigint] });
+      siloGamiUsdc = Number(formatUnits(assets as bigint, 6));
+    } catch { /* fallback: 0 */ }
+  }
+
+  let folksUsdc = 0;
+  if ((folksShares as bigint) > 0n) {
+    try {
+      const [totalSupply, depositData] = await Promise.all([
+        publicClient.readContract({
+          address: CONTRACTS.FOLKS_USDC_HUB_POOL,
+          abi: FOLKS_HUB_POOL_READ_ABI,
+          functionName: "totalSupply",
+        }),
+        publicClient.readContract({
+          address: CONTRACTS.FOLKS_USDC_HUB_POOL,
+          abi: FOLKS_HUB_POOL_READ_ABI,
+          functionName: "getDepositData",
+        }),
+      ]);
+      const totalSupplyRaw = totalSupply as bigint;
+      const totalAmountRaw = (depositData as readonly bigint[])[1] ?? 0n;
+      if (totalSupplyRaw > 0n && totalAmountRaw > 0n) {
+        const assets = ((folksShares as bigint) * totalAmountRaw) / totalSupplyRaw;
+        folksUsdc = Number(formatUnits(assets, 6));
+      }
+    } catch { /* fallback: 0 */ }
+  }
+
   // Aave: aToken balance IS the USDC value (1:1 with underlying)
   const aaveUsdc = Number(formatUnits(aaveBalance as bigint, 6));
 
   const idleUsdc = Number(formatUnits(idleBalance as bigint, 6));
 
   return {
-    totalUsdc: idleUsdc + benqiUsdc + aaveUsdc + sparkUsdc + eulerUsdc + siloSavusdUsdc + siloSusdpUsdc,
+    totalUsdc: idleUsdc + benqiUsdc + aaveUsdc + sparkUsdc + eulerUsdc + siloSavusdUsdc + siloSusdpUsdc + siloGamiUsdc + folksUsdc,
     idleUsdc,
     benqiUsdc,
     aaveUsdc,
@@ -841,6 +889,8 @@ async function readAllProtocolBalances(
     eulerUsdc,
     siloSavusdUsdc,
     siloSusdpUsdc,
+    siloGamiUsdc,
+    folksUsdc,
     // Raw values for on-chain redeem calls
     qiBalance: qiBalance as bigint,
     aaveBalance: aaveBalance as bigint,
@@ -848,6 +898,8 @@ async function readAllProtocolBalances(
     eulerShares: eulerShares as bigint,
     siloSavusdShares: siloSavusdShares as bigint,
     siloSusdpShares: siloSusdpShares as bigint,
+    siloGamiShares: siloGamiShares as bigint,
+    folksShares: folksShares as bigint,
   };
 }
 
@@ -897,7 +949,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
       const { kernelClient } = await createSmartAccount(wallet);
 
       // Use emergencyWithdrawAll to redeem from every protocol in one batched UserOp
-      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || (balances.aaveBalance ?? 0n) > 0n;
+      const hasPositions = balances.qiBalance > 0n || balances.sparkShares > 0n || balances.eulerShares > 0n || balances.siloSavusdShares > 0n || balances.siloSusdpShares > 0n || balances.siloGamiShares > 0n || (balances.aaveBalance ?? 0n) > 0n;
       if (hasPositions) {
         await emergencyWithdrawAll(
           kernelClient,
@@ -908,6 +960,7 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
           balances.eulerShares,
           balances.siloSavusdShares,
           balances.siloSusdpShares,
+          balances.siloGamiShares,
           balances.aaveBalance ?? 0n,
         );
       }

@@ -13,12 +13,25 @@ import {
   Loader2,
   CheckCircle2,
 } from "lucide-react";
-import { createPublicClient, http, encodeFunctionData } from "viem";
+import {
+  createPublicClient,
+  http,
+  encodeFunctionData,
+  concat,
+  keccak256,
+  pad,
+  toHex,
+} from "viem";
 import { useWallets } from "@privy-io/react-auth";
 import { CONTRACTS, EXPLORER, PROTOCOL_CONFIG, AVALANCHE_RPC_URL, CHAIN } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { toast } from "sonner";
-import { createSmartAccount, BENQI_ABI, ERC4626_VAULT_ABI } from "@/lib/zerodev";
+import {
+  createSmartAccount,
+  BENQI_ABI,
+  ERC4626_VAULT_ABI,
+  FOLKS_SPOKE_COMMON_ABI,
+} from "@/lib/zerodev";
 
 const BALANCE_OF_ABI = [
   {
@@ -43,6 +56,71 @@ const AAVE_WITHDRAW_ABI = [
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
+
+const FOLKS_HUB_POOL_READ_ABI = [
+  {
+    name: "totalSupply",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "getDepositData",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "optimalUtilisationRatio", type: "uint256" },
+      { name: "totalAmount", type: "uint256" },
+      { name: "interestRate", type: "uint256" },
+      { name: "interestIndex", type: "uint256" },
+    ],
+  },
+] as const;
+
+const FOLKS_DEFAULT_MESSAGE_PARAMS = {
+  adapterId: 1,
+  returnAdapterId: 1,
+  receiverValue: 0n,
+  gasLimit: 0n,
+  returnGasLimit: 0n,
+} as const;
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
+
+function parsePositiveInt(rawValue: unknown, fallback: number): number {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return fallback;
+  const rounded = Math.trunc(parsed);
+  return rounded >= 0 ? rounded : fallback;
+}
+
+function normalizeFolksNonce(rawValue: unknown, fallback: number): `0x${string}` {
+  if (typeof rawValue === "string" && rawValue.trim().toLowerCase().startsWith("0x")) {
+    return pad(rawValue.trim() as `0x${string}`, { size: 4 }) as `0x${string}`;
+  }
+  const parsed = parsePositiveInt(rawValue, fallback);
+  return pad(toHex(BigInt(parsed)), { size: 4 }) as `0x${string}`;
+}
+
+function resolveFolksRoutingData(smartAccountAddress: `0x${string}`) {
+  const chainId = parsePositiveInt(CONTRACTS.FOLKS_HUB_CHAIN_ID, 100);
+  const poolId = parsePositiveInt(CONTRACTS.FOLKS_USDC_POOL_ID, 1);
+  const accountNonce = normalizeFolksNonce(CONTRACTS.FOLKS_ACCOUNT_NONCE, 1);
+  const loanNonce = normalizeFolksNonce(CONTRACTS.FOLKS_LOAN_NONCE, 1);
+
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 }) as `0x${string}`;
+  const accountId = keccak256(concat([smartAccountAddress, chainIdBytes, accountNonce]));
+  const loanId = keccak256(concat([accountId, loanNonce]));
+
+  return {
+    accountId,
+    loanId,
+    poolId,
+    chainId,
+  };
+}
 
 /** Map raw error messages to user-friendly ones. */
 function friendlyWithdrawError(err: unknown): string {
@@ -81,7 +159,13 @@ export default function EmergencyPanel() {
       });
 
       // Check balances across all active protocols
-      const [qiBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares] = await Promise.all([
+      const [aaveATokenBalance, qiBalance, sparkShares, eulerShares, siloSavusdShares, siloSusdpShares, siloGamiShares, folksHubShares] = await Promise.all([
+        publicClient.readContract({
+          address: CONTRACTS.AAVE_AUSDC,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
         publicClient.readContract({
           address: CONTRACTS.BENQI_POOL,
           abi: BALANCE_OF_ABI,
@@ -112,9 +196,29 @@ export default function EmergencyPanel() {
           functionName: "balanceOf",
           args: [sa],
         }).catch(() => 0n),
+        publicClient.readContract({
+          address: CONTRACTS.SILO_GAMI_USDC_VAULT,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
+        publicClient.readContract({
+          address: CONTRACTS.FOLKS_USDC_HUB_POOL,
+          abi: BALANCE_OF_ABI,
+          functionName: "balanceOf",
+          args: [sa],
+        }).catch(() => 0n),
       ]);
 
-      const hasAnyFunds = qiBalance > 0n || sparkShares > 0n || eulerShares > 0n || siloSavusdShares > 0n || siloSusdpShares > 0n;
+      const hasAnyFunds =
+        aaveATokenBalance > 0n
+        || qiBalance > 0n
+        || sparkShares > 0n
+        || eulerShares > 0n
+        || siloSavusdShares > 0n
+        || siloSusdpShares > 0n
+        || siloGamiShares > 0n
+        || folksHubShares > 0n;
 
       if (!hasAnyFunds) {
         toast.info("No funds deposited in any protocol to withdraw.");
@@ -139,17 +243,19 @@ export default function EmergencyPanel() {
         });
       }
 
-      // Aave: always try withdraw max (reverts harmlessly if no position)
-      const maxUint = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-      calls.push({
-        to: CONTRACTS.AAVE_POOL,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: AAVE_WITHDRAW_ABI,
-          functionName: "withdraw",
-          args: [CONTRACTS.USDC, maxUint, sa],
-        }),
-      });
+      // Aave: withdraw only when the smart account holds aUSDC shares.
+      if (aaveATokenBalance > 0n) {
+        const maxUint = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        calls.push({
+          to: CONTRACTS.AAVE_POOL,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: AAVE_WITHDRAW_ABI,
+            functionName: "withdraw",
+            args: [CONTRACTS.USDC, maxUint, sa],
+          }),
+        });
+      }
 
       // Spark: redeem shares
       if (sparkShares > 0n) {
@@ -199,6 +305,74 @@ export default function EmergencyPanel() {
             abi: ERC4626_VAULT_ABI,
             functionName: "redeem",
             args: [siloSusdpShares, sa, sa],
+          }),
+        });
+      }
+
+      // Silo V3 Gami: redeem shares
+      if (siloGamiShares > 0n) {
+        calls.push({
+          to: CONTRACTS.SILO_GAMI_USDC_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_VAULT_ABI,
+            functionName: "redeem",
+            args: [siloGamiShares, sa, sa],
+          }),
+        });
+      }
+
+      // Folks: withdraw by converting hub-pool shares to underlying amount.
+      if (folksHubShares > 0n) {
+        if (
+          !CONTRACTS.FOLKS_USDC_HUB_POOL
+          || CONTRACTS.FOLKS_USDC_HUB_POOL === ZERO_ADDRESS
+          || !CONTRACTS.FOLKS_SPOKE_COMMON
+          || CONTRACTS.FOLKS_SPOKE_COMMON === ZERO_ADDRESS
+        ) {
+          throw new Error("Folks withdrawal is unavailable because contract addresses are not configured.");
+        }
+
+        const [totalSupply, depositData] = await Promise.all([
+          publicClient.readContract({
+            address: CONTRACTS.FOLKS_USDC_HUB_POOL,
+            abi: FOLKS_HUB_POOL_READ_ABI,
+            functionName: "totalSupply",
+          }),
+          publicClient.readContract({
+            address: CONTRACTS.FOLKS_USDC_HUB_POOL,
+            abi: FOLKS_HUB_POOL_READ_ABI,
+            functionName: "getDepositData",
+          }),
+        ]);
+
+        const totalShareSupply = BigInt(totalSupply || 0n);
+        const totalDeposits = BigInt((Array.isArray(depositData) ? depositData[1] : 0n) || 0n);
+        const withdrawAmount =
+          totalShareSupply > 0n && totalDeposits > 0n
+            ? (folksHubShares * totalDeposits) / totalShareSupply
+            : 0n;
+
+        if (withdrawAmount <= 0n) {
+          throw new Error("Unable to compute Folks withdraw amount from current hub pool state.");
+        }
+
+        const folks = resolveFolksRoutingData(sa);
+        calls.push({
+          to: CONTRACTS.FOLKS_SPOKE_COMMON,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_COMMON_ABI,
+            functionName: "withdraw",
+            args: [
+              FOLKS_DEFAULT_MESSAGE_PARAMS,
+              folks.accountId,
+              folks.loanId,
+              folks.poolId,
+              folks.chainId,
+              withdrawAmount,
+              false,
+            ],
           }),
         });
       }

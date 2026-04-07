@@ -1,4 +1,4 @@
-"""Protocol adapter registry — Mainnet: Aave V3, Benqi, Spark, Euler V2."""
+"""Protocol adapter registry — Mainnet lending/savings adapters."""
 
 import logging
 
@@ -47,6 +47,18 @@ def _build_adapters() -> dict[str, BaseProtocolAdapter]:
     except Exception as exc:
         logger.warning("SiloSUSDpAdapter not loaded (SILO_SUSDP_VAULT missing?): %s", exc)
 
+    try:
+        from .silo import SiloGamiUSDCAdapter
+        adapters["silo_gami_usdc"] = SiloGamiUSDCAdapter()
+    except Exception as exc:
+        logger.warning("SiloGamiUSDCAdapter not loaded (SILO_GAMI_USDC_VAULT missing?): %s", exc)
+
+    try:
+        from .folks import FolksAdapter
+        adapters["folks"] = FolksAdapter()
+    except Exception as exc:
+        logger.warning("FolksAdapter not loaded (FOLKS_USDC_HUB_POOL missing?): %s", exc)
+
     return adapters
 
 
@@ -58,6 +70,8 @@ def get_adapter(protocol_id: str) -> BaseProtocolAdapter:
     """Get adapter by protocol ID. Raises if not found."""
     if protocol_id == "aave":
         protocol_id = "aave_v3"
+    elif protocol_id in {"folks_finance_xchain", "folks_finance"}:
+        protocol_id = "folks"
     adapter = ALL_ADAPTERS.get(protocol_id)
     if not adapter:
         raise ValueError(f"Unknown protocol: {protocol_id}")

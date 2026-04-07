@@ -574,6 +574,8 @@ async def execute_withdrawal(
 
         silo_savusd_share_balance = 0
         silo_susdp_share_balance = 0
+        silo_gami_share_balance = 0
+        folks_share_balance = 0
         try:
             silo_savusd_adapter = get_adapter("silo_savusd_usdc")
             silo_savusd_share_balance = int(await silo_savusd_adapter.get_shares(address))
@@ -584,6 +586,16 @@ async def execute_withdrawal(
             silo_susdp_share_balance = int(await silo_susdp_adapter.get_shares(address))
         except Exception as exc:
             logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
+        try:
+            silo_gami_adapter = get_adapter("silo_gami_usdc")
+            silo_gami_share_balance = int(await silo_gami_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Silo Gami share balance for %s: %s", address, exc)
+        try:
+            folks_adapter = get_adapter("folks")
+            folks_share_balance = int(await folks_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Folks share balance for %s: %s", address, exc)
 
         agent_fee_raw = _to_raw_usdc(fee_calc.agent_fee) if settings.AGENT_FEE_ENABLED else 0
         # Always use quantized fee-calculator output to avoid micro truncation drift.
@@ -611,6 +623,17 @@ async def execute_withdrawal(
                 "EULER_VAULT": settings.EULER_VAULT,
                 "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
                 "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
+                "SILO_GAMI_USDC_VAULT": settings.SILO_GAMI_USDC_VAULT,
+                "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
+                "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+                "FOLKS_ACCOUNT_MANAGER": settings.FOLKS_ACCOUNT_MANAGER,
+                "FOLKS_LOAN_MANAGER": settings.FOLKS_LOAN_MANAGER,
+                "FOLKS_USDC_HUB_POOL": settings.FOLKS_USDC_HUB_POOL,
+                "FOLKS_HUB_CHAIN_ID": settings.FOLKS_HUB_CHAIN_ID,
+                "FOLKS_USDC_POOL_ID": settings.FOLKS_USDC_POOL_ID,
+                "FOLKS_USDC_LOAN_TYPE_ID": settings.FOLKS_USDC_LOAN_TYPE_ID,
+                "FOLKS_ACCOUNT_NONCE": settings.FOLKS_ACCOUNT_NONCE,
+                "FOLKS_LOAN_NONCE": settings.FOLKS_LOAN_NONCE,
                 "USDC": settings.USDC_ADDRESS,
                 "TREASURY": settings.TREASURY_ADDRESS,
             },
@@ -621,6 +644,8 @@ async def execute_withdrawal(
                 "eulerShareBalance": str(euler_share_balance),
                 "siloSavusdShareBalance": str(silo_savusd_share_balance),
                 "siloSusdpShareBalance": str(silo_susdp_share_balance),
+                "siloGamiShareBalance": str(silo_gami_share_balance),
+                "folksShareBalance": str(folks_share_balance),
             },
         }
 

@@ -159,6 +159,10 @@ class Rebalancer:
             self._protocol_addresses["silo_savusd_usdc"] = self.settings.SILO_SAVUSD_VAULT
         if self.settings.SILO_SUSDP_VAULT:
             self._protocol_addresses["silo_susdp_usdc"] = self.settings.SILO_SUSDP_VAULT
+        if self.settings.SILO_GAMI_USDC_VAULT:
+            self._protocol_addresses["silo_gami_usdc"] = self.settings.SILO_GAMI_USDC_VAULT
+        if self.settings.FOLKS_SPOKE_USDC:
+            self._protocol_addresses["folks"] = self.settings.FOLKS_SPOKE_USDC
 
     def _min_rebalance_gap(self, total_usd: Decimal) -> timedelta:
         """Return minimum time between successful rebalances for this balance size.
@@ -1704,7 +1708,9 @@ class Rebalancer:
         )
 
         # Build withdrawal/deposit instructions for the Node.js execution service
-        _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
+        _ERC4626_PROTOCOLS = frozenset(
+            ("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "silo_gami_usdc")
+        )
         exec_withdrawals = []
         for protocol_id, amount_usd in withdrawals:
             entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount_usd)}
@@ -1732,12 +1738,19 @@ class Rebalancer:
                         "Failed to read share balance for %s/%s: %s — falling back to withdraw(assets)",
                         smart_account_address, protocol_id, exc,
                     )
+            elif protocol_id == "folks" and protocol_id in full_exit_protocols:
+                # Folks full exits are safer with explicit full-withdraw mode,
+                # avoiding stale amount rounding from prior balance snapshots.
+                entry["amountUSDC"] = "MAX"
+                entry["fallbackAmountUSDC"] = float(amount_usd)
             exec_withdrawals.append(entry)
 
-        exec_deposits = [
-            {"protocol": pid, "amountUSDC": float(amt)}
-            for pid, amt in deposits
-        ]
+        exec_deposits: list[dict] = []
+        for pid, amt in deposits:
+            entry: dict = {"protocol": pid, "amountUSDC": float(amt)}
+            if pid == "folks":
+                entry["folksMode"] = "auto"
+            exec_deposits.append(entry)
 
         tx_hash = await self._call_execution_service(
             serialized_permission=session_key,
@@ -1833,7 +1846,9 @@ class Rebalancer:
         current = await self._get_current_allocations(account_id, smart_account_address)
 
         exec_withdrawals = []
-        _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
+        _ERC4626_PROTOCOLS = frozenset(
+            ("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "silo_gami_usdc")
+        )
         for protocol_id, amount_usd in current.items():
             if amount_usd < Decimal("0.01"):
                 continue

@@ -29,6 +29,17 @@ interface AuthorizedAction {
   color: string;
 }
 
+const CANONICAL_PROTOCOL_IDS = [
+  "aave_v3",
+  "benqi",
+  "spark",
+  "euler_v2",
+  "silo_savusd_usdc",
+  "silo_susdp_usdc",
+  "silo_gami_usdc",
+  "folks",
+] as const;
+
 const DEFAULT_ALLOWED_PROTOCOLS = [
   "aave_v3",
   "benqi",
@@ -38,18 +49,23 @@ const DEFAULT_ALLOWED_PROTOCOLS = [
   "silo_susdp_usdc",
 ] as const;
 
-type CanonicalProtocolId = (typeof DEFAULT_ALLOWED_PROTOCOLS)[number];
+type CanonicalProtocolId = (typeof CANONICAL_PROTOCOL_IDS)[number];
 
 function normalizeAllowedProtocols(protocols: string[] | undefined): CanonicalProtocolId[] {
   if (!protocols || protocols.length === 0) {
     return [];
   }
 
-  const allowedSet = new Set<CanonicalProtocolId>(DEFAULT_ALLOWED_PROTOCOLS);
+  const allowedSet = new Set<CanonicalProtocolId>(CANONICAL_PROTOCOL_IDS);
   const normalized: CanonicalProtocolId[] = [];
   for (const raw of protocols) {
     const maybe = (raw ?? "").toLowerCase();
-    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    const canonical =
+      maybe === "aave"
+        ? "aave_v3"
+        : maybe === "folks_finance_xchain" || maybe === "folks_finance"
+          ? "folks"
+          : maybe;
     if (!allowedSet.has(canonical as CanonicalProtocolId)) continue;
     if (normalized.includes(canonical as CanonicalProtocolId)) continue;
     normalized.push(canonical as CanonicalProtocolId);
@@ -121,6 +137,15 @@ export default function SessionKeyStatus() {
             EULER_VAULT: CONTRACTS.EULER_VAULT,
             SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
             SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+            SILO_GAMI_USDC_VAULT: CONTRACTS.SILO_GAMI_USDC_VAULT,
+            FOLKS_SPOKE_COMMON: CONTRACTS.FOLKS_SPOKE_COMMON,
+            FOLKS_SPOKE_USDC: CONTRACTS.FOLKS_SPOKE_USDC,
+            FOLKS_USDC_HUB_POOL: CONTRACTS.FOLKS_USDC_HUB_POOL,
+            FOLKS_HUB_CHAIN_ID: CONTRACTS.FOLKS_HUB_CHAIN_ID,
+            FOLKS_USDC_POOL_ID: CONTRACTS.FOLKS_USDC_POOL_ID,
+            FOLKS_USDC_LOAN_TYPE_ID: CONTRACTS.FOLKS_USDC_LOAN_TYPE_ID,
+            FOLKS_ACCOUNT_NONCE: CONTRACTS.FOLKS_ACCOUNT_NONCE,
+            FOLKS_LOAN_NONCE: CONTRACTS.FOLKS_LOAN_NONCE,
             USDC: CONTRACTS.USDC,
             TREASURY: CONTRACTS.TREASURY,
             PERMIT2: CONTRACTS.PERMIT2,
@@ -153,7 +178,7 @@ export default function SessionKeyStatus() {
       };
 
       // Preserve the user's selected protocol scope when present.
-      // If unavailable, backend falls back to last-known scope or full default set.
+      // If unavailable, backend falls back to last-known scope or onboarding-safe defaults.
       if (existingProtocols.length > 0) {
         payload.allowedProtocols = existingProtocols;
       }

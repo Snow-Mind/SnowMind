@@ -2,7 +2,7 @@
 
 ## Context
 
-We completed a full risk assessment audit of all 6 protocols (see `report.md` in project root). The current risk scoring system has two major problems:
+We completed a full risk assessment audit of all active protocols (8 total currently; see `report.md` in project root). The current risk scoring system has two major problems:
 
 1. **Scores are hardcoded** — `risk_scorer.py` has static `BASE_RISK_SCORES` (Aave=10, Benqi=10, etc.) that never update. The UI shows these stale numbers.
 2. **Scoring framework changed** — we moved from a 10-point to a **9-point** system with new categories (Oracle Quality, Liquidity, Collateral Quality, Yield Profile, Architecture). The old categories no longer apply.
@@ -32,7 +32,9 @@ Suyash — `report.md` is the source of truth for all scoring criteria and per-p
 | Spark (spUSDC) | 2/2 | 2/2 | 0/1 | 4 |
 | Euler V2 | 1/2 | 1/2 | 0/1 | 2 |
 | Silo savUSD/USDC | 2/2 | 1/2 | 1/1 | 4 |
-| Silo sUSDp/USDC | 0/2 | 1/2 | 1/1 | 2 |
+| Silo sUSDp/USDC | 1/2 | 1/2 | 1/1 | 3 |
+| Silo V3 Gami/USDC | 0/2 | 0/2 | 0/1 | 0 |
+| Folks Finance xChain | 2/2 | 1/2 | 1/1 | 4 |
 
 ---
 
@@ -52,7 +54,9 @@ STATIC_SCORES = {
     "spark":            {"oracle": 2, "collateral": 2, "architecture": 0},
     "euler_v2":         {"oracle": 1, "collateral": 1, "architecture": 0},
     "silo_savusd_usdc": {"oracle": 2, "collateral": 1, "architecture": 1},
-    "silo_susdp_usdc":  {"oracle": 0, "collateral": 1, "architecture": 1},
+  "silo_susdp_usdc":  {"oracle": 1, "collateral": 1, "architecture": 1},
+  "silo_gami_usdc":   {"oracle": 0, "collateral": 0, "architecture": 0},
+  "folks":            {"oracle": 2, "collateral": 1, "architecture": 1},
 }
 ```
 
@@ -140,7 +144,7 @@ The AI assistant should use `report.md` as context when helping users understand
 
 2. **The risk score does NOT affect rebalancing** — it's information only for the UI. The rebalancing engine has its own separate safety logic (health checks, circuit breakers, utilization monitoring). Don't couple these systems.
 
-3. **Silo sUSDp/USDC oracle score is 0/2** because we couldn't verify the sUSDp oracle provider. We're waiting for confirmation from the Silo team. Once confirmed, update the `STATIC_SCORES` dict.
+3. **Silo sUSDp/USDC oracle score is 1/2** after confirming sUSDp uses DIA Fundamental Oracle through Silo's Chainlink-wrapped adapter. Keep `STATIC_SCORES` aligned with `report.md` if oracle architecture changes.
 
 4. **Yield Profile needs 30 days of APY data** to be accurate. Until then, default to 0 for new protocols. We already have `daily_apy_snapshots` collecting this data.
 

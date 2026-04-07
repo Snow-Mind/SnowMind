@@ -39,7 +39,13 @@ _DISPLAY_RATE_CACHE_TTL_SECONDS: float = 55.0
 _display_rate_fetch_lock = asyncio.Lock()
 
 # ERC-4626 vault adapters that use 24h convertToAssets snapshots for stable APY
-_VAULT_SNAPSHOT_PROTOCOLS = {"spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"}
+_VAULT_SNAPSHOT_PROTOCOLS = {
+    "spark",
+    "euler_v2",
+    "silo_savusd_usdc",
+    "silo_susdp_usdc",
+    "silo_gami_usdc",
+}
 
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────
@@ -250,7 +256,13 @@ class RateFetcher:
         buffer to populate _cached_apy so the first get_rate() call after restart
         returns a reasonable APY immediately.
         """
-        share_price_protocols = ["euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "spark"]
+        share_price_protocols = [
+            "euler_v2",
+            "silo_savusd_usdc",
+            "silo_susdp_usdc",
+            "silo_gami_usdc",
+            "spark",
+        ]
         for pid in share_price_protocols:
             adapter = ALL_ADAPTERS.get(pid)
             if adapter is None:

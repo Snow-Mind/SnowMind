@@ -21,7 +21,7 @@
 
 ## 1. How SnowMind Works (Plain English)
 
-SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi lending protocols (Aave V3, Benqi, Spark, Euler (9Summits), and Silo) to earn the highest safe yield.
+SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and an AI-driven agent automatically moves their funds between DeFi protocols (Aave V3, Benqi, Spark, Euler (9Summits), Silo markets, and Folks Finance xChain) to earn the highest safe yield.
 
 ### The Flow
 
@@ -37,8 +37,8 @@ SnowMind is a **yield optimizer** for USDC on Avalanche. Users deposit USDC, and
 Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked waterfall** strategy:
 
 - All healthy protocols are ranked by effective TWAP APY each cycle.
-- Aave V3 and Benqi apply TVL caps (max 15% of protocol TVL).
-- Spark, Euler (9Summits), and Silo are ERC-4626 vaults with no system TVL cap and act as overflow when they rank below lending protocols.
+- Aave V3, Benqi, Euler (9Summits), Silo markets, and Folks apply TVL caps (max 15% of protocol TVL).
+- Spark (spUSDC) has no protocol-level TVL cap on Avalanche; liquidity safety is enforced via vault buffer + PSM3 checks.
 - User exposure caps still limit concentration at the account level.
 
 **Example:**
@@ -88,7 +88,7 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
 │  /api/v1/accounts/         → Register, status            │
 │                                                         │
 │  Scheduler: check_and_rebalance every 30 min            │
-│  Rate Fetcher → Aave + Benqi + Spark + Euler + Silo rates │
+│  Rate Fetcher → Aave + Benqi + Spark + Euler + Silo + Folks rates │
 │  Rate Validator → TWAP + DefiLlama cross-check          │
 │  Fee Calculator → 10% profit fee on withdrawal          │
 └────────┬──────────────────────┬─────────────────────────┘
@@ -112,7 +112,8 @@ Instead of a complex mathematical optimizer, SnowMind uses an **APY-ranked water
                       │  Benqi qiUSDCn (mint/redeem)     │
                       │  Spark spUSDC (ERC-4626 vault)   │
                       │  Euler V2 / 9Summits (ERC-4626)  │
-                      │  Silo (ERC-4626 vaults)          │
+                      │  Silo savUSD/sUSDp/Gami (ERC-4626)│
+                      │  Folks spoke contracts/hub pool   │
                       │  Native USDC (ERC-20)            │
                       │  SnowMindRegistry (logging)      │
                       │  EntryPoint v0.7 (ERC-4337)      │
@@ -157,6 +158,10 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **Euler V2 / 9Summits Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
 | **Silo savUSD/USDC** | `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` | Avalanche C-Chain |
 | **Silo sUSDp/USDC** | `0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca` | Avalanche C-Chain |
+| **Silo V3 Gami USDC** | `0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5` | Avalanche C-Chain |
+| **Folks Spoke Common** | `0xc03094C4690F3844EA17ef5272Bf6376e0CF2AC6` | Avalanche C-Chain |
+| **Folks Spoke USDC** | `0xcD68014c002184707eaE7218516cB0762A44fDDF` | Avalanche C-Chain |
+| **Folks USDC Hub Pool** | `0x88f15e36308ED060d8543DA8E2a5dA0810Efded2` | Avalanche C-Chain |
 
 ### Explorer
 
@@ -196,13 +201,25 @@ AAVE_V3_POOL=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 BENQI_QIUSDC=0xB715808a78F6041E46d61Cb123C9B4A27056AE9C
 SPARK_SPUSDC=0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d
 EULER_VAULT=0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e
+SILO_SAVUSD_USDC_VAULT=0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1
+SILO_SUSDP_USDC_VAULT=0xcd0d510eec4792a944E8dbe5da54DDD6777f02Ca
+SILO_GAMI_USDC_VAULT=0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5
+FOLKS_SPOKE_COMMON=0xc03094C4690F3844EA17ef5272Bf6376e0CF2AC6
+FOLKS_SPOKE_USDC=0xcD68014c002184707eaE7218516cB0762A44fDDF
+FOLKS_USDC_HUB_POOL=0x88f15e36308ED060d8543DA8E2a5dA0810Efded2
 USDC_ADDRESS=0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E
 ENTRYPOINT_V07=0x0000000071727De22E5E9d8BAf0edAc6f37da032
 
 # ── Protocol-Specific Addresses ──────────────────────────────
-SPARK_PSM_WRAPPER=0x_SPARK_PSM_WRAPPER_ADDRESS
-SPARK_VAT=0x_SPARK_VAT_ADDRESS
+SPARK_PSM3=0x7566debc906C17338524a414343FA61bca26a843
 BENQI_COMPTROLLER=0x_BENQI_COMPTROLLER_ADDRESS
+FOLKS_ACCOUNT_MANAGER=0x12Db9758c4D9902334C523b94e436258EB54156f
+FOLKS_LOAN_MANAGER=0xF4c542518320F09943C35Db6773b2f9FeB2F847e
+FOLKS_HUB_CHAIN_ID=100
+FOLKS_USDC_POOL_ID=1
+FOLKS_USDC_LOAN_TYPE_ID=2
+FOLKS_ACCOUNT_NONCE=1
+FOLKS_LOAN_NONCE=1
 
 # ── Security ─────────────────────────────────────────────────
 # Production: use KMS envelope encryption (master key never in env)
@@ -395,7 +412,15 @@ CREATE TABLE IF NOT EXISTS protocol_health (
   updated_at        TIMESTAMPTZ DEFAULT now()
 );
 
-INSERT INTO protocol_health (protocol_id) VALUES ('aave_v3'), ('benqi'), ('spark'), ('euler_v2')
+INSERT INTO protocol_health (protocol_id) VALUES
+  ('aave_v3'),
+  ('benqi'),
+  ('spark'),
+  ('euler_v2'),
+  ('silo_savusd_usdc'),
+  ('silo_susdp_usdc'),
+  ('silo_gami_usdc'),
+  ('folks')
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS session_key_audit (
@@ -464,11 +489,20 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS diversification_preference TEXT DE
 ALTER TABLE accounts DROP COLUMN IF EXISTS risk_tolerance;
 ```
 
-### Migration 3: Spark Protocol
+### Migration 3: Protocol Health Rows (Idempotent)
 
 ```sql
--- 003_add_spark_protocol.sql
-INSERT INTO protocol_health (protocol_id) VALUES ('spark') ON CONFLICT DO NOTHING;
+-- 003_add_protocol_health_rows.sql
+INSERT INTO protocol_health (protocol_id) VALUES
+  ('aave_v3'),
+  ('benqi'),
+  ('spark'),
+  ('euler_v2'),
+  ('silo_savusd_usdc'),
+  ('silo_susdp_usdc'),
+  ('silo_gami_usdc'),
+  ('folks')
+ON CONFLICT DO NOTHING;
 ```
 
 ### Migration 4: Daily APY Snapshots
@@ -673,10 +707,8 @@ AVALANCHE_RPC_URL=https://api.avax.network/ext/bc/C/rpc \
 
 1. **Aave V3**: `getReserveData()` returns a valid APY (0-25%) and TVL > $1M for USDC
 2. **Benqi**: `supplyRatePerTimestamp()` returns a valid APY and `exchangeRateCurrent()` > 0
-3. **Spark**: ERC-4626 `totalAssets()` / `convertToAssets()` return valid share ratios
-4. **Euler V2**: ERC-4626 vault `totalAssets()` and rate fetch return valid APY
-5. **Cross-protocol**: All adapters return rates simultaneously via `RateFetcher`
-6. **Waterfall allocator**: Produces valid allocations using real mainnet APY data
+3. **Cross-protocol**: All active adapters return rates simultaneously via `RateFetcher`
+4. **Waterfall allocator**: Produces valid allocations using real mainnet APY data
 
 ### Expected output:
 
@@ -719,7 +751,8 @@ Before going live, verify each item:
 - [ ] Benqi adapter returns valid APY from mainnet
 - [ ] Spark adapter returns valid APY from mainnet (ERC-4626)
 - [ ] Euler V2 (9Summits) adapter returns valid APY from mainnet (ERC-4626)
-- [ ] Silo adapters return valid APY from mainnet (ERC-4626)
+- [ ] Silo savUSD/sUSDp/Gami adapters return valid APY from mainnet
+- [ ] Folks adapter returns valid APY and liquidity from mainnet
 - [ ] Rate validator cross-checks pass against DefiLlama
 
 ### Security
@@ -778,8 +811,8 @@ Optional but strongly recommended for production security:
 ## Mainnet Readiness Notes
 
 - Production chain: Avalanche C-Chain only (`43114`)
-- Active protocols: `aave_v3`, `benqi`, `spark`, `euler_v2`, `silo_savusd_usdc`, `silo_susdp_usdc`
-- Opt-in protocols: `euler_v2`, `silo_savusd_usdc`, `silo_susdp_usdc` — fully active but not enabled by default in onboarding UI (user must explicitly toggle them on)
+- Active protocols: `aave_v3`, `benqi`, `spark`, `euler_v2`, `silo_savusd_usdc`, `silo_susdp_usdc`, `silo_gami_usdc`, `folks`
+- Opt-in protocols: `silo_gami_usdc`, `folks` — fully active but not enabled by default in onboarding UI (user must explicitly toggle them on)
 - Euler V2 is branded as **Euler (9Summits)** in user-facing UI (the vault is curated by 9Summits on Euler V2 infra)
 - Registry ownership transfer is two-step (`proposeOwnership` then Safe `acceptOwnership`)
 - Fee language and user-facing disclosures should use "agent fee"
@@ -801,7 +834,9 @@ Risk scoring uses the 9-point model from `report.md`:
 | Spark | 4 | Liquidity + Yield (daily) | Static + Dynamic |
 | Euler (9Summits) | 2 | Liquidity + Yield (daily) | Static + Dynamic |
 | Silo (savUSD/USDC) | 4 | Liquidity + Yield (daily) | Static + Dynamic |
-| Silo (sUSDp/USDC) | 2 | Liquidity + Yield (daily) | Static + Dynamic |
+| Silo (sUSDp/USDC) | 3 | Liquidity + Yield (daily) | Static + Dynamic |
+| Silo V3 (Gami USDC) | 0 | Liquidity + Yield (daily) | Static + Dynamic |
+| Folks Finance xChain | 4 | Liquidity + Yield (daily) | Static + Dynamic |
 
 ### Referral Program Reference
 

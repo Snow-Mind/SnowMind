@@ -24,7 +24,15 @@ from app.services.protocols import ALL_ADAPTERS, get_adapter
 logger = logging.getLogger("snowmind.utilization_monitor")
 
 _MONITORED_PROTOCOLS = frozenset(
-    ("aave_v3", "benqi", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc")
+    (
+        "aave_v3",
+        "benqi",
+        "euler_v2",
+        "folks",
+        "silo_savusd_usdc",
+        "silo_susdp_usdc",
+        "silo_gami_usdc",
+    )
 )
 _HISTORY_SIZE = 20
 _VELOCITY_WINDOW = 5

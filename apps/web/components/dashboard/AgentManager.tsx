@@ -20,6 +20,17 @@ const CANONICAL_PROTOCOL_IDS = [
   "euler_v2",
   "silo_savusd_usdc",
   "silo_susdp_usdc",
+  "silo_gami_usdc",
+  "folks",
+] as const;
+
+const DEFAULT_SCOPE_PROTOCOL_IDS = [
+  "aave_v3",
+  "benqi",
+  "spark",
+  "euler_v2",
+  "silo_savusd_usdc",
+  "silo_susdp_usdc",
 ] as const;
 
 type CanonicalProtocolId = (typeof CANONICAL_PROTOCOL_IDS)[number];
@@ -44,7 +55,12 @@ function normalizeAllowedProtocols(protocols: string[] | undefined): CanonicalPr
   const normalized: CanonicalProtocolId[] = [];
   for (const raw of protocols) {
     const maybe = (raw ?? "").toLowerCase().trim();
-    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    const canonical =
+      maybe === "aave"
+        ? "aave_v3"
+        : maybe === "folks_finance_xchain" || maybe === "folks_finance"
+          ? "folks"
+          : maybe;
     if (!allowedSet.has(canonical as CanonicalProtocolId)) continue;
     if (normalized.includes(canonical as CanonicalProtocolId)) continue;
     normalized.push(canonical as CanonicalProtocolId);
@@ -68,7 +84,12 @@ function normalizeAllocationCaps(
 
   for (const [rawPid, rawValue] of Object.entries(rawCaps)) {
     const maybe = rawPid.toLowerCase().trim();
-    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    const canonical =
+      maybe === "aave"
+        ? "aave_v3"
+        : maybe === "folks_finance_xchain" || maybe === "folks_finance"
+          ? "folks"
+          : maybe;
     if (!CANONICAL_PROTOCOL_IDS.includes(canonical as CanonicalProtocolId)) continue;
 
     const parsed = Number(rawValue);
@@ -104,7 +125,12 @@ function isSameOrderedScope(a: CanonicalProtocolId[], b: CanonicalProtocolId[]):
 
 function canonicalRateProtocolId(rawProtocolId: string): CanonicalProtocolId {
   const normalized = (rawProtocolId || "").trim().toLowerCase();
-  const canonical = normalized === "aave" ? "aave_v3" : normalized;
+  const canonical =
+    normalized === "aave"
+      ? "aave_v3"
+      : normalized === "folks_finance_xchain" || normalized === "folks_finance"
+        ? "folks"
+        : normalized;
   return canonical as CanonicalProtocolId;
 }
 
@@ -126,7 +152,7 @@ export default function AgentManager({
 
   const currentScope = useMemo(() => {
     const normalized = normalizeAllowedProtocols(allowedProtocols);
-    return normalized.length > 0 ? normalized : [...CANONICAL_PROTOCOL_IDS];
+    return normalized.length > 0 ? normalized : [...DEFAULT_SCOPE_PROTOCOL_IDS];
   }, [allowedProtocols]);
 
   const currentCaps = useMemo(

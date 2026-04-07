@@ -16,12 +16,14 @@ from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS
+from app.services.protocols.base import ProtocolRate
+from app.services.optimizer.allocator import UserPreference, compute_allocation
+from app.services.optimizer.health_checker import HealthCheckResult
 from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
 from app.services.optimizer.milp_solver import (
-    OptimizerInput,
-    ProtocolInput,
+    compute_delta,
+    is_rebalance_worth_it,
 )
-from app.services.optimizer.waterfall_allocator import waterfall_allocate
 from app.services.optimizer.risk_report_explainer import RiskReportExplainer
 from app.services.optimizer.risk_scorer import RiskScorer, RiskScoreResult
 
@@ -161,7 +163,7 @@ def _build_risk_explanation_notes(protocol_id: str, score: RiskScoreResult | Non
 
     if protocol_id == "spark":
         notes.append(
-            "Liquidity for Spark uses vault instant buffer plus PSM USDC liquidity (not supplied-minus-borrowed)."
+            "Liquidity for Spark uses vault instant buffer plus PSM USDC liquidity (capped by vault TVL, not supplied-minus-borrowed)."
         )
     else:
         notes.append(
@@ -224,6 +226,105 @@ def _filter_fresh_persisted_scores(
     return fresh, stale_protocols
 
 
+def _compute_weighted_apy_over_total(
+    allocations: dict[str, Decimal],
+    total_amount_usd: Decimal,
+    apy_by_protocol: dict[str, Decimal],
+) -> Decimal:
+    if total_amount_usd <= Decimal("0"):
+        return Decimal("0")
+
+    weighted = Decimal("0")
+    for pid, amount in allocations.items():
+        if amount <= Decimal("0"):
+            continue
+        weighted += (amount / total_amount_usd) * apy_by_protocol.get(pid, Decimal("0"))
+    return weighted
+
+
+def _run_no_base_allocator(
+    *,
+    total_amount_usd: Decimal,
+    valid_rates: dict[str, ProtocolRate],
+    risk_by_protocol: dict[str, Decimal],
+    current_allocations: dict[str, Decimal],
+    gas_cost_estimate_usd: Decimal,
+    max_exposure_pct: Decimal,
+) -> tuple[dict[str, Decimal], Decimal, Decimal, Decimal, bool, float, Decimal]:
+    """Route helper: run no-base-layer allocation and compute preview metadata."""
+    apy_by_protocol = {pid: rate.apy for pid, rate in valid_rates.items()}
+    protocol_tvls = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
+    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
+
+    health_results = {
+        pid: HealthCheckResult(
+            protocol_id=pid,
+            is_healthy=True,
+            is_deposit_safe=True,
+            is_withdrawal_safe=True,
+        )
+        for pid in valid_rates
+    }
+
+    user_preferences = {
+        pid: UserPreference(protocol_id=pid, enabled=True, max_pct=max_exposure_pct)
+        for pid in valid_rates
+    }
+
+    started = time.monotonic()
+    allocation_result = compute_allocation(
+        health_results=health_results,
+        twap_apys=apy_by_protocol,
+        protocol_tvls=protocol_tvls,
+        total_balance=total_amount_usd,
+        protocol_utilizations=protocol_utilizations,
+        user_preferences=user_preferences,
+    )
+    solve_time_ms = (time.monotonic() - started) * 1000
+
+    current_apy = _compute_weighted_apy_over_total(
+        current_allocations,
+        total_amount_usd,
+        apy_by_protocol,
+    )
+
+    proposed_for_delta = dict(allocation_result.allocations)
+    if allocation_result.idle_amount > Decimal("0"):
+        proposed_for_delta["idle"] = allocation_result.idle_amount
+
+    current_for_delta = dict(current_allocations)
+    current_idle = total_amount_usd - sum(current_allocations.values(), Decimal("0"))
+    if current_idle > Decimal("0"):
+        current_for_delta["idle"] = current_idle
+
+    delta = compute_delta(proposed_for_delta, current_for_delta)
+    rebalance_needed, _ = is_rebalance_worth_it(
+        delta=delta,
+        total=total_amount_usd,
+        gas_cost_usd=gas_cost_estimate_usd,
+        proposed_apy=allocation_result.weighted_apy,
+        current_apy=current_apy,
+    )
+
+    deployed_total = sum(allocation_result.allocations.values(), Decimal("0"))
+    weighted_risk = Decimal("0")
+    if deployed_total > Decimal("0"):
+        weighted_risk = sum(
+            (amount / deployed_total) * risk_by_protocol.get(pid, Decimal("0"))
+            for pid, amount in allocation_result.allocations.items()
+        )
+
+    return (
+        allocation_result.allocations,
+        allocation_result.weighted_apy,
+        current_apy,
+        weighted_risk,
+        rebalance_needed,
+        solve_time_ms,
+        allocation_result.idle_amount,
+    )
+
+
 # ── POST /simulate — zero-cost dry-run (no auth, no execution, no DB) ────────
 
 @router.post("/simulate", response_model=SimulateResponse)
@@ -275,8 +376,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
     if not valid_rates:
         raise HTTPException(status_code=503, detail="All rates failed validation")
 
-    # Build protocol inputs
-    protocol_inputs: list[ProtocolInput] = []
+    # Build risk map used in response and weighted risk output
     risk_by_protocol: dict[str, Decimal] = {}
     for pid, rate in valid_rates.items():
         risk = _risk_scorer.compute_risk_score(
@@ -289,30 +389,26 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
             protocol_apy=rate.apy,
         )
         risk_by_protocol[pid] = risk
-        protocol_inputs.append(
-            ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
-        )
         reasoning.append(
             f"{pid}: APY={rate.apy:.4%}, TVL=${rate.tvl_usd:,.0f}, risk={risk:.1f}"
         )
 
-    # Run waterfall allocator (no current allocations = fresh deployment)
-    inp = OptimizerInput(
+    # Run no-base-layer APY-ranked allocator (same core path as live rebalancer).
+    (
+        result_allocations,
+        expected_apy,
+        _current_apy,
+        weighted_risk,
+        rebalance_needed,
+        solve_time_ms,
+        idle_amount,
+    ) = _run_no_base_allocator(
         total_amount_usd=req.total_usdc,
-        protocols=protocol_inputs,
+        valid_rates=valid_rates,
+        risk_by_protocol=risk_by_protocol,
         current_allocations={},
         gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
-    )
-    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
-    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
-    result = waterfall_allocate(
-        inp=inp,
-        tvl_by_protocol=tvl_by_protocol,
-        protocol_utilizations=protocol_utilizations,
-        tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
-        base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
-        base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
     )
 
     # Build protocol rate response
@@ -335,7 +431,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 
     # Build allocation response
     proposed: list[AllocationItem] = []
-    for pid, amount_usd in result.allocations.items():
+    for pid, amount_usd in result_allocations.items():
         rate = valid_rates.get(pid)
         pct = amount_usd / req.total_usdc if req.total_usdc else Decimal("0")
         proposed.append(
@@ -351,10 +447,16 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
             f"Allocate ${amount_usd:,.2f} ({pct:.1%}) → {pid}"
         )
 
-    reasoning.append(f"Expected blended APY: {result.expected_apy:.4%}")
+    if idle_amount > Decimal("0.01"):
+        idle_pct = idle_amount / req.total_usdc if req.total_usdc else Decimal("0")
+        reasoning.append(
+            f"Hold idle ${idle_amount:,.2f} ({idle_pct:.1%}) due to TVL/utilization caps"
+        )
+
+    reasoning.append(f"Expected blended APY: {expected_apy:.4%}")
     reasoning.append(
-        f"Rebalance needed: {result.is_rebalance_needed} "
-        f"(solve time: {result.solve_time_ms:.1f}ms)"
+        f"Rebalance needed: {rebalance_needed} "
+        f"(solve time: {solve_time_ms:.1f}ms)"
     )
 
     return SimulateResponse(
@@ -362,10 +464,10 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
         total_usdc=req.total_usdc,
         risk_tolerance=req.risk_tolerance,
         proposed_allocations=proposed,
-        expected_apy=result.expected_apy,
-        risk_score=result.risk_score,
-        rebalance_needed=result.is_rebalance_needed,
-        solve_time_ms=result.solve_time_ms,
+        expected_apy=expected_apy,
+        risk_score=weighted_risk,
+        rebalance_needed=rebalance_needed,
+        solve_time_ms=solve_time_ms,
         protocol_rates=rate_responses,
         reasoning=reasoning,
     )
@@ -978,8 +1080,8 @@ async def run_optimizer_preview(
     if total_usd <= 0:
         raise HTTPException(status_code=400, detail="No deposited balance")
 
-    # Build protocol inputs with risk scores
-    protocol_inputs: list[ProtocolInput] = []
+    # Build risk map used in preview response and weighted risk output
+    risk_by_protocol: dict[str, Decimal] = {}
     for pid, rate in valid_rates.items():
         risk = _risk_scorer.compute_risk_score(
             pid,
@@ -990,32 +1092,28 @@ async def run_optimizer_preview(
             ),
             protocol_apy=rate.apy,
         )
-        protocol_inputs.append(
-            ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
-        )
+        risk_by_protocol[pid] = risk
 
-    # Run waterfall allocator
-    inp = OptimizerInput(
+    (
+        result_allocations,
+        expected_apy,
+        current_apy,
+        weighted_risk,
+        rebalance_needed,
+        solve_time_ms,
+        _idle_amount,
+    ) = _run_no_base_allocator(
         total_amount_usd=total_usd,
-        protocols=protocol_inputs,
+        valid_rates=valid_rates,
+        risk_by_protocol=risk_by_protocol,
         current_allocations=current,
         gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
-    )
-    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
-    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
-    result = waterfall_allocate(
-        inp=inp,
-        tvl_by_protocol=tvl_by_protocol,
-        protocol_utilizations=protocol_utilizations,
-        tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
-        base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
-        base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
     )
 
     # Build response items
     proposed: list[AllocationItem] = []
-    for pid, amount_usd in result.allocations.items():
+    for pid, amount_usd in result_allocations.items():
         rate = valid_rates.get(pid)
         proposed.append(
             AllocationItem(
@@ -1027,22 +1125,14 @@ async def run_optimizer_preview(
             )
         )
 
-    # Current APY
-    current_apy = Decimal("0")
-    if total_usd:
-        for pid, amt in current.items():
-            rate = valid_rates.get(pid)
-            if rate:
-                current_apy += rate.apy * (amt / total_usd)
-
     return OptimizerPreviewOutput(
         smart_account_address=address,
         proposed_allocations=proposed,
-        expected_apy=result.expected_apy,
+        expected_apy=expected_apy,
         current_apy=current_apy,
-        rebalance_needed=result.is_rebalance_needed,
-        risk_score=result.risk_score,
-        solve_time_ms=result.solve_time_ms,
+        rebalance_needed=rebalance_needed,
+        risk_score=weighted_risk,
+        solve_time_ms=solve_time_ms,
     )
 
 

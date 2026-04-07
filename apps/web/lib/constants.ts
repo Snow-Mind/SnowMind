@@ -83,6 +83,17 @@ export const CONTRACTS = {
   // Silo V2 USDC lending vaults on Avalanche mainnet (bUSDC ERC-4626 vaults, NOT SiloConfig)
   SILO_SAVUSD_VAULT: (process.env.NEXT_PUBLIC_SILO_SAVUSD_VAULT_ADDRESS ?? '0x606fe9a70338e798a292CA22C1F28C829F24048E') as `0x${string}`,
   SILO_SUSDP_VAULT: (process.env.NEXT_PUBLIC_SILO_SUSDP_VAULT_ADDRESS ?? '0x8ad697a333569ca6f04c8c063e9807747ef169c1') as `0x${string}`,
+  SILO_GAMI_USDC_VAULT: (process.env.NEXT_PUBLIC_SILO_GAMI_USDC_VAULT_ADDRESS ?? '0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5') as `0x${string}`,
+  FOLKS_SPOKE_COMMON: (process.env.NEXT_PUBLIC_FOLKS_SPOKE_COMMON_ADDRESS ?? '0xc03094C4690F3844EA17ef5272Bf6376e0CF2AC6') as `0x${string}`,
+  FOLKS_SPOKE_USDC: (process.env.NEXT_PUBLIC_FOLKS_SPOKE_USDC_ADDRESS ?? '0xcD68014c002184707eaE7218516cB0762A44fDDF') as `0x${string}`,
+  FOLKS_ACCOUNT_MANAGER: (process.env.NEXT_PUBLIC_FOLKS_ACCOUNT_MANAGER_ADDRESS ?? '0x12Db9758c4D9902334C523b94e436258EB54156f') as `0x${string}`,
+  FOLKS_LOAN_MANAGER: (process.env.NEXT_PUBLIC_FOLKS_LOAN_MANAGER_ADDRESS ?? '0xF4c542518320F09943C35Db6773b2f9FeB2F847e') as `0x${string}`,
+  FOLKS_USDC_HUB_POOL: (process.env.NEXT_PUBLIC_FOLKS_USDC_HUB_POOL_ADDRESS ?? '0x88f15e36308ED060d8543DA8E2a5dA0810Efded2') as `0x${string}`,
+  FOLKS_HUB_CHAIN_ID: 100,
+  FOLKS_USDC_POOL_ID: 1,
+  FOLKS_USDC_LOAN_TYPE_ID: 2,
+  FOLKS_ACCOUNT_NONCE: 1,
+  FOLKS_LOAN_NONCE: 1,
 
   // Native USDC on Avalanche mainnet (Circle-issued)
   USDC:        (process.env.NEXT_PUBLIC_USDC_ADDRESS ?? '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E') as `0x${string}`,
@@ -109,7 +120,7 @@ export const EXPLORER = {
 export const RISK_SCORE_MAX = 9;
 
 // ── Protocol metadata — drives ALL UI rendering ─────────────────────────────
-// Only 3 protocols for mainnet beta. Add new protocols by adding entries here.
+// Add/retire protocols by editing this single map.
 export const PROTOCOL_CONFIG = {
   aave_v3: {
     id: 'aave_v3' as const,
@@ -226,7 +237,7 @@ export const PROTOCOL_CONFIG = {
     category: 'Lending',
     asset: 'USDC',
     contractAddress: CONTRACTS.SILO_SUSDP_VAULT,
-    riskScore: 2,     // Static subtotal: Oracle 0 + Collateral 1 + Architecture 1
+    riskScore: 3,     // Static subtotal: Oracle 1 + Collateral 1 + Architecture 1
     color: '#16A34A',
     bgColor: 'rgba(22, 163, 74, 0.12)',
     logoPath: '/protocols/silo-official.svg',
@@ -236,6 +247,42 @@ export const PROTOCOL_CONFIG = {
     auditBadge: 'Audited',
     explorerUrl: EXPLORER.address(CONTRACTS.SILO_SUSDP_VAULT),
     vaultUrl: 'https://v2.silo.finance/markets/avalanche/susdp-usdc-162?action=deposit',
+  },
+  silo_gami_usdc: {
+    id: 'silo_gami_usdc' as const,
+    name: 'Silo V3 (Gami USDC)',
+    shortName: 'Silo V3 Gami',
+    category: 'Curated Vault',
+    asset: 'USDC',
+    contractAddress: CONTRACTS.SILO_GAMI_USDC_VAULT,
+    riskScore: 0,     // Static subtotal: Oracle 0 + Collateral 0 + Architecture 0
+    color: '#166534',
+    bgColor: 'rgba(22, 101, 52, 0.12)',
+    logoPath: '/protocols/silo-v3-gami-official.svg',
+    isActive: true,
+    defaultEnabled: false,
+    description: 'Curator-managed Silo V3 vault (higher-risk, disabled by default)',
+    auditBadge: 'Audited',
+    explorerUrl: EXPLORER.address(CONTRACTS.SILO_GAMI_USDC_VAULT),
+    vaultUrl: 'https://app.silo.finance/vaults/avalanche-0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5',
+  },
+  folks: {
+    id: 'folks' as const,
+    name: 'Folks Finance xChain',
+    shortName: 'Folks',
+    category: 'Lending',
+    asset: 'USDC',
+    contractAddress: CONTRACTS.FOLKS_SPOKE_USDC,
+    riskScore: 4,     // Static subtotal: Oracle 2 + Collateral 1 + Architecture 1
+    color: '#0EA5A0',
+    bgColor: 'rgba(14, 165, 160, 0.12)',
+    logoPath: '/protocols/folks-official.avif',
+    isActive: true,
+    defaultEnabled: false,
+    description: 'Hub-and-spoke cross-chain lending protocol, routed via Avalanche hub pool',
+    auditBadge: 'Audited',
+    explorerUrl: EXPLORER.address(CONTRACTS.FOLKS_SPOKE_USDC),
+    vaultUrl: 'https://xapp.folks.finance/lending',
   },
 } as const
 
@@ -252,7 +299,7 @@ export const IDLE_CONFIG = {
 export type ProtocolId = keyof typeof PROTOCOL_CONFIG
 
 // Protocol IDs used by optimizer/runtime paths (canonical IDs only)
-export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'spark', 'euler_v2', 'silo_savusd_usdc', 'silo_susdp_usdc']
+export const ACTIVE_PROTOCOLS: ProtocolId[] = ['aave_v3', 'benqi', 'spark', 'euler_v2', 'silo_savusd_usdc', 'silo_susdp_usdc', 'silo_gami_usdc', 'folks']
 
 // Session key on-chain call policy — function selectors per protocol
 export const SESSION_KEY_SELECTORS = {
@@ -287,6 +334,17 @@ export const SESSION_KEY_SELECTORS = {
     deposit:  '0x6e553f65',  // deposit(uint256,address) — ERC-4626
     withdraw: '0xb460af94',  // withdraw(uint256,address,address) — ERC-4626
     redeem:   '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+  },
+  silo_gami_usdc: {
+    deposit:  '0x6e553f65',  // deposit(uint256,address) — ERC-4626
+    withdraw: '0xb460af94',  // withdraw(uint256,address,address) — ERC-4626
+    redeem:   '0xba087652',  // redeem(uint256,address,address) — ERC-4626
+  },
+  folks: {
+    createAccount:         '0x8557c1a8',
+    createLoanAndDeposit:  '0x5fd60a5b',
+    deposit:               '0x5eabd9c7',
+    withdraw:              '0x65cf003c',
   },
 } as const
 

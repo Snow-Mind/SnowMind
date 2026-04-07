@@ -18,6 +18,7 @@ import {
   keccak256,
   concat,
   pad,
+  toHex,
   encodeAbiParameters,
   parseAbiParameters,
   hashTypedData,
@@ -256,6 +257,133 @@ const ERC20_ABI = [
     outputs: [{ name: "", type: "bool" }],
   },
 ]
+
+const FOLKS_MESSAGE_PARAMS_COMPONENTS = [
+  { name: "adapterId", type: "uint16" },
+  { name: "returnAdapterId", type: "uint16" },
+  { name: "receiverValue", type: "uint256" },
+  { name: "gasLimit", type: "uint256" },
+  { name: "returnGasLimit", type: "uint256" },
+]
+
+const FOLKS_SPOKE_COMMON_ABI = [
+  {
+    name: "createAccount",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "nonce", type: "bytes4" },
+      { name: "refAccountId", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "withdraw",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "loanId", type: "bytes32" },
+      { name: "poolId", type: "uint8" },
+      { name: "chainId", type: "uint16" },
+      { name: "amount", type: "uint256" },
+      { name: "isFAmount", type: "bool" },
+    ],
+    outputs: [],
+  },
+]
+
+const FOLKS_SPOKE_USDC_ABI = [
+  {
+    name: "createLoanAndDeposit",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "nonce", type: "bytes4" },
+      { name: "amount", type: "uint256" },
+      { name: "loanTypeId", type: "uint16" },
+      { name: "loanName", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "deposit",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "loanId", type: "bytes32" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+]
+
+const FOLKS_HUB_POOL_READ_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "totalSupply",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "getDepositData",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "optimalUtilisationRatio", type: "uint256" },
+      { name: "totalAmount", type: "uint256" },
+      { name: "interestRate", type: "uint256" },
+      { name: "interestIndex", type: "uint256" },
+    ],
+  },
+]
+
+const FOLKS_ACCOUNT_MANAGER_READ_ABI = [
+  {
+    name: "isAccountCreated",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "accountId", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+]
+
+const FOLKS_LOAN_MANAGER_READ_ABI = [
+  {
+    name: "isUserLoanActive",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "loanId", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+]
+
+const FOLKS_DEFAULT_MESSAGE_PARAMS = Object.freeze({
+  adapterId: 1,
+  returnAdapterId: 1,
+  receiverValue: 0n,
+  gasLimit: 0n,
+  returnGasLimit: 0n,
+})
+
+const FOLKS_ZERO_BYTES32 = `0x${"00".repeat(32)}`
+const FOLKS_DEFAULT_LOAN_NAME = pad(toHex("snowmind-usdc"), { size: 32 })
 
 // ── Permit2 (Uniswap canonical) — same address on ALL EVM chains ──────────
 // Euler V2 (EVK) vaults use Permit2 for token transfers instead of standard
@@ -781,6 +909,186 @@ function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAcc
   }
 }
 
+function parsePositiveInt(rawValue, fallback) {
+  const parsed = Number(rawValue)
+  if (!Number.isFinite(parsed)) return fallback
+  const rounded = Math.trunc(parsed)
+  if (rounded < 0) return fallback
+  return rounded
+}
+
+function normalizeFolksNonce(rawValue, fallbackInt) {
+  if (typeof rawValue === "string" && rawValue.trim().toLowerCase().startsWith("0x")) {
+    return pad(rawValue.trim(), { size: 4 })
+  }
+  const nonceInt = parsePositiveInt(rawValue, fallbackInt)
+  return pad(toHex(BigInt(nonceInt)), { size: 4 })
+}
+
+function buildFolksMessageParams() {
+  return [
+    FOLKS_DEFAULT_MESSAGE_PARAMS.adapterId,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.returnAdapterId,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.receiverValue,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.gasLimit,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.returnGasLimit,
+  ]
+}
+
+function resolveFolksRoutingData(source, contracts, smartAccountAddress) {
+  const accountNonce = normalizeFolksNonce(
+    source?.folksAccountNonce ?? contracts.FOLKS_ACCOUNT_NONCE,
+    1,
+  )
+  const loanNonce = normalizeFolksNonce(
+    source?.folksLoanNonce ?? contracts.FOLKS_LOAN_NONCE,
+    1,
+  )
+  const chainId = parsePositiveInt(contracts.FOLKS_HUB_CHAIN_ID, 100)
+  const poolId = parsePositiveInt(contracts.FOLKS_USDC_POOL_ID, 1)
+  const loanTypeId = parsePositiveInt(contracts.FOLKS_USDC_LOAN_TYPE_ID, 2)
+
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 })
+  const accountId = source?.folksAccountId || keccak256(concat([
+    smartAccountAddress,
+    chainIdBytes,
+    accountNonce,
+  ]))
+  const loanId = source?.folksLoanId || keccak256(concat([accountId, loanNonce]))
+
+  return {
+    accountId,
+    loanId,
+    accountNonce,
+    loanNonce,
+    chainId,
+    poolId,
+    loanTypeId,
+  }
+}
+
+async function readFolksUnderlyingBalance(publicClient, contracts, smartAccountAddress) {
+  const hubPool = contracts.FOLKS_USDC_HUB_POOL
+  if (!hubPool || hubPool === zeroAddress) {
+    return 0n
+  }
+
+  try {
+    const [shares, totalSupply, depositData] = await Promise.all([
+      publicClient.readContract({
+        address: hubPool,
+        abi: FOLKS_HUB_POOL_READ_ABI,
+        functionName: "balanceOf",
+        args: [smartAccountAddress],
+      }),
+      publicClient.readContract({
+        address: hubPool,
+        abi: FOLKS_HUB_POOL_READ_ABI,
+        functionName: "totalSupply",
+      }),
+      publicClient.readContract({
+        address: hubPool,
+        abi: FOLKS_HUB_POOL_READ_ABI,
+        functionName: "getDepositData",
+      }),
+    ])
+
+    const shareBalance = BigInt(shares || 0n)
+    const totalShareSupply = BigInt(totalSupply || 0n)
+    const totalDeposits = BigInt((Array.isArray(depositData) ? depositData[1] : 0n) || 0n)
+    if (shareBalance <= 0n || totalShareSupply <= 0n || totalDeposits <= 0n) {
+      return 0n
+    }
+    return (shareBalance * totalDeposits) / totalShareSupply
+  } catch (err) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "folks_balance_read_failed",
+      smartAccountAddress,
+      error: err?.message?.slice(0, 220),
+      timestamp: new Date().toISOString(),
+    }))
+    return 0n
+  }
+}
+
+async function resolveFolksDepositMode(
+  publicClient,
+  contracts,
+  smartAccountAddress,
+  rawMode,
+  folksRoutingData,
+) {
+  const mode = String(rawMode || "").trim().toLowerCase()
+  if (mode === "deposit") return "deposit"
+
+  const folks = folksRoutingData || resolveFolksRoutingData({}, contracts, smartAccountAddress)
+  const accountManager = contracts.FOLKS_ACCOUNT_MANAGER
+  const loanManager = contracts.FOLKS_LOAN_MANAGER
+  if (
+    accountManager &&
+    loanManager &&
+    accountManager !== zeroAddress &&
+    loanManager !== zeroAddress
+  ) {
+    try {
+      const [accountCreated, loanActive] = await Promise.all([
+        publicClient.readContract({
+          address: accountManager,
+          abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+          functionName: "isAccountCreated",
+          args: [folks.accountId],
+        }),
+        publicClient.readContract({
+          address: loanManager,
+          abi: FOLKS_LOAN_MANAGER_READ_ABI,
+          functionName: "isUserLoanActive",
+          args: [folks.loanId],
+        }),
+      ])
+
+      if (accountCreated && loanActive) {
+        return "deposit"
+      }
+      if (accountCreated) {
+        return "create_loan"
+      }
+      return "create"
+    } catch (err) {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "folks_mode_state_check_failed",
+        smartAccountAddress,
+        accountId: folks.accountId,
+        loanId: folks.loanId,
+        error: err?.message?.slice(0, 220),
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  }
+
+  if (mode === "create" || mode === "initialize" || mode === "create_loan_and_deposit") {
+    return "create"
+  }
+
+  const hubPool = contracts.FOLKS_USDC_HUB_POOL
+  if (!hubPool || hubPool === zeroAddress) {
+    return "create"
+  }
+
+  try {
+    const shareBalance = await publicClient.readContract({
+      address: hubPool,
+      abi: FOLKS_HUB_POOL_READ_ABI,
+      functionName: "balanceOf",
+      args: [smartAccountAddress],
+    })
+    return BigInt(shareBalance || 0n) > 0n ? "deposit" : "create"
+  } catch {
+    return "create"
+  }
+}
+
 function resolveContractKey(protocol, contracts) {
   const map = {
     aave_v3: "AAVE_POOL",
@@ -790,6 +1098,8 @@ function resolveContractKey(protocol, contracts) {
     euler_v2: "EULER_VAULT",
     silo_savusd_usdc: "SILO_SAVUSD_VAULT",
     silo_susdp_usdc: "SILO_SUSDP_VAULT",
+    silo_gami_usdc: "SILO_GAMI_USDC_VAULT",
+    folks: "FOLKS_SPOKE_USDC",
   }
   return contracts[map[protocol]] || null
 }
@@ -1027,7 +1337,14 @@ export async function executeRebalance({
   }
   const calls = []
 
-  for (const { protocol, amountUSDC, qiTokenAmount, shareBalance } of withdrawals) {
+  for (const withdrawal of withdrawals) {
+    const {
+      protocol,
+      amountUSDC,
+      qiTokenAmount,
+      shareBalance,
+      fallbackAmountUSDC,
+    } = withdrawal
     if (protocol === "aave_v3" || protocol === "aave") {
       calls.push({
         to: contracts.AAVE_POOL,
@@ -1060,6 +1377,39 @@ export async function executeRebalance({
     } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
       await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
       calls.push(buildErc4626Withdrawal(contracts.SILO_SUSDP_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+    } else if (protocol === "silo_gami_usdc" && contracts.SILO_GAMI_USDC_VAULT) {
+      await verifyVaultShareBalance(execPublicClient, contracts.SILO_GAMI_USDC_VAULT, smartAccountAddress, protocol)
+      calls.push(buildErc4626Withdrawal(contracts.SILO_GAMI_USDC_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+    } else if (protocol === "folks" && contracts.FOLKS_SPOKE_COMMON) {
+      const folks = resolveFolksRoutingData(withdrawal, contracts, smartAccountAddress)
+      let withdrawAmountRaw = 0n
+      if (amountUSDC === "MAX") {
+        withdrawAmountRaw = await readFolksUnderlyingBalance(execPublicClient, contracts, smartAccountAddress)
+        if (withdrawAmountRaw <= 0n && fallbackAmountUSDC != null) {
+          withdrawAmountRaw = parseUnits(String(fallbackAmountUSDC), 6)
+        }
+      } else {
+        withdrawAmountRaw = parseUnits(String(amountUSDC), 6)
+      }
+      if (withdrawAmountRaw > 0n) {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_COMMON,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_COMMON_ABI,
+            functionName: "withdraw",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanId,
+              folks.poolId,
+              folks.chainId,
+              withdrawAmountRaw,
+              false,
+            ],
+          }),
+        })
+      }
     }
   }
 
@@ -1167,7 +1517,8 @@ export async function executeRebalance({
     }
   }
 
-  for (const { protocol, amountUSDC } of deposits) {
+  for (const depositEntry of deposits) {
+    const { protocol, amountUSDC } = depositEntry
     const amount = parseUnits(String(amountUSDC), 6)
     if (protocol === "aave_v3" || protocol === "aave") {
       calls.push({
@@ -1225,6 +1576,90 @@ export async function executeRebalance({
           args: [amount, smartAccountAddress],
         }),
       })
+    } else if (protocol === "silo_gami_usdc" && contracts.SILO_GAMI_USDC_VAULT) {
+      calls.push({
+        to: contracts.SILO_GAMI_USDC_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "folks" && contracts.FOLKS_SPOKE_USDC && contracts.FOLKS_SPOKE_COMMON) {
+      const folks = resolveFolksRoutingData(depositEntry, contracts, smartAccountAddress)
+      const mode = await resolveFolksDepositMode(
+        execPublicClient,
+        contracts,
+        smartAccountAddress,
+        depositEntry.folksMode,
+        folks,
+      )
+
+      if (mode === "create") {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_COMMON,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_COMMON_ABI,
+            functionName: "createAccount",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.accountNonce,
+              FOLKS_ZERO_BYTES32,
+            ],
+          }),
+        })
+        calls.push({
+          to: contracts.FOLKS_SPOKE_USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_USDC_ABI,
+            functionName: "createLoanAndDeposit",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanNonce,
+              amount,
+              folks.loanTypeId,
+              FOLKS_DEFAULT_LOAN_NAME,
+            ],
+          }),
+        })
+      } else if (mode === "create_loan") {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_USDC_ABI,
+            functionName: "createLoanAndDeposit",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanNonce,
+              amount,
+              folks.loanTypeId,
+              FOLKS_DEFAULT_LOAN_NAME,
+            ],
+          }),
+        })
+      } else {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_USDC_ABI,
+            functionName: "deposit",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanId,
+              amount,
+            ],
+          }),
+        })
+      }
     }
   }
 
@@ -1270,6 +1705,10 @@ export async function executeRebalance({
     "0xa0712d68": "mint(uint256)",
     "0xdb006a75": "benqiRedeem(uint256)",
     "0x87517c45": "permit2Approve(address,address,uint160,uint48)",
+    "0x8557c1a8": "folksCreateAccount((uint16,uint16,uint256,uint256,uint256),bytes32,bytes4,bytes32)",
+    "0x65cf003c": "folksWithdraw((uint16,uint16,uint256,uint256,uint256),bytes32,bytes32,uint8,uint16,uint256,bool)",
+    "0x5fd60a5b": "folksCreateLoanAndDeposit((uint16,uint16,uint256,uint256,uint256),bytes32,bytes4,uint256,uint16,bytes32)",
+    "0x5eabd9c7": "folksDeposit((uint16,uint16,uint256,uint256,uint256),bytes32,bytes32,uint256)",
   }
   const callDetails = calls.map((c, i) => ({
     index: i,
@@ -2154,6 +2593,52 @@ export async function executeWithdrawal({
         args: [siloSusdpShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     })
+  }
+
+  const siloGamiShareBalance = BigInt(balances?.siloGamiShareBalance || "0")
+  if (
+    contracts.SILO_GAMI_USDC_VAULT &&
+    contracts.SILO_GAMI_USDC_VAULT !== "0x0000000000000000000000000000000000000000" &&
+    siloGamiShareBalance > 0n
+  ) {
+    calls.push({
+      to: contracts.SILO_GAMI_USDC_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI,
+        functionName: "redeem",
+        args: [siloGamiShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    })
+  }
+
+  const folksShareBalance = BigInt(balances?.folksShareBalance || "0")
+  if (
+    contracts.FOLKS_SPOKE_COMMON &&
+    contracts.FOLKS_SPOKE_COMMON !== "0x0000000000000000000000000000000000000000" &&
+    folksShareBalance > 0n
+  ) {
+    const folks = resolveFolksRoutingData(balances, contracts, smartAccountAddress)
+    const folksWithdrawRaw = await readFolksUnderlyingBalance(wdPublicClient, contracts, smartAccountAddress)
+    if (folksWithdrawRaw > 0n) {
+      calls.push({
+        to: contracts.FOLKS_SPOKE_COMMON,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: FOLKS_SPOKE_COMMON_ABI,
+          functionName: "withdraw",
+          args: [
+            buildFolksMessageParams(),
+            folks.accountId,
+            folks.loanId,
+            folks.poolId,
+            folks.chainId,
+            folksWithdrawRaw,
+            false,
+          ],
+        }),
+      })
+    }
   }
 
   const feeAmountRaw = BigInt(agentFeeAmount || "0")

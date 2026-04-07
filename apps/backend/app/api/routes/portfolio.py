@@ -33,6 +33,8 @@ _NAMES = {
     "spark": "Spark Savings",
     "silo_savusd_usdc": "Silo savUSD/USDC",
     "silo_susdp_usdc": "Silo sUSDp/USDC",
+    "silo_gami_usdc": "Silo V3 Gami USDC",
+    "folks": "Folks Finance xChain",
 }
 
 # ERC-20 balanceOf ABI
@@ -71,6 +73,8 @@ _principal_reconcile_cooldowns: dict[str, float] = {}
 def _canonical_protocol_id(protocol_id: str) -> str:
     if protocol_id == "aave":
         return "aave_v3"
+    if protocol_id in {"folks_finance_xchain", "folks_finance"}:
+        return "folks"
     return protocol_id
 
 

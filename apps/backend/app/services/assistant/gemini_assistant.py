@@ -16,8 +16,10 @@ logger = logging.getLogger("snowmind")
 
 _REPORT_FILENAME = "report.md"
 _RISK_PLAN_FILENAME = "riskscoreplan.md"
+_FOLKS_FILENAME = "folksfinance.md"
 _MAX_REPORT_CHARS = 12000
 _MAX_PLAN_CHARS = 8000
+_MAX_FOLKS_CHARS = 6000
 
 
 class AssistantKnowledgeBase:
@@ -38,6 +40,10 @@ class AssistantKnowledgeBase:
         if risk_plan:
             sources.append(_RISK_PLAN_FILENAME)
 
+        folks_finance = self._read_markdown(_FOLKS_FILENAME, max_chars=_MAX_FOLKS_CHARS)
+        if folks_finance:
+            sources.append(_FOLKS_FILENAME)
+
         context_parts: list[str] = [
             "SnowMind risk-scoring context (authoritative internal docs).",
             "Use this context before answering; do not invent protocol facts.",
@@ -52,6 +58,9 @@ class AssistantKnowledgeBase:
 
         if risk_plan:
             context_parts.extend(["", "riskscoreplan.md excerpt:", risk_plan])
+
+        if folks_finance:
+            context_parts.extend(["", "folksfinance.md excerpt:", folks_finance])
 
         return "\n".join(context_parts).strip(), sources
 

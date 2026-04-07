@@ -27,6 +27,9 @@ import {
   maxUint256,
   parseUnits,
   keccak256,
+  concat,
+  pad,
+  toHex,
   hashTypedData,
   recoverTypedDataAddress,
   recoverMessageAddress,
@@ -146,6 +149,75 @@ export const PERMIT2_APPROVE_ABI = [
   },
 ] as const
 
+const FOLKS_MESSAGE_PARAMS_COMPONENTS = [
+  { name: "adapterId", type: "uint16" },
+  { name: "returnAdapterId", type: "uint16" },
+  { name: "receiverValue", type: "uint256" },
+  { name: "gasLimit", type: "uint256" },
+  { name: "returnGasLimit", type: "uint256" },
+] as const
+
+export const FOLKS_SPOKE_COMMON_ABI = [
+  {
+    name: "createAccount", type: "function", stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "nonce", type: "bytes4" },
+      { name: "refAccountId", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "withdraw", type: "function", stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "loanId", type: "bytes32" },
+      { name: "poolId", type: "uint8" },
+      { name: "chainId", type: "uint16" },
+      { name: "amount", type: "uint256" },
+      { name: "isFAmount", type: "bool" },
+    ],
+    outputs: [],
+  },
+] as const
+
+export const FOLKS_SPOKE_USDC_ABI = [
+  {
+    name: "createLoanAndDeposit", type: "function", stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "nonce", type: "bytes4" },
+      { name: "amount", type: "uint256" },
+      { name: "loanTypeId", type: "uint16" },
+      { name: "loanName", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "deposit", type: "function", stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "loanId", type: "bytes32" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const
+
+const FOLKS_DEFAULT_MESSAGE_PARAMS = {
+  adapterId: 1,
+  returnAdapterId: 1,
+  receiverValue: 0n,
+  gasLimit: 0n,
+  returnGasLimit: 0n,
+} as const
+const FOLKS_ZERO_BYTES32 = `0x${"00".repeat(32)}` as `0x${string}`
+const FOLKS_DEFAULT_LOAN_NAME = pad(toHex("snowmind-usdc"), { size: 32 }) as `0x${string}`
+
 // SnowMindRegistry ABI — logRebalance (on-chain audit trail for rebalance ops)
 const REGISTRY_ABI = [
   {
@@ -245,6 +317,52 @@ function generatePerGrantGasNonce(): bigint {
     // no-op
   }
   return BigInt(Date.now())
+}
+
+function parsePositiveInt(rawValue: unknown, fallback: number): number {
+  const parsed = Number(rawValue)
+  if (!Number.isFinite(parsed)) return fallback
+  const rounded = Math.trunc(parsed)
+  return rounded >= 0 ? rounded : fallback
+}
+
+function normalizeFolksNonce(rawValue: unknown, fallback: number): `0x${string}` {
+  if (typeof rawValue === "string" && rawValue.trim().toLowerCase().startsWith("0x")) {
+    return pad(rawValue.trim() as `0x${string}`, { size: 4 }) as `0x${string}`
+  }
+  const parsed = parsePositiveInt(rawValue, fallback)
+  return pad(toHex(BigInt(parsed)), { size: 4 }) as `0x${string}`
+}
+
+function resolveFolksRoutingData(
+  contracts: {
+    FOLKS_HUB_CHAIN_ID: number
+    FOLKS_USDC_POOL_ID: number
+    FOLKS_USDC_LOAN_TYPE_ID: number
+    FOLKS_ACCOUNT_NONCE: number
+    FOLKS_LOAN_NONCE: number
+  },
+  smartAccountAddress: `0x${string}`,
+) {
+  const chainId = parsePositiveInt(contracts.FOLKS_HUB_CHAIN_ID, 100)
+  const poolId = parsePositiveInt(contracts.FOLKS_USDC_POOL_ID, 1)
+  const loanTypeId = parsePositiveInt(contracts.FOLKS_USDC_LOAN_TYPE_ID, 2)
+  const accountNonce = normalizeFolksNonce(contracts.FOLKS_ACCOUNT_NONCE, 1)
+  const loanNonce = normalizeFolksNonce(contracts.FOLKS_LOAN_NONCE, 1)
+
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 }) as `0x${string}`
+  const accountId = keccak256(concat([smartAccountAddress, chainIdBytes, accountNonce]))
+  const loanId = keccak256(concat([accountId, loanNonce]))
+
+  return {
+    accountId,
+    loanId,
+    accountNonce,
+    loanNonce,
+    chainId,
+    poolId,
+    loanTypeId,
+  }
 }
 
 // ── Wallet compatibility wrapper ──────────────────────────────────────────────
@@ -415,7 +533,7 @@ export async function createSmartAccount(walletClient: WalletClientLike | PrivyW
 
 export async function approveAllProtocols(
   kernelClient: KernelClientLike,
-  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}`; PERMIT2?: `0x${string}` },
+  contracts: { USDC: `0x${string}`; AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}`; SILO_GAMI_USDC_VAULT: `0x${string}`; FOLKS_SPOKE_USDC: `0x${string}`; PERMIT2?: `0x${string}` },
   maxAmountUSDC: number = 50_000,
 ): Promise<{ txHash: string; explorerUrl: string }> {
 
@@ -428,6 +546,8 @@ export async function approveAllProtocols(
     contracts.EULER_VAULT,
     contracts.SILO_SAVUSD_VAULT,
     contracts.SILO_SUSDP_VAULT,
+    contracts.SILO_GAMI_USDC_VAULT,
+    contracts.FOLKS_SPOKE_USDC,
     // Permit2: Euler V2 (EVK) pulls USDC via Permit2, not direct transferFrom
     ...(contracts.PERMIT2 ? [contracts.PERMIT2] : []),
   ]
@@ -462,6 +582,15 @@ export async function grantAndSerializeSessionKey(
     EULER_VAULT:  `0x${string}`
     SILO_SAVUSD_VAULT: `0x${string}`
     SILO_SUSDP_VAULT:  `0x${string}`
+    SILO_GAMI_USDC_VAULT: `0x${string}`
+    FOLKS_SPOKE_COMMON: `0x${string}`
+    FOLKS_SPOKE_USDC: `0x${string}`
+    FOLKS_USDC_HUB_POOL: `0x${string}`
+    FOLKS_HUB_CHAIN_ID: number
+    FOLKS_USDC_POOL_ID: number
+    FOLKS_USDC_LOAN_TYPE_ID: number
+    FOLKS_ACCOUNT_NONCE: number
+    FOLKS_LOAN_NONCE: number
     USDC:         `0x${string}`
     TREASURY:     `0x${string}`
     PERMIT2?:     `0x${string}`
@@ -533,6 +662,8 @@ export async function grantAndSerializeSessionKey(
             ...(contracts.PERMIT2 ? [contracts.PERMIT2] : []),
             contracts.SILO_SAVUSD_VAULT,
             contracts.SILO_SUSDP_VAULT,
+            contracts.SILO_GAMI_USDC_VAULT,
+            contracts.FOLKS_SPOKE_USDC,
           ].filter(addr => addr !== ZERO_ADDR) },
           null,   // amount — any (maxUint256 for efficiency)
         ],
@@ -718,6 +849,84 @@ export async function grantAndSerializeSessionKey(
         functionName: "withdraw",
         args: [null, null, null],
       },
+      // SILO V3 Gami USDC — deposit (ERC-4626)
+      {
+        target: contracts.SILO_GAMI_USDC_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,
+        ],
+      },
+
+      // SILO V3 Gami USDC — redeem (ERC-4626)
+      {
+        target: contracts.SILO_GAMI_USDC_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [null, null, null],
+      },
+
+      // SILO V3 Gami USDC — withdraw (ERC-4626)
+      {
+        target: contracts.SILO_GAMI_USDC_VAULT,
+        valueLimit: 0n,
+        abi: ERC4626_VAULT_ABI,
+        functionName: "withdraw",
+        args: [null, null, null],
+      },
+
+      // Folks SpokeCommon — create account
+      {
+        target: contracts.FOLKS_SPOKE_COMMON,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_COMMON_ABI,
+        functionName: "createAccount",
+        args: [null, null, null, null],
+      },
+
+      // Folks SpokeUSDC — create loan and deposit
+      {
+        target: contracts.FOLKS_SPOKE_USDC,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_USDC_ABI,
+        functionName: "createLoanAndDeposit",
+        args: [
+          null,
+          null,
+          null,
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+          null,
+          null,
+        ],
+      },
+
+      // Folks SpokeUSDC — deposit into an existing Folks loan
+      {
+        target: contracts.FOLKS_SPOKE_USDC,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_USDC_ABI,
+        functionName: "deposit",
+        args: [
+          null,
+          null,
+          null,
+          { condition: ParamCondition.LESS_THAN_OR_EQUAL, value: maxAmount },
+        ],
+      },
+
+      // Folks SpokeCommon — withdraw
+      {
+        target: contracts.FOLKS_SPOKE_COMMON,
+        valueLimit: 0n,
+        abi: FOLKS_SPOKE_COMMON_ABI,
+        functionName: "withdraw",
+        args: [null, null, null, null, null, null, null],
+      },
+
     // USDC.transfer — fee collection to treasury AND user withdrawal to EOA.
     // Consolidated into single rule with ONE_OF (CallPolicy requires unique target+selector).
     // NOTE: When both treasury and user EOA exist, amount is uncapped for both.
@@ -936,9 +1145,17 @@ export async function deployInitialViaPermissionAccount(
     EULER_VAULT: `0x${string}`
     SILO_SAVUSD_VAULT: `0x${string}`
     SILO_SUSDP_VAULT: `0x${string}`
+    SILO_GAMI_USDC_VAULT: `0x${string}`
+    FOLKS_SPOKE_COMMON: `0x${string}`
+    FOLKS_SPOKE_USDC: `0x${string}`
+    FOLKS_HUB_CHAIN_ID: number
+    FOLKS_USDC_POOL_ID: number
+    FOLKS_USDC_LOAN_TYPE_ID: number
+    FOLKS_ACCOUNT_NONCE: number
+    FOLKS_LOAN_NONCE: number
     USDC: `0x${string}`
   },
-  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc",
+  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc" | "silo_gami_usdc" | "folks",
   amountUsdc: string,
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const amount = parseUnits(amountUsdc, 6)
@@ -963,6 +1180,8 @@ export async function deployInitialViaPermissionAccount(
       : protocolId === "spark" ? contracts.SPARK_VAULT
       : protocolId === "silo_savusd_usdc" ? contracts.SILO_SAVUSD_VAULT
       : protocolId === "silo_susdp_usdc" ? contracts.SILO_SUSDP_VAULT
+      : protocolId === "silo_gami_usdc" ? contracts.SILO_GAMI_USDC_VAULT
+      : protocolId === "folks" ? contracts.FOLKS_SPOKE_USDC
       : contracts.EULER_VAULT
 
   calls.push({
@@ -1025,6 +1244,48 @@ export async function deployInitialViaPermissionAccount(
         args: [amount, smartAccountAddress],
       }),
     })
+  } else if (protocolId === "silo_gami_usdc") {
+    calls.push({
+      to: contracts.SILO_GAMI_USDC_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else if (protocolId === "folks") {
+    const folks = resolveFolksRoutingData(contracts, smartAccountAddress)
+    calls.push({
+      to: contracts.FOLKS_SPOKE_COMMON,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: FOLKS_SPOKE_COMMON_ABI,
+        functionName: "createAccount",
+        args: [
+          FOLKS_DEFAULT_MESSAGE_PARAMS,
+          folks.accountId,
+          folks.accountNonce,
+          FOLKS_ZERO_BYTES32,
+        ],
+      }),
+    })
+    calls.push({
+      to: contracts.FOLKS_SPOKE_USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: FOLKS_SPOKE_USDC_ABI,
+        functionName: "createLoanAndDeposit",
+        args: [
+          FOLKS_DEFAULT_MESSAGE_PARAMS,
+          folks.accountId,
+          folks.loanNonce,
+          amount,
+          folks.loanTypeId,
+          FOLKS_DEFAULT_LOAN_NAME,
+        ],
+      }),
+    })
   } else {
     calls.push({
       to: contracts.EULER_VAULT,
@@ -1053,9 +1314,17 @@ export async function deployInitialToProtocol(
     EULER_VAULT: `0x${string}`
     SILO_SAVUSD_VAULT: `0x${string}`
     SILO_SUSDP_VAULT: `0x${string}`
+    SILO_GAMI_USDC_VAULT: `0x${string}`
+    FOLKS_SPOKE_COMMON: `0x${string}`
+    FOLKS_SPOKE_USDC: `0x${string}`
+    FOLKS_HUB_CHAIN_ID: number
+    FOLKS_USDC_POOL_ID: number
+    FOLKS_USDC_LOAN_TYPE_ID: number
+    FOLKS_ACCOUNT_NONCE: number
+    FOLKS_LOAN_NONCE: number
     USDC: `0x${string}`
   },
-  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc",
+  protocolId: "aave_v3" | "benqi" | "spark" | "euler_v2" | "silo_savusd_usdc" | "silo_susdp_usdc" | "silo_gami_usdc" | "folks",
   amountUsdc: string,
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const amount = parseUnits(amountUsdc, 6)
@@ -1069,6 +1338,8 @@ export async function deployInitialToProtocol(
       : protocolId === "spark" ? contracts.SPARK_VAULT
       : protocolId === "silo_savusd_usdc" ? contracts.SILO_SAVUSD_VAULT
       : protocolId === "silo_susdp_usdc" ? contracts.SILO_SUSDP_VAULT
+      : protocolId === "silo_gami_usdc" ? contracts.SILO_GAMI_USDC_VAULT
+      : protocolId === "folks" ? contracts.FOLKS_SPOKE_USDC
       : contracts.EULER_VAULT
 
   calls.push({
@@ -1131,6 +1402,48 @@ export async function deployInitialToProtocol(
         args: [amount, smartAccountAddress],
       }),
     })
+  } else if (protocolId === "silo_gami_usdc") {
+    calls.push({
+      to: contracts.SILO_GAMI_USDC_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "deposit",
+        args: [amount, smartAccountAddress],
+      }),
+    })
+  } else if (protocolId === "folks") {
+    const folks = resolveFolksRoutingData(contracts, smartAccountAddress)
+    calls.push({
+      to: contracts.FOLKS_SPOKE_COMMON,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: FOLKS_SPOKE_COMMON_ABI,
+        functionName: "createAccount",
+        args: [
+          FOLKS_DEFAULT_MESSAGE_PARAMS,
+          folks.accountId,
+          folks.accountNonce,
+          FOLKS_ZERO_BYTES32,
+        ],
+      }),
+    })
+    calls.push({
+      to: contracts.FOLKS_SPOKE_USDC,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: FOLKS_SPOKE_USDC_ABI,
+        functionName: "createLoanAndDeposit",
+        args: [
+          FOLKS_DEFAULT_MESSAGE_PARAMS,
+          folks.accountId,
+          folks.loanNonce,
+          amount,
+          folks.loanTypeId,
+          FOLKS_DEFAULT_LOAN_NAME,
+        ],
+      }),
+    })
   } else {
     calls.push({
       to: contracts.EULER_VAULT,
@@ -1162,12 +1475,13 @@ export async function revokeSessionKey(
 export async function emergencyWithdrawAll(
   kernelClient: KernelClientLike,
   smartAccountAddress: `0x${string}`,
-  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}`; USDC: `0x${string}` },
+  contracts: { AAVE_POOL: `0x${string}`; BENQI_POOL: `0x${string}`; SPARK_VAULT: `0x${string}`; EULER_VAULT: `0x${string}`; SILO_SAVUSD_VAULT: `0x${string}`; SILO_SUSDP_VAULT: `0x${string}`; SILO_GAMI_USDC_VAULT: `0x${string}`; USDC: `0x${string}` },
   benqiQiTokenBalance: bigint,   // fetch this from on-chain before calling
   sparkShareBalance: bigint,     // ERC-4626 shares
   eulerShareBalance: bigint = 0n, // ERC-4626 shares
   siloSavusdShareBalance: bigint = 0n, // ERC-4626 shares
   siloSusdpShareBalance: bigint = 0n,  // ERC-4626 shares
+  siloGamiShareBalance: bigint = 0n,   // ERC-4626 shares
   aaveATokenBalance: bigint = 0n,      // Aave aUSDC balance — skip if 0
 ): Promise<{ txHash: string; explorerUrl: string }> {
   const calls = [
@@ -1229,6 +1543,16 @@ export async function emergencyWithdrawAll(
         abi: ERC4626_VAULT_ABI,
         functionName: "redeem",
         args: [siloSusdpShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    }] : []),
+    // Redeem all from Silo V3 Gami USDC vault (ERC-4626)
+    ...(siloGamiShareBalance > 0n && contracts.SILO_GAMI_USDC_VAULT !== '0x0000000000000000000000000000000000000000' ? [{
+      to: contracts.SILO_GAMI_USDC_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_VAULT_ABI,
+        functionName: "redeem",
+        args: [siloGamiShareBalance, smartAccountAddress, smartAccountAddress],
       }),
     }] : []),
   ]

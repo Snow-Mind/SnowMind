@@ -90,8 +90,19 @@ class Settings(BaseSettings):
     BENQI_QIUSDC: str = "0xB715808a78F6041E46d61Cb123C9B4A27056AE9C"
     SPARK_SPUSDC: str = "0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d"
     EULER_VAULT: str = "0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e"
-    SILO_SAVUSD_VAULT: str = "0x606fe9a70338e798a292CA22C1F28C829F24048E"  # bUSDC-142 (Silo1 from savUSD/USDC SiloConfig)
-    SILO_SUSDP_VAULT: str = "0x8ad697a333569ca6f04c8c063e9807747ef169c1"  # bUSDC-162 (Silo1 from sUSDp/USDC SiloConfig)
+    SILO_SAVUSD_VAULT: str = "0x606fe9a70338e798a292CA22C1F28C829F24048E"  # bUSDC-142 (Silo V2 savUSD/USDC)
+    SILO_SUSDP_VAULT: str = "0x8ad697a333569ca6f04c8c063e9807747ef169c1"  # bUSDC-162 (Silo V2 sUSDp/USDC)
+    SILO_GAMI_USDC_VAULT: str = "0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5"  # Silo V3 Gami USDC ERC-4626 vault
+    FOLKS_SPOKE_COMMON: str = "0xc03094C4690F3844EA17ef5272Bf6376e0CF2AC6"
+    FOLKS_SPOKE_USDC: str = "0xcD68014c002184707eaE7218516cB0762A44fDDF"
+    FOLKS_ACCOUNT_MANAGER: str = "0x12Db9758c4D9902334C523b94e436258EB54156f"
+    FOLKS_LOAN_MANAGER: str = "0xF4c542518320F09943C35Db6773b2f9FeB2F847e"
+    FOLKS_USDC_HUB_POOL: str = "0x88f15e36308ED060d8543DA8E2a5dA0810Efded2"
+    FOLKS_HUB_CHAIN_ID: int = 100
+    FOLKS_USDC_POOL_ID: int = 1
+    FOLKS_USDC_LOAN_TYPE_ID: int = 2
+    FOLKS_ACCOUNT_NONCE: int = 1
+    FOLKS_LOAN_NONCE: int = 1
     USDC_ADDRESS: str = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"  # Native USDC (6 decimals)
     PERMIT2: str = "0x000000000022D473030F116dDEE9F6B43aC78BA3"  # Uniswap Permit2 (Euler V2 deposits)
     ENTRYPOINT_V07: str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
@@ -133,11 +144,11 @@ class Settings(BaseSettings):
 
     # ── Optimizer Thresholds ─────────────────────────────────
     # All thresholds from ARCHITECTURE.md — change in ONE place only.
-    TVL_CAP_PCT: float = 0.075           # Max 7.5% of Aave/Benqi pool TVL (Spark: no cap)
+    TVL_CAP_PCT: float = 0.075           # Max 7.5% of available liquidity for non-Spark protocols
     BEAT_MARGIN: float = 0.0001          # 0.01% — skip rebalance if improvement below this
     MIN_BALANCE_USD: float = 0.0         # Skip rebalance only when total balance <= $0
-    MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (Aave/Benqi only)
-    VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (Aave/Benqi only)
+    MAX_APY_SANITY_BOUND: float = 0.25   # 25% — reject any APY above this (non-Spark protocols)
+    VELOCITY_THRESHOLD: float = 0.25     # 25% — APY change rate threshold (non-Spark protocols)
     UTILIZATION_THRESHOLD: float = 0.90  # 90% — exclude from new deposits
     EXPLOIT_APY_MULTIPLIER: float = 2.0  # Deprecated: retained for env compatibility (utilization-only stress trigger is active)
     UTILIZATION_POLL_INTERVAL: int = 30  # seconds between real-time utilization polls

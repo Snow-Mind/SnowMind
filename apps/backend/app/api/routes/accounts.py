@@ -45,11 +45,19 @@ _DEFAULT_ALLOWED_PROTOCOLS = [
     "silo_susdp_usdc",
 ]
 
+_SUPPORTED_ALLOWED_PROTOCOLS = [
+    *_DEFAULT_ALLOWED_PROTOCOLS,
+    "silo_gami_usdc",
+    "folks",
+]
+
 
 def _canonical_protocol_id(raw_protocol_id: str) -> str:
     pid = str(raw_protocol_id).strip().lower()
     if pid == "aave":
         return "aave_v3"
+    if pid in {"folks_finance_xchain", "folks_finance"}:
+        return "folks"
     return pid
 
 
@@ -64,7 +72,7 @@ def _normalize_allowed_protocols(protocols: list[str] | None) -> list[str]:
         pid = _canonical_protocol_id(raw)
         if not pid:
             continue
-        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+        if pid not in _SUPPORTED_ALLOWED_PROTOCOLS:
             continue
         if pid in seen:
             continue
@@ -94,7 +102,7 @@ def _normalize_allocation_caps(
     normalized: dict[str, int] = {}
     for raw_pid, raw_value in caps.items():
         pid = _canonical_protocol_id(str(raw_pid))
-        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+        if pid not in _SUPPORTED_ALLOWED_PROTOCOLS:
             if strict:
                 raise ValueError(f"Invalid protocol in allocationCaps: {raw_pid}")
             continue
@@ -128,7 +136,7 @@ def _normalize_allocation_caps(
 
 
 def _resolve_scope_protocols(protocols: list[str] | None) -> list[str]:
-    """Return a normalized protocol scope, defaulting to all supported markets."""
+    """Return a normalized protocol scope, defaulting to onboarding-safe markets."""
     normalized = _normalize_allowed_protocols(protocols)
     if normalized:
         return normalized
@@ -284,7 +292,7 @@ def _find_excluded_funded_protocols(
         pid = _canonical_protocol_id(str(row.get("protocol_id") or ""))
         if not pid:
             continue
-        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+        if pid not in _SUPPORTED_ALLOWED_PROTOCOLS:
             continue
 
         try:
@@ -324,7 +332,7 @@ async def _find_excluded_funded_protocols_onchain(
         return protocol_id if balance_usdc > threshold else None
 
     candidates = [
-        pid for pid in _DEFAULT_ALLOWED_PROTOCOLS
+        pid for pid in _SUPPORTED_ALLOWED_PROTOCOLS
         if pid not in allowed_set
     ]
     if not candidates:

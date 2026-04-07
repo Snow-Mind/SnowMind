@@ -26,6 +26,8 @@ _PROTOCOL_HEADING_HINTS: dict[str, tuple[str, ...]] = {
     "euler_v2": ("euler", "9summits"),
     "silo_savusd_usdc": ("silo", "savusd/usdc"),
     "silo_susdp_usdc": ("silo", "susdp/usdc"),
+    "silo_gami_usdc": ("silo v3", "gami", "usdc vault"),
+    "folks": ("folks finance", "xchain"),
 }
 
 
@@ -53,6 +55,8 @@ class RiskReportExplainer:
     def get_context(self, protocol_id: str) -> RiskReportContext:
         """Return framework + protocol sections for the requested protocol."""
         normalized = (protocol_id or "").strip().lower()
+        if normalized in {"folks_finance_xchain", "folks_finance"}:
+            normalized = "folks"
         self._refresh_if_needed()
 
         with self._lock:
