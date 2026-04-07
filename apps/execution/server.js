@@ -7,7 +7,7 @@ import { executeRebalance, executeWithdrawal } from "./execute.js"
 
 const VERSION = "1.5.1"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
-const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 60000)
+const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 120000)
 const MAX_CONCURRENT_OPS = Number(process.env.MAX_CONCURRENT_OPS || 2)
 const NONCE_STORE_MODE = String(process.env.NONCE_STORE_MODE || "memory").toLowerCase()
 const NONCE_STORE_STRICT = String(process.env.NONCE_STORE_STRICT || "false").toLowerCase() === "true"

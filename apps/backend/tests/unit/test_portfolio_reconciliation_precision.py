@@ -14,6 +14,77 @@ def test_should_refresh_amount_tracks_small_yield_deltas() -> None:
     assert not portfolio._should_refresh_amount(Decimal("50.000000"), Decimal("50.0000004"))
 
 
+class _IdleReadCall:
+    def __init__(self, value=None, error: Exception | None = None):
+        self._value = value
+        self._error = error
+
+    async def call(self):
+        if self._error is not None:
+            raise self._error
+        return self._value
+
+
+class _IdleReadFunctions:
+    def __init__(self, value=None, error: Exception | None = None):
+        self._value = value
+        self._error = error
+
+    def balanceOf(self, _address):
+        return _IdleReadCall(value=self._value, error=self._error)
+
+
+class _IdleReadContract:
+    def __init__(self, value=None, error: Exception | None = None):
+        self.functions = _IdleReadFunctions(value=value, error=error)
+
+
+class _IdleReadEth:
+    def __init__(self, value=None, error: Exception | None = None):
+        self._value = value
+        self._error = error
+
+    def contract(self, **_kwargs):
+        return _IdleReadContract(value=self._value, error=self._error)
+
+
+class _IdleReadW3:
+    def __init__(self, value=None, error: Exception | None = None):
+        self.eth = _IdleReadEth(value=value, error=error)
+
+    @staticmethod
+    def to_checksum_address(address: str) -> str:
+        return address
+
+
+@pytest.mark.asyncio
+async def test_get_idle_usdc_returns_none_after_retries() -> None:
+    settings = MagicMock()
+    settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio.get_shared_async_web3",
+        return_value=_IdleReadW3(error=RuntimeError("rpc unavailable")),
+    ):
+        result = await portfolio._get_idle_usdc("0xabc")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_idle_usdc_reads_onchain_balance_when_available() -> None:
+    settings = MagicMock()
+    settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio.get_shared_async_web3",
+        return_value=_IdleReadW3(value=1_500_000),
+    ):
+        result = await portfolio._get_idle_usdc("0xabc")
+
+    assert result == Decimal("1.5")
+
+
 @pytest.mark.asyncio
 async def test_get_protocol_balance_returns_none_after_rate_limit_retries() -> None:
     """Protocol balance reads should fail-safe (None) after retrying 429 errors."""

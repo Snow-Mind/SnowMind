@@ -103,6 +103,15 @@ def _portfolio_cache_put(cache_key: str, response: PortfolioResponse, ttl_second
     )
 
 
+def _portfolio_cache_peek(cache_key: str) -> PortfolioResponse | None:
+    """Return cached payload regardless of expiry for failure fallback."""
+    cached = _portfolio_cache.get(cache_key)
+    if not cached:
+        return None
+    _expires_at, payload = cached
+    return PortfolioResponse.model_validate(payload)
+
+
 def _topic_to_address(topic_hex: str) -> str:
     normalized = topic_hex.lower().replace("0x", "")
     return f"0x{normalized[-40:]}"
@@ -646,7 +655,7 @@ async def _reconcile_principal_tracking_from_chain(
         return None
 
 
-async def _get_idle_usdc(address: str) -> Decimal:
+async def _get_idle_usdc(address: str) -> Decimal | None:
     """Read the on-chain USDC balance sitting idle in the smart account.
 
     Retries on both 429 (rate-limit) and -32603 (RPC internal error).
@@ -674,12 +683,17 @@ async def _get_idle_usdc(address: str) -> Decimal:
                 elif "-32603" in err_str or "Internal error" in err_str:
                     await asyncio.sleep(0.5 * (2 ** attempt))
                 else:
-                    logger.warning("Failed to read idle USDC for %s: %s", address, exc)
-                    return Decimal("0")
+                    logger.warning(
+                        "Idle USDC read attempt %d/3 failed for %s: %s",
+                        attempt + 1,
+                        address,
+                        exc,
+                    )
+                    await asyncio.sleep(0.25 * (2 ** attempt))
                 continue
             logger.warning("Failed to read idle USDC for %s after %d attempts: %s", address, attempt + 1, exc)
-            return Decimal("0")
-    return Decimal("0")
+            return None
+    return None
 
 
 async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | None:
@@ -756,19 +770,20 @@ async def get_portfolio(
     )
     if not acct.data:
         idle_usdc = await _get_idle_usdc(address)
+        effective_idle_usdc = idle_usdc if idle_usdc is not None else Decimal("0")
         allocations: list[AllocationResponse] = []
-        if idle_usdc > Decimal("0.01"):
+        if effective_idle_usdc > Decimal("0.01"):
             allocations.append(
                 AllocationResponse(
                     protocol_id="idle",
                     name="Idle USDC (Wallet)",
-                    amount_usdc=idle_usdc,
+                    amount_usdc=effective_idle_usdc,
                     allocation_pct=Decimal("1"),
                     current_apy=Decimal("0"),
                 )
             )
         return PortfolioResponse(
-            total_deposited_usd=idle_usdc,
+            total_deposited_usd=effective_idle_usdc,
             total_yield_usd=Decimal("0"),
             allocations=allocations,
             last_rebalance_at=None,
@@ -780,6 +795,7 @@ async def get_portfolio(
 
     cache_ttl = max(0, int(get_settings().PORTFOLIO_CACHE_TTL_SECONDS))
     cache_key = f"{str(account_id)}:{address.lower()}"
+    stale_cached_response = _portfolio_cache_peek(cache_key)
     cached_response = _portfolio_cache_get(cache_key)
     if cached_response is not None:
         return cached_response
@@ -812,6 +828,7 @@ async def get_portfolio(
     allocations: list[AllocationResponse] = []
     total_current_value = Decimal(0)
     db_protocol_ids: set[str] = set()
+    db_idle_amount = Decimal("0")
     for row in allocs.data or []:
         raw_protocol_id = str(row.get("protocol_id") or "")
         if not raw_protocol_id:
@@ -820,6 +837,10 @@ async def get_portfolio(
         protocol_id = _canonical_protocol_id(raw_protocol_id)
         amt = Decimal(str(row.get("amount_usdc") or 0))
         if amt <= Decimal("0"):
+            continue
+
+        if protocol_id == "idle":
+            db_idle_amount += amt
             continue
 
         total_current_value += amt
@@ -863,6 +884,37 @@ async def get_portfolio(
     onchain_balances = dict(zip(protocol_ids, balance_results[:len(protocol_ids)]))
     idle_usdc = balance_results[len(protocol_ids)]
     live_apys = balance_results[len(protocol_ids) + 1]
+
+    if idle_usdc is None and all(onchain_balances.get(pid) is None for pid in protocol_ids):
+        if stale_cached_response is not None:
+            logger.warning(
+                "Portfolio reads failed for %s — serving stale cached snapshot",
+                address,
+            )
+            return stale_cached_response
+
+    effective_idle_usdc = idle_usdc
+    if effective_idle_usdc is None:
+        if db_idle_amount > _PROTOCOL_BALANCE_DUST_USDC:
+            effective_idle_usdc = db_idle_amount
+            logger.warning(
+                "Idle USDC read failed for %s — using DB fallback amount %s",
+                address,
+                db_idle_amount,
+            )
+        else:
+            cached_idle = Decimal("0")
+            if stale_cached_response is not None:
+                for alloc in stale_cached_response.allocations:
+                    if alloc.protocol_id == "idle":
+                        cached_idle = Decimal(str(alloc.amount_usdc))
+                        break
+            effective_idle_usdc = cached_idle
+            logger.warning(
+                "Idle USDC read failed for %s — using cached fallback amount %s",
+                address,
+                cached_idle,
+            )
 
     # Reconcile DB allocations against on-chain reality:
     #   - If on-chain > 0 and DB differs significantly → use on-chain
@@ -908,13 +960,13 @@ async def get_portfolio(
             alloc.current_apy = apy
 
     # Add idle USDC if present
-    if idle_usdc > Decimal("0.01"):
-        total_current_value += idle_usdc
+    if effective_idle_usdc > Decimal("0.01"):
+        total_current_value += effective_idle_usdc
         allocations.append(
             AllocationResponse(
                 protocol_id="idle",
                 name="Idle USDC (Wallet)",
-                amount_usdc=idle_usdc,
+                amount_usdc=effective_idle_usdc,
                 allocation_pct=Decimal("0"),
                 current_apy=Decimal("0"),
             )

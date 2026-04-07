@@ -406,6 +406,135 @@ const PERMIT2_ABI = [
   },
 ]
 
+const USDC_BASE_UNITS = 1_000_000n
+const DEPOSIT_ONLY_USDC_BUFFER_RAW = 1_000n // 0.001 USDC safety headroom
+const RECEIPT_WAIT_TIMEOUT_MS = Number(process.env.EXECUTION_RECEIPT_TIMEOUT_MS || 45_000)
+
+function formatUsdcRaw(rawAmount) {
+  const value = rawAmount >= 0n ? rawAmount : 0n
+  const whole = value / USDC_BASE_UNITS
+  const fraction = (value % USDC_BASE_UNITS).toString().padStart(6, "0")
+  return `${whole.toString()}.${fraction}`
+}
+
+async function waitForConfirmedSuccess(publicClient, txHash, smartAccountAddress, context) {
+  try {
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: txHash,
+      confirmations: 1,
+      timeout: RECEIPT_WAIT_TIMEOUT_MS,
+    })
+
+    const status = receipt?.status
+    console.log(JSON.stringify({
+      level: "info",
+      action: "tx_receipt_observed",
+      smartAccountAddress,
+      txHash,
+      context,
+      status,
+      blockNumber: receipt?.blockNumber?.toString?.() ?? null,
+      timestamp: new Date().toISOString(),
+    }))
+
+    if (status !== "success") {
+      throw new Error(`Transaction ${txHash} reverted on-chain (${context})`)
+    }
+  } catch (err) {
+    throw new Error(
+      `Transaction confirmation failed for ${txHash} (${context}): `
+      + `${err?.shortMessage || err?.message || "unknown"}`,
+    )
+  }
+}
+
+async function clampDepositOnlyAmountsToBalance({
+  publicClient,
+  contracts,
+  smartAccountAddress,
+  deposits,
+}) {
+  if (!Array.isArray(deposits) || deposits.length === 0) {
+    return []
+  }
+
+  const parsed = deposits
+    .map((entry) => {
+      const raw = parseUnits(String(entry.amountUSDC), 6)
+      return {
+        ...entry,
+        _amountRaw: raw,
+      }
+    })
+    .filter((entry) => entry._amountRaw > 0n)
+
+  if (parsed.length === 0) {
+    return []
+  }
+
+  const requestedRaw = parsed.reduce((sum, entry) => sum + entry._amountRaw, 0n)
+  const usdcBalanceRaw = await publicClient.readContract({
+    address: contracts.USDC,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [smartAccountAddress],
+  })
+
+  const safeAvailableRaw = usdcBalanceRaw > DEPOSIT_ONLY_USDC_BUFFER_RAW
+    ? usdcBalanceRaw - DEPOSIT_ONLY_USDC_BUFFER_RAW
+    : 0n
+
+  if (requestedRaw <= safeAvailableRaw) {
+    return parsed.map(({ _amountRaw, ...entry }) => ({
+      ...entry,
+      amountUSDC: formatUsdcRaw(_amountRaw),
+    }))
+  }
+
+  if (safeAvailableRaw <= 0n) {
+    throw new Error("Insufficient idle USDC for deposit-only rebalance")
+  }
+
+  const scaled = parsed.map((entry) => ({
+    ...entry,
+    _amountRaw: (entry._amountRaw * safeAvailableRaw) / requestedRaw,
+  }))
+
+  let scaledTotal = scaled.reduce((sum, entry) => sum + entry._amountRaw, 0n)
+  const largestIndex = scaled.reduce(
+    (bestIndex, entry, index, arr) => (
+      arr[bestIndex]._amountRaw >= entry._amountRaw ? bestIndex : index
+    ),
+    0,
+  )
+
+  if (scaledTotal < safeAvailableRaw) {
+    const remainder = safeAvailableRaw - scaledTotal
+    scaled[largestIndex]._amountRaw += remainder
+    scaledTotal += remainder
+  }
+
+  const clamped = scaled
+    .filter((entry) => entry._amountRaw > 0n)
+    .map(({ _amountRaw, ...entry }) => ({
+      ...entry,
+      amountUSDC: formatUsdcRaw(_amountRaw),
+    }))
+
+  console.log(JSON.stringify({
+    level: "warn",
+    action: "deposit_only_amounts_clamped",
+    smartAccountAddress,
+    requestedRaw: requestedRaw.toString(),
+    availableRaw: usdcBalanceRaw.toString(),
+    safeAvailableRaw: safeAvailableRaw.toString(),
+    clampedRaw: scaledTotal.toString(),
+    timestamp: new Date().toISOString(),
+  }))
+
+  return clamped
+}
+
 function formatExecutionError(err) {
   const message = err?.shortMessage || err?.message || "Unknown execution error"
   const details = err?.details ? ` | details=${err.details}` : ""
@@ -1450,10 +1579,24 @@ export async function executeRebalance({
   // The Registry can be called in a SEPARATE, non-critical transaction later
   // if on-chain audit logging is needed.
 
+  let effectiveDeposits = deposits
+  if ((!withdrawals || withdrawals.length === 0) && deposits.length > 0) {
+    effectiveDeposits = await clampDepositOnlyAmountsToBalance({
+      publicClient: execPublicClient,
+      contracts,
+      smartAccountAddress,
+      deposits,
+    })
+
+    if (effectiveDeposits.length === 0) {
+      throw new Error("No executable deposits after balance clamp")
+    }
+  }
+
   // Approve exact amounts per protocol — never use infinite approvals.
   // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
   const depositAmountsPerProtocol = new Map()
-  for (const { protocol, amountUSDC } of deposits) {
+  for (const { protocol, amountUSDC } of effectiveDeposits) {
     const prev = depositAmountsPerProtocol.get(protocol) || 0n
     depositAmountsPerProtocol.set(protocol, prev + parseUnits(String(amountUSDC), 6))
   }
@@ -1517,7 +1660,7 @@ export async function executeRebalance({
     }
   }
 
-  for (const depositEntry of deposits) {
+  for (const depositEntry of effectiveDeposits) {
     const { protocol, amountUSDC } = depositEntry
     const amount = parseUnits(String(amountUSDC), 6)
     if (protocol === "aave_v3" || protocol === "aave") {
@@ -2121,6 +2264,12 @@ export async function executeRebalance({
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
+    await waitForConfirmedSuccess(
+      execPublicClient,
+      txHash,
+      smartAccountAddress,
+      useEnableModeFirst ? "primary_enable_mode" : "primary_regular_mode",
+    )
 
     // If enable mode was used (first-ever execution), the permission is now
     // registered on-chain. Log success so we know future attempts can skip enable.
@@ -2210,12 +2359,18 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: retryClient } = await getKernelClient(
+        const { client: retryClient, publicClient: retryPublicClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
           { withPaymaster: true, forceRegularMode: retryForceRegular },
         )
         const retryTxHash = await retryClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          retryPublicClient,
+          retryTxHash,
+          smartAccountAddress,
+          `permission_mode_retry_${retryForceRegular ? "regular" : "enable"}`,
+        )
         console.log(JSON.stringify({
           level: "info", action: "permission_mode_retry_succeeded",
           smartAccountAddress, txHash: retryTxHash,
@@ -2365,12 +2520,18 @@ export async function executeRebalance({
           timestamp: new Date().toISOString(),
         }))
         try {
-          const { client: noPaymasterClient } = await getKernelClient(
+          const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(
             serializedPermission,
             sessionPrivateKey || "",
             { withPaymaster: false, forceRegularMode: noPaymasterForceRegular },
           )
           const noPaymasterTxHash = await noPaymasterClient.sendTransaction({ calls })
+          await waitForConfirmedSuccess(
+            noPaymasterPublicClient,
+            noPaymasterTxHash,
+            smartAccountAddress,
+            `no_paymaster_retry_${noPaymasterForceRegular ? "regular" : "enable"}`,
+          )
           console.log(JSON.stringify({
             level: "info", action: "no_paymaster_retry_succeeded",
             smartAccountAddress, txHash: noPaymasterTxHash,
@@ -2405,8 +2566,14 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "paymaster_error_retry",
+        )
         return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
       } catch (paymasterRetryErr) {
         throw new Error(
@@ -2424,8 +2591,14 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "validate_user_op_retry",
+        )
         return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
       } catch (retryErr) {
         // Both attempts failed — throw the ORIGINAL error with more context
@@ -2675,6 +2848,12 @@ export async function executeWithdrawal({
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
+    await waitForConfirmedSuccess(
+      wdPublicClient,
+      txHash,
+      smartAccountAddress,
+      wdUseEnableFirst ? "withdrawal_primary_enable_mode" : "withdrawal_primary_regular_mode",
+    )
     return {
       txHash,
       explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
@@ -2718,12 +2897,18 @@ export async function executeWithdrawal({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: retryClient } = await getKernelClient(
+        const { client: retryClient, publicClient: retryPublicClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
           { withPaymaster: true, forceRegularMode: wdRetryForceRegular },
         )
         const retryTxHash = await retryClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          retryPublicClient,
+          retryTxHash,
+          smartAccountAddress,
+          `withdrawal_permission_mode_retry_${wdRetryForceRegular ? "regular" : "enable"}`,
+        )
         return {
           txHash: retryTxHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
@@ -2752,8 +2937,14 @@ export async function executeWithdrawal({
     }
     if (isLikelyPaymasterError(err)) {
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "withdrawal_paymaster_error_retry",
+        )
         return {
           txHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
@@ -2769,8 +2960,14 @@ export async function executeWithdrawal({
     }
     if (isValidateUserOpRevert(err)) {
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "withdrawal_validate_user_op_retry",
+        )
         return {
           txHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,

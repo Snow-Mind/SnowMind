@@ -1375,7 +1375,7 @@ class Rebalancer:
                 balance_wei = await adapter.get_balance(smart_account_address)
                 # Convert to USD (USDC = 6 decimals)
                 balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
-                if abs(balance_usd - current[pid]) > Decimal("1"):
+                if abs(balance_usd - current[pid]) > Decimal("0.000001"):
                     logger.warning(
                         "Balance mismatch for %s/%s: DB=%s, on-chain=%s â€” using on-chain",
                         smart_account_address, pid, current[pid], balance_usd,

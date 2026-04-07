@@ -7,9 +7,11 @@ import { toast } from "sonner"
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const REALTIME_ENABLED =
+  String(process.env.NEXT_PUBLIC_ENABLE_SUPABASE_REALTIME ?? "false").toLowerCase() === "true"
 
 let supabase: SupabaseClient | null = null
-if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+if (REALTIME_ENABLED && SUPABASE_URL && SUPABASE_ANON_KEY) {
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     realtime: {
       params: { eventsPerSecond: 2 },
