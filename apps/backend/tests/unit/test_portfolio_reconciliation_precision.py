@@ -50,6 +50,14 @@ def test_should_not_normalize_idle_only_principal_when_not_overcounted() -> None
     )
 
 
+def test_normalize_yield_dust_suppresses_micro_negative() -> None:
+    assert portfolio._normalize_yield_dust(Decimal("-0.000002")) == Decimal("0")
+
+
+def test_normalize_yield_dust_keeps_real_values() -> None:
+    assert portfolio._normalize_yield_dust(Decimal("-0.0002")) == Decimal("-0.0002")
+
+
 @pytest.mark.asyncio
 async def test_get_protocol_balance_returns_none_after_rate_limit_retries() -> None:
     """Protocol balance reads should fail-safe (None) after retrying 429 errors."""

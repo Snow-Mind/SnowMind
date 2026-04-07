@@ -57,6 +57,7 @@ _PRINCIPAL_RECONCILE_MAX_TX = 5000
 _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
 _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 _PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
+_YIELD_DUST_EPSILON_USD = Decimal("0.00001")
 _SNOWTRACE_PAGE_SIZE = 1000
 _SNOWTRACE_MAX_PAGES = 20
 _SNOWTRACE_TIMEOUT_SECONDS = 20.0
@@ -100,6 +101,13 @@ def _should_normalize_idle_only_principal(
         return False
 
     return (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
+
+
+def _normalize_yield_dust(total_yield: Decimal) -> Decimal:
+    """Suppress microscopic +/- yield drift caused by cross-source precision noise."""
+    if abs(total_yield) <= _YIELD_DUST_EPSILON_USD:
+        return Decimal("0")
+    return total_yield
 
 
 def _portfolio_cache_get(cache_key: str) -> PortfolioResponse | None:
@@ -1045,7 +1053,7 @@ async def get_portfolio(
         # No deployed positions means any PnL shown here is usually ledger drift, not real yield.
         net_principal = total_current_value
 
-    total_yield = total_current_value - net_principal
+    total_yield = _normalize_yield_dust(total_current_value - net_principal)
 
     response = PortfolioResponse(
         total_deposited_usd=net_principal,

@@ -31,7 +31,8 @@ import type { Portfolio } from "@snowmind/shared-types";
 
 function deriveOverviewStats(p: Portfolio) {
   const totalDep = Number(p.totalDepositedUsd);
-  const totalYld = Number(p.totalYieldUsd);
+  const rawTotalYld = Number(p.totalYieldUsd);
+  const totalYld = Math.abs(rawTotalYld) <= 0.00001 ? 0 : rawTotalYld;
   const blendedApy =
     p.allocations.reduce((s, a) => s + a.currentApy * a.allocationPct, 0) * 100;
 
