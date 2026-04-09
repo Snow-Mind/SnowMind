@@ -193,6 +193,13 @@ class SnowMindScheduler:
         finally:
             await self._release_lock()
 
+    def _record_healthy_tick(self) -> None:
+        """Record a successful scheduler cycle heartbeat for watchdog checks."""
+        try:
+            scheduler_watchdog.record_tick()
+        except Exception as exc:
+            logger.warning("Watchdog heartbeat update failed: %s", exc)
+
     async def _run_all_accounts(self) -> None:
         self.last_run = datetime.now(timezone.utc)
 
@@ -220,6 +227,7 @@ class SnowMindScheduler:
                 "errors": 0,
                 "no_session_key": 0,
             }
+            self._record_healthy_tick()
             return
 
         active_keys = (
@@ -256,6 +264,7 @@ class SnowMindScheduler:
                 "errors": 0,
                 "no_session_key": skipped_no_key,
             }
+            self._record_healthy_tick()
             return
 
         now = datetime.now(timezone.utc)
@@ -302,6 +311,7 @@ class SnowMindScheduler:
                 "no_session_key": skipped_no_key,
                 "cadence_deferred": cadence_deferred,
             }
+            self._record_healthy_tick()
             return
 
         logger.info(
@@ -337,7 +347,7 @@ class SnowMindScheduler:
         logger.info("Scheduler tick done — %s", stats)
 
         # ── Record healthy tick for watchdog ─────────────────────────
-        scheduler_watchdog.record_tick()
+        self._record_healthy_tick()
 
     def _get_account_net_principal(self, account_id: str) -> Decimal:
         """Return net deposited amount for cadence tiering.

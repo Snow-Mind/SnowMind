@@ -147,6 +147,84 @@ class TestAutoRebalanceExecution:
             )
             assert scheduler.last_run_stats["rebalanced"] == 1
             assert scheduler.last_run_stats["errors"] == 0
+            wd.record_tick.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_scheduler_no_active_accounts_records_watchdog_tick(self, rebalancer):
+        """No-op cycles with no active accounts should still heartbeat watchdog."""
+
+        rebalancer.check_and_rebalance = AsyncMock(return_value={"status": "executed"})
+
+        with patch("app.workers.scheduler.get_settings") as gs, \
+             patch("app.workers.scheduler.get_supabase") as gdb, \
+             patch("app.workers.scheduler.check_paymaster_balance", new_callable=AsyncMock) as cpm, \
+             patch("app.workers.scheduler.scheduler_watchdog") as wd:
+
+            gs.return_value = MagicMock(REBALANCE_CHECK_INTERVAL=360)
+            db = _make_db_mock()
+            gdb.return_value = db
+
+            cpm.return_value = Decimal("1.0")
+            wd.check = AsyncMock()
+            wd.record_tick = MagicMock()
+
+            scheduler = SnowMindScheduler.__new__(SnowMindScheduler)
+            scheduler.settings = gs.return_value
+            scheduler.db = db
+            scheduler.rebalancer = rebalancer
+            scheduler.instance = "test1234"
+            scheduler._active = asyncio.Event()
+            scheduler._active.set()
+
+            db.table("accounts").execute.return_value = MagicMock(data=[])
+
+            await scheduler._run_all_accounts()
+
+            rebalancer.check_and_rebalance.assert_not_called()
+            assert scheduler.last_run_stats["checked"] == 0
+            assert scheduler.last_run_stats["no_session_key"] == 0
+            wd.record_tick.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_scheduler_no_valid_session_keys_records_watchdog_tick(self, rebalancer):
+        """No-op cycles with only invalid keys should still heartbeat watchdog."""
+
+        account_id = str(uuid4())
+        address = "0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556"
+        rebalancer.check_and_rebalance = AsyncMock(return_value={"status": "executed"})
+
+        with patch("app.workers.scheduler.get_settings") as gs, \
+             patch("app.workers.scheduler.get_supabase") as gdb, \
+             patch("app.workers.scheduler.check_paymaster_balance", new_callable=AsyncMock) as cpm, \
+             patch("app.workers.scheduler.scheduler_watchdog") as wd:
+
+            gs.return_value = MagicMock(REBALANCE_CHECK_INTERVAL=360)
+            db = _make_db_mock()
+            gdb.return_value = db
+
+            cpm.return_value = Decimal("1.0")
+            wd.check = AsyncMock()
+            wd.record_tick = MagicMock()
+
+            scheduler = SnowMindScheduler.__new__(SnowMindScheduler)
+            scheduler.settings = gs.return_value
+            scheduler.db = db
+            scheduler.rebalancer = rebalancer
+            scheduler.instance = "test1234"
+            scheduler._active = asyncio.Event()
+            scheduler._active.set()
+
+            db.table("accounts").execute.return_value = MagicMock(data=[
+                {"id": account_id, "address": address},
+            ])
+            db.table("session_keys").execute.return_value = MagicMock(data=[])
+
+            await scheduler._run_all_accounts()
+
+            rebalancer.check_and_rebalance.assert_not_called()
+            assert scheduler.last_run_stats["checked"] == 0
+            assert scheduler.last_run_stats["no_session_key"] == 1
+            wd.record_tick.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_scheduler_defers_accounts_until_deposit_tier_interval(self, rebalancer):
@@ -210,6 +288,7 @@ class TestAutoRebalanceExecution:
             assert scheduler.last_run_stats["checked"] == 0
             assert scheduler.last_run_stats["skipped"] == 1
             assert scheduler.last_run_stats["cadence_deferred"] == 1
+            wd.record_tick.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_scheduler_retry_on_transient_error(self, rebalancer):
