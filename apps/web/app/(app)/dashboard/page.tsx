@@ -221,7 +221,6 @@ export default function DashboardPage() {
   const idleAllocationAmount = Number(
     portfolio?.allocations.find((a) => a.protocolId === "idle")?.amountUsdc ?? "0",
   );
-  const hasIdleAllocation = idleAllocationAmount > 0.01;
   const hasDeployableIdleBalance = idleAllocationAmount >= 1;
 
   const requiresRegrant = (() => {
@@ -253,7 +252,13 @@ export default function DashboardPage() {
     && !requiresRegrant
     && hasDeployableIdleBalance
     && !hasDeployInFlightStatus;
-  const isIdleOnlyDeployment = !isLoading && accountIsActive && !!stats && stats.activeProtocols === 0 && hasIdleAllocation && !requiresRegrant;
+  const isIdleOnlyDeployment =
+    !isLoading
+    && accountIsActive
+    && !!stats
+    && stats.activeProtocols === 0
+    && hasDeployableIdleBalance
+    && !requiresRegrant;
   const deploySkipReason = rebalanceStatus?.reasonDetail
     ?? rebalanceStatus?.lastLog?.skipReason
     ?? null;

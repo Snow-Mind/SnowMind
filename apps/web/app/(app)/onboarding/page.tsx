@@ -326,6 +326,57 @@ async function waitForTransferConfirmationWithFallback(params: {
   );
 }
 
+async function isSmartAccountDeployed(address: `0x${string}`): Promise<boolean> {
+  try {
+    const bytecode = await withRpcFallback(
+      "smart-account bytecode",
+      (client) => client.getBytecode({ address }),
+    );
+    return Boolean(bytecode && bytecode !== "0x");
+  } catch {
+    return false;
+  }
+}
+
+async function predeploySmartAccountForFunding(params: {
+  smartAccountAddress: `0x${string}`;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  kernelClient: any;
+}): Promise<boolean> {
+  const { smartAccountAddress, kernelClient } = params;
+
+  if (await isSmartAccountDeployed(smartAccountAddress)) {
+    return true;
+  }
+
+  const warmupCallData = encodeFunctionData({
+    abi: ERC20_ABI,
+    functionName: "approve",
+    args: [CONTRACTS.AAVE_POOL, 0n],
+  });
+
+  try {
+    await withRetry(
+      () => kernelClient.sendTransaction({
+        calls: [{ to: CONTRACTS.USDC, value: 0n, data: warmupCallData }],
+      }) as Promise<`0x${string}`>,
+      { maxRetries: 1, label: "smart-account predeploy" },
+    );
+  } catch {
+    return false;
+  }
+
+  const deadline = Date.now() + 45_000;
+  while (Date.now() < deadline) {
+    if (await isSmartAccountDeployed(smartAccountAddress)) {
+      return true;
+    }
+    await sleep(2_000);
+  }
+
+  return false;
+}
+
 export default function OnboardingPage() {
   const router = useRouter();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
@@ -825,6 +876,16 @@ export default function OnboardingPage() {
         transferRequirementSatisfied = true;
       }
 
+      if (shortfall > 0n && !regrantOnlyMode) {
+        const predeployed = await predeploySmartAccountForFunding({
+          smartAccountAddress: derivedAddr as `0x${string}`,
+          kernelClient,
+        });
+        if (!predeployed && process.env.NODE_ENV !== "production") {
+          console.debug("[Onboarding] Smart-account predeploy skipped; continuing with direct funding transfer.");
+        }
+      }
+
       if (shortfall > 0n) {
         const provider = await wallet.getEthereumProvider();
 
@@ -1244,6 +1305,26 @@ export default function OnboardingPage() {
 
   const stepIndex = steps.findIndex((s) => s.id === formStep);
   const isStrategyStep = formStep === "strategy";
+
+  const showOnboardingDecisionLoader =
+    ready
+    && authenticated
+    && !!smartAccountAddress
+    && !activating
+    && !activated
+    && !hasAuthError
+    && (onboardingPortfolioLoading || (!accountDetail && !accountDetailError));
+
+  if (showOnboardingDecisionLoader) {
+    return (
+      <div className="mx-auto flex min-h-[50vh] w-full max-w-lg items-center justify-center px-3 py-8 sm:px-0 sm:py-10">
+        <div className="flex items-center gap-3 rounded-xl border border-[#E8E2DA] bg-white px-4 py-3">
+          <Loader2 className="h-4 w-4 animate-spin text-[#E84142]" />
+          <span className="text-xs text-[#5C5550]">Loading your account state...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -2068,9 +2149,9 @@ export default function OnboardingPage() {
 
                   <div className="rounded-lg bg-[#FEF3C7] border border-[#F59E0B]/20 p-3">
                     <p className="text-[11px] text-[#92400E]">
-                      <span className="font-semibold">Wallet note:</span> Your wallet will ask you to sign a permission grant.
-                      Some wallets (e.g. Core) may show a &quot;Scam transaction&quot; warning — this is a false positive.
-                      It&apos;s safe to proceed. We only request limited, time-bound DeFi permissions for your account.
+                      <span className="font-semibold">Wallet safety check:</span> Confirm the transfer recipient matches your smart account address.
+                      First-time funding of a counterfactual smart account can be flagged as untrusted by wallet scanners until deployment completes.
+                      SnowMind only requests scoped protocol permissions for this account.
                     </p>
                   </div>
 

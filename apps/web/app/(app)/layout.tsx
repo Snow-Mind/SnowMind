@@ -188,6 +188,7 @@ export default function AppLayout({
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [addressResolutionGraceElapsed, setAddressResolutionGraceElapsed] = useState(false);
+  const [addressRecoveryFailed, setAddressRecoveryFailed] = useState(false);
   const recoveryInFlightRef = useRef(false);
   const appHostLoginKickoffRef = useRef(false);
   const appQueryClient = useQueryClient();
@@ -264,53 +265,105 @@ export default function AppLayout({
   // mobile in-app browsers), derive it from the connected wallet without
   // prompting signatures so returning users can stay on dashboard.
   useEffect(() => {
-    if (!clientReady || !ready || !authenticated || !activeWallet) return;
-    if (effectiveSmartAccountAddress) return;
+    if (!clientReady || !ready || !authenticated || !activeWallet || effectiveSmartAccountAddress) {
+      if (addressRecoveryFailed) {
+        const resetTimer = window.setTimeout(() => {
+          setAddressRecoveryFailed(false);
+        }, 0);
+        return () => {
+          window.clearTimeout(resetTimer);
+        };
+      }
+      return;
+    }
     if (recoveryInFlightRef.current) return;
 
+    let cancelled = false;
     recoveryInFlightRef.current = true;
     (async () => {
-      try {
-        const { smartAccountAddress } = await createSmartAccount(activeWallet);
-        setSmartAccountAddress(smartAccountAddress);
-      } catch {
-        // Ignore recovery failures and fall back to normal onboarding flow.
-      } finally {
-        recoveryInFlightRef.current = false;
+      let recovered = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const { smartAccountAddress } = await createSmartAccount(activeWallet);
+          if (cancelled) return;
+          setSmartAccountAddress(smartAccountAddress);
+          setAddressRecoveryFailed(false);
+          recovered = true;
+          break;
+        } catch {
+          if (attempt < 2) {
+            await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)));
+          }
+        }
       }
+
+      if (!cancelled && !recovered) {
+        setAddressRecoveryFailed(true);
+      }
+    })().finally(() => {
+      recoveryInFlightRef.current = false;
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     clientReady,
     ready,
     authenticated,
     activeWallet,
     effectiveSmartAccountAddress,
+    addressRecoveryFailed,
     setSmartAccountAddress,
+    setAddressRecoveryFailed,
   ]);
 
-  const awaitingAddressRecovery = clientReady && ready && authenticated && !!activeWallet && !effectiveSmartAccountAddress;
+  const awaitingAddressRecovery =
+    clientReady
+    && ready
+    && authenticated
+    && !!activeWallet
+    && !effectiveSmartAccountAddress
+    && !addressRecoveryFailed;
+  const awaitingWalletResolution =
+    clientReady
+    && ready
+    && authenticated
+    && !activeWallet
+    && !effectiveSmartAccountAddress;
 
   // Avoid premature onboarding redirects while wallet/account restoration settles.
   useEffect(() => {
     if (!ready || !authenticated) {
+      const resetTimer = window.setTimeout(() => {
+        setAddressResolutionGraceElapsed(false);
+      }, 0);
+      return () => {
+        window.clearTimeout(resetTimer);
+      };
+    }
+
+    if (effectiveSmartAccountAddress || addressRecoveryFailed) {
+      const doneTimer = window.setTimeout(() => {
+        setAddressResolutionGraceElapsed(true);
+      }, 0);
+      return () => {
+        window.clearTimeout(doneTimer);
+      };
+    }
+
+    const resetTimer = window.setTimeout(() => {
       setAddressResolutionGraceElapsed(false);
-      return;
-    }
-
-    if (effectiveSmartAccountAddress) {
-      setAddressResolutionGraceElapsed(true);
-      return;
-    }
-
-    setAddressResolutionGraceElapsed(false);
+    }, 0);
     const timer = window.setTimeout(() => {
       setAddressResolutionGraceElapsed(true);
-    }, 2500);
+    }, 4000);
 
     return () => {
+      window.clearTimeout(resetTimer);
       window.clearTimeout(timer);
     };
-  }, [ready, authenticated, effectiveSmartAccountAddress]);
+  }, [ready, authenticated, effectiveSmartAccountAddress, addressRecoveryFailed]);
 
   // Redirect to landing if not authenticated
   useEffect(() => {
@@ -338,12 +391,13 @@ export default function AppLayout({
   useEffect(() => {
     if (!clientReady) return;
     const storedAddr = usePortfolioStore.getState().smartAccountAddress;
+    if (!storedAddr && awaitingWalletResolution) return;
     if (!storedAddr && awaitingAddressRecovery) return;
     if (!storedAddr && !addressResolutionGraceElapsed) return;
     if (!storedAddr && pathname !== "/onboarding" && pathname !== "/settings") {
       router.replace("/onboarding");
     }
-  }, [clientReady, awaitingAddressRecovery, addressResolutionGraceElapsed, pathname, router]);
+  }, [clientReady, awaitingWalletResolution, awaitingAddressRecovery, addressResolutionGraceElapsed, pathname, router]);
 
   // Gate: redirect to onboarding if agent NOT active and accessing dashboard.
   // Wait for BOTH Zustand hydration AND real API data before deciding.
@@ -459,6 +513,7 @@ export default function AppLayout({
 
   const shouldShowRouteDecisionLoader =
     !clientReady
+    || awaitingWalletResolution
     || awaitingAddressRecovery
     || (!effectiveSmartAccountAddress && !addressResolutionGraceElapsed && pathname !== "/onboarding")
     || (
