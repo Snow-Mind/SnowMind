@@ -58,6 +58,35 @@ def test_normalize_yield_dust_keeps_real_values() -> None:
     assert portfolio._normalize_yield_dust(Decimal("-0.0002")) == Decimal("-0.0002")
 
 
+def test_payload_has_unsupported_protocol_detects_legacy_protocol() -> None:
+    assert portfolio._payload_has_unsupported_protocol({"folks": "1"})
+
+
+def test_payload_has_unsupported_protocol_ignores_supported_protocols() -> None:
+    assert not portfolio._payload_has_unsupported_protocol({"aave_v3": "1", "benqi": "2"})
+
+
+def test_has_unsupported_protocol_history_detects_recent_legacy_rows() -> None:
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.order.return_value = query
+    query.limit.return_value = query
+    query.execute.return_value = MagicMock(
+        data=[
+            {
+                "proposed_allocations": {"folks": "1"},
+                "executed_allocations": None,
+            }
+        ]
+    )
+
+    db = MagicMock()
+    db.table.return_value = query
+
+    assert portfolio._has_unsupported_protocol_history(db, "acct-1")
+
+
 @pytest.mark.asyncio
 async def test_get_protocol_balance_returns_none_after_rate_limit_retries() -> None:
     """Protocol balance reads should fail-safe (None) after retrying 429 errors."""
@@ -156,6 +185,63 @@ class _FakeDB:
         if name == "account_yield_tracking":
             return self.tracking_query
         raise AssertionError(f"Unexpected table: {name}")
+
+
+def _topic_from_address(address: str) -> bytes:
+    return bytes.fromhex(("0" * 24) + address.lower().replace("0x", ""))
+
+
+class _ReceiptQuery:
+    def __init__(self, effects):
+        self._effects = list(effects)
+        self.not_ = self
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, *_args, **_kwargs):
+        return self
+
+    def is_(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def range(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        if not self._effects:
+            return _Response()
+        return self._effects.pop(0)
+
+
+class _ReceiptDB:
+    def __init__(self, tx_hash: str):
+        self._query = _ReceiptQuery(
+            [
+                _Response(count=1),
+                _Response(data=[{"tx_hash": tx_hash}]),
+            ]
+        )
+
+    def table(self, name: str):
+        if name != "rebalance_logs":
+            raise AssertionError(f"Unexpected table: {name}")
+        return self._query
+
+
+class _FakeWeb3ForReceipt:
+    def __init__(self, receipt: dict):
+        self._receipt = receipt
+        self.eth = self
+
+    async def get_transaction_receipt(self, _tx_hash: str):
+        return self._receipt
 
 
 @pytest.mark.asyncio
@@ -343,3 +429,105 @@ async def test_reconcile_principal_tracking_uses_snowtrace_outstanding_principal
     assert db.tracking_query.upsert_payload is not None
     assert db.tracking_query.upsert_payload["cumulative_deposited"] == "20.000000"
     assert db.tracking_query.upsert_payload["cumulative_net_withdrawn"] == "10.000000"
+
+
+@pytest.mark.asyncio
+async def test_collect_principal_from_activity_rows_ignores_rows_without_tx_hash() -> None:
+    query = MagicMock()
+    query.not_ = query
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.is_.return_value = query
+    query.execute.return_value = MagicMock(
+        data=[
+            {
+                "from_protocol": "user_wallet",
+                "to_protocol": "idle",
+                "amount_moved": "1",
+                "tx_hash": None,
+            },
+            {
+                "from_protocol": "user_wallet",
+                "to_protocol": "idle",
+                "amount_moved": "2",
+                "tx_hash": "0xabc",
+            },
+            {
+                "from_protocol": "withdrawal",
+                "to_protocol": "user_eoa",
+                "amount_moved": "0.5",
+                "tx_hash": "0xdef",
+            },
+        ]
+    )
+
+    db = MagicMock()
+    db.table.return_value = query
+
+    deposited, withdrawn = await portfolio._collect_principal_from_activity_rows(db, "acct-1")
+    assert deposited == Decimal("2")
+    assert withdrawn == Decimal("0.5")
+
+
+@pytest.mark.asyncio
+async def test_collect_principal_from_rebalance_receipts_infers_routed_withdrawal() -> None:
+    smart = "0x6d6F6eE22f627f9406E4922970de12f9949be0A6"
+    owner = "0x97950A98980a2Fc61ea7eb043bb7666845f77071"
+    router = "0xCda75578328D0CB0e79dB7797289c44fa02a77ad"
+    recipient = "0x88f15e36308ed060d8543da8e2a5da0810efded2"
+    usdc = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+    tx_hash = "0x123"
+
+    transfer_sig = bytes.fromhex(
+        "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+    )
+    receipt = {
+        "logs": [
+            {
+                "address": usdc,
+                "topics": [
+                    transfer_sig,
+                    _topic_from_address(owner),
+                    _topic_from_address(smart),
+                ],
+                "data": int(2_000_000).to_bytes(32, "big"),
+            },
+            {
+                "address": usdc,
+                "topics": [
+                    transfer_sig,
+                    _topic_from_address(smart),
+                    _topic_from_address(router),
+                ],
+                "data": int(1_000_000).to_bytes(32, "big"),
+            },
+            {
+                "address": usdc,
+                "topics": [
+                    transfer_sig,
+                    _topic_from_address(router),
+                    _topic_from_address(recipient),
+                ],
+                "data": int(1_000_000).to_bytes(32, "big"),
+            },
+        ]
+    }
+
+    db = _ReceiptDB(tx_hash)
+    with patch(
+        "app.api.routes.portfolio.get_shared_async_web3",
+        return_value=_FakeWeb3ForReceipt(receipt),
+    ), patch(
+        "app.api.routes.portfolio._is_eoa_address",
+        new=AsyncMock(return_value=True),
+    ):
+        deposited, withdrawn = await portfolio._collect_principal_from_rebalance_receipts(
+            db=db,
+            account_id="acct-1",
+            smart_address=smart,
+            owner_address=owner,
+            usdc_address=usdc,
+        )
+
+    assert deposited == Decimal("2")
+    assert withdrawn == Decimal("1")

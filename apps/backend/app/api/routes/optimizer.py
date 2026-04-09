@@ -1,5 +1,6 @@
 """Optimizer routes — rate display, dry-run preview, and execute."""
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -731,11 +732,11 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
         # Determine protocols that are currently deployable.
         # Fail-safe: protocols with unreadable health are excluded.
         active_pids = set(ACTIVE_ADAPTERS.keys())
-        deployable_pids: set[str] = set()
-        for pid in active_pids:
+
+        async def _health_status(pid: str) -> tuple[str, bool]:
             adapter = ACTIVE_ADAPTERS.get(pid)
             if adapter is None:
-                continue
+                return pid, False
             try:
                 health = await adapter.get_health()
             except Exception as exc:
@@ -744,9 +745,13 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
                     pid,
                     exc,
                 )
-                continue
-            if health.is_deposit_safe:
-                deployable_pids.add(pid)
+                return pid, False
+            return pid, bool(health.is_deposit_safe)
+
+        deployable_results = await asyncio.gather(*[_health_status(pid) for pid in active_pids])
+        deployable_pids: set[str] = {
+            pid for pid, is_deposit_safe in deployable_results if is_deposit_safe
+        }
 
         if not deployable_pids:
             logger.warning(

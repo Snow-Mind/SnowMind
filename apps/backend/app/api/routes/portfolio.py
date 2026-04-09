@@ -58,6 +58,7 @@ _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
 _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 _PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
 _YIELD_DUST_EPSILON_USD = Decimal("0.00001")
+_UNSUPPORTED_PROTOCOL_SCAN_LIMIT = 250
 _SNOWTRACE_PAGE_SIZE = 1000
 _SNOWTRACE_MAX_PAGES = 20
 _SNOWTRACE_TIMEOUT_SECONDS = 20.0
@@ -110,6 +111,52 @@ def _normalize_yield_dust(total_yield: Decimal) -> Decimal:
     return total_yield
 
 
+def _payload_has_unsupported_protocol(payload: object) -> bool:
+    """Return True when an allocation payload references unsupported protocol ids."""
+    if not isinstance(payload, dict):
+        return False
+
+    for raw_protocol_id in payload.keys():
+        protocol_id = _canonical_protocol_id(str(raw_protocol_id or "").strip())
+        if not protocol_id:
+            continue
+        if protocol_id in {"idle"}:
+            continue
+        if protocol_id not in ACTIVE_ADAPTERS:
+            return True
+    return False
+
+
+def _has_unsupported_protocol_history(db: Client, account_id: str) -> bool:
+    """Detect legacy executions that reference protocols not currently supported."""
+    try:
+        rows = (
+            db.table("rebalance_logs")
+            .select("proposed_allocations, executed_allocations")
+            .eq("account_id", account_id)
+            .eq("status", "executed")
+            .order("created_at", desc=True)
+            .limit(_UNSUPPORTED_PROTOCOL_SCAN_LIMIT)
+            .execute()
+            .data
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to scan unsupported protocol history for account_id=%s: %s",
+            account_id,
+            exc,
+        )
+        return False
+
+    for row in rows or []:
+        if _payload_has_unsupported_protocol(row.get("proposed_allocations")):
+            return True
+        if _payload_has_unsupported_protocol(row.get("executed_allocations")):
+            return True
+
+    return False
+
+
 def _portfolio_cache_get(cache_key: str) -> PortfolioResponse | None:
     cached = _portfolio_cache.get(cache_key)
     if not cached:
@@ -152,6 +199,26 @@ def _log_data_to_int(data: object) -> int:
     if raw.startswith("0x"):
         return int(raw, 16)
     return int(raw)
+
+
+async def _is_eoa_address(w3, address: str, cache: dict[str, bool]) -> bool:
+    """Best-effort EOA check with per-request memoization."""
+    normalized = str(address or "").lower()
+    if not normalized:
+        return False
+    cached = cache.get(normalized)
+    if cached is not None:
+        return cached
+
+    try:
+        code = await w3.eth.get_code(w3.to_checksum_address(normalized))
+        code_hex = code.hex() if hasattr(code, "hex") else str(code)
+        is_eoa = code_hex in {"", "0x"}
+    except Exception:
+        is_eoa = False
+
+    cache[normalized] = is_eoa
+    return is_eoa
 
 
 async def _collect_principal_from_rebalance_receipts(
@@ -231,6 +298,7 @@ async def _collect_principal_from_rebalance_receipts(
     smart_l = smart_address.lower()
     owner_l = owner_address.lower()
     usdc_l = usdc_address.lower()
+    recipient_code_cache: dict[str, bool] = {}
 
     cumulative_deposited = Decimal("0")
     cumulative_withdrawn = Decimal("0")
@@ -241,6 +309,7 @@ async def _collect_principal_from_rebalance_receipts(
         except Exception:
             continue
 
+        usdc_transfers: list[tuple[str, str, Decimal]] = []
         for entry in receipt.get("logs", []):
             token_address = str(entry.get("address", "")).lower()
             if token_address != usdc_l:
@@ -252,13 +321,54 @@ async def _collect_principal_from_rebalance_receipts(
 
             source = _topic_to_address(topics[1])
             destination = _topic_to_address(topics[2])
-            amount_raw = int(entry.get("data", b"0x00").hex(), 16)
+            amount_raw = _log_data_to_int(entry.get("data", b"0x00"))
             amount_usdc = _usdc_to_decimal(amount_raw)
+            usdc_transfers.append((source, destination, amount_usdc))
 
+        for source, destination, amount_usdc in usdc_transfers:
             if source == owner_l and destination == smart_l:
                 cumulative_deposited += amount_usdc
             elif source == smart_l and destination == owner_l:
                 cumulative_withdrawn += amount_usdc
+
+        # Some integrations route withdrawals through an intermediate contract
+        # (smart -> router -> recipient). Infer those as withdrawals so principal
+        # doesn't remain inflated when direct smart->owner transfers are absent.
+        routed_match_indices: set[int] = set()
+        for source, intermediate, outgoing_amount in usdc_transfers:
+            if source != smart_l:
+                continue
+            if intermediate == owner_l:
+                continue
+
+            for idx, (src, final_recipient, incoming_amount) in enumerate(usdc_transfers):
+                if idx in routed_match_indices:
+                    continue
+                if src != intermediate:
+                    continue
+                if final_recipient == smart_l:
+                    continue
+                if abs(incoming_amount - outgoing_amount) > _BALANCE_RECONCILE_EPSILON_USDC:
+                    continue
+
+                is_user_like_recipient = (
+                    final_recipient == owner_l
+                    or await _is_eoa_address(w3, final_recipient, recipient_code_cache)
+                )
+                if not is_user_like_recipient:
+                    continue
+
+                cumulative_withdrawn += outgoing_amount
+                routed_match_indices.add(idx)
+                logger.warning(
+                    "Receipt reconciliation inferred routed withdrawal for %s tx=%s via %s -> %s amount=%s",
+                    smart_address,
+                    tx_hash,
+                    intermediate,
+                    final_recipient,
+                    outgoing_amount,
+                )
+                break
 
     if cumulative_deposited <= Decimal("0") and cumulative_withdrawn <= Decimal("0"):
         return None
@@ -497,10 +607,11 @@ async def _collect_principal_from_activity_rows(
     try:
         rows = (
             db.table("rebalance_logs")
-            .select("from_protocol, to_protocol, amount_moved")
+            .select("from_protocol, to_protocol, amount_moved, tx_hash")
             .eq("account_id", account_id)
             .eq("status", "executed")
             .not_.is_("amount_moved", "null")
+            .not_.is_("tx_hash", "null")
             .execute()
         )
     except Exception as exc:
@@ -515,6 +626,10 @@ async def _collect_principal_from_activity_rows(
     cumulative_withdrawn = Decimal("0")
 
     for row in rows.data or []:
+        tx_hash = str(row.get("tx_hash") or "").strip()
+        if not tx_hash:
+            continue
+
         try:
             amount = Decimal(str(row.get("amount_moved") or "0"))
         except Exception:
@@ -1035,6 +1150,23 @@ async def get_portfolio(
 
     has_executed_rebalance = bool(last_rb.data)
     net_principal = tracked_net_principal if tracked_net_principal is not None else total_current_value
+
+    # Some historical executions may route through protocols that are no longer
+    # supported by ACTIVE_ADAPTERS. In those cases portfolio valuation can
+    # undercount assets, so principal/yield display drifts become misleading.
+    unsupported_history_normalization = (
+        tracked_net_principal is not None
+        and (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
+        and _has_unsupported_protocol_history(db, str(account_id))
+    )
+    if unsupported_history_normalization:
+        logger.warning(
+            "Principal normalization due unsupported protocol history for %s: tracked=%s current=%s",
+            address,
+            tracked_net_principal,
+            total_current_value,
+        )
+        net_principal = total_current_value
 
     if _should_normalize_idle_only_principal(
         has_non_idle_positions=has_non_idle_positions,
