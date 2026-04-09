@@ -302,7 +302,7 @@ export default function AppLayout({
       }
     })().finally(() => {
       recoveryInFlightRef.current = false;
-    })();
+    });
 
     return () => {
       cancelled = true;
