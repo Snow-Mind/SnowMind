@@ -682,7 +682,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════════
-   GLSL Landing Page — Staggered fade-in animations
+   Landing Page — Staggered fade-in animations
    ═══════════════════════════════════════════════════════════ */
 
 @keyframes hero-fadein {
@@ -735,26 +735,3 @@
   animation: card-entrance 0.6s ease-out forwards;
 }
 
-/* ── Scroll indicator bounce ─────────────────────────────── */
-
-@keyframes scroll-bounce {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(8px);
-  }
-}
-
-.scroll-indicator {
-  animation: scroll-bounce 2s ease-in-out infinite;
-}
-
-@keyframes animate-scroll-dot {
-  0%, 100% { opacity: 1; transform: translateY(0); }
-  50% { opacity: 0.3; transform: translateY(6px); }
-}
-
-.animate-scroll-dot {
-  animation: animate-scroll-dot 1.5s ease-in-out infinite;
-}
