@@ -51,7 +51,6 @@ const protocols = [
 ];
 
 export default function LandingPage() {
-  const [menuOpen, setMenuOpen] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
   const router = useRouter();
 
@@ -117,76 +116,13 @@ export default function LandingPage() {
           </span>
         </Link>
 
-        <nav className="hidden md:flex items-center gap-8">
-          <Link
-            href="#how-it-works"
-            className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
-          >
-            How It Works
-          </Link>
-          <button
-            onClick={handleLaunchApp}
-            className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
-          >
-            Launch App
-          </button>
-        </nav>
-
         <button
-          className="md:hidden flex flex-col gap-[5px] p-1 z-30"
-          onClick={() => setMenuOpen(!menuOpen)}
-          aria-label="Toggle menu"
-          aria-expanded={menuOpen}
-        >
-          <span
-            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm origin-center transition-all duration-300"
-            style={
-              menuOpen
-                ? { transform: "translateY(7px) rotate(45deg)" }
-                : undefined
-            }
-          />
-          <span
-            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm transition-all duration-300"
-            style={menuOpen ? { opacity: 0 } : undefined}
-          />
-          <span
-            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm origin-center transition-all duration-300"
-            style={
-              menuOpen
-                ? { transform: "translateY(-7px) rotate(-45deg)" }
-                : undefined
-            }
-          />
-        </button>
-      </header>
-
-      {/* Mobile dropdown menu */}
-      <div
-        className="fixed top-[68px] left-4 right-4 z-50 md:hidden bg-white/95 backdrop-blur-xl rounded-xl flex flex-col items-center gap-1 border border-[#E8E2DA] shadow-lg overflow-hidden transition-all duration-300"
-        style={{
-          maxHeight: menuOpen ? 250 : 0,
-          opacity: menuOpen ? 1 : 0,
-          padding: menuOpen ? "16px" : "0 16px",
-        }}
-      >
-        <Link
-          href="#how-it-works"
-          onClick={() => setMenuOpen(false)}
-          className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
-        >
-          How It Works
-        </Link>
-        <button
-          onClick={() => {
-            setMenuOpen(false);
-            handleLaunchApp();
-          }}
-          className="w-full text-center py-3 mt-1 bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base rounded-lg hover:bg-[#D63031] transition-colors"
+          onClick={handleLaunchApp}
+          className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
         >
           Launch App
         </button>
-      </div>
+      </header>
 
       {/* ═══ HERO — ContainerScroll with video ═══ */}
       <div className="bg-[#F5F0EB] overflow-hidden pt-16 md:pt-20">
