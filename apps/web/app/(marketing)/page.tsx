@@ -14,8 +14,6 @@ import {
   Lock,
   Twitter,
   Linkedin,
-  Mail,
-  BookOpen,
 } from "lucide-react";
 
 const steps = [
