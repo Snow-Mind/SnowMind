@@ -14,6 +14,7 @@ import {
   Lock,
   Twitter,
   Linkedin,
+  ChevronDown,
 } from "lucide-react";
 
 const steps = [
@@ -37,6 +38,37 @@ const steps = [
     description:
       "Your agent optimizes yield across protocols within strict safety rules. No unauthorized transfers, no risky calls, no surprises. Just steady, transparent growth.",
     icon: Activity,
+  },
+];
+
+const faqs = [
+  {
+    q: "Is SnowMind custodial?",
+    a: "No. Your funds are held in your own ZeroDev smart account. SnowMind's backend can only execute the specific operations you've authorized via session keys (supply/withdraw on approved protocols). You can withdraw your full balance at any time.",
+  },
+  {
+    q: "What happens if SnowMind goes down?",
+    a: "Your funds continue earning yield in whichever protocol they're currently deposited in. You retain full ownership.",
+  },
+  {
+    q: "How does the optimizer decide where to put my funds?",
+    a: "SnowMind's optimizer ranks protocols by TWAP-smoothed APY and allocates capital starting from the highest-yielding protocol. Each protocol is capped at 7.5% of its TVL to prevent market impact. You can set your own allocation limits per protocol, and your diversification preference (Max Yield, Balanced, or Diversified) controls how funds are spread.",
+  },
+  {
+    q: "What are session keys?",
+    a: "Session keys are scoped permissions that allow our backend to execute specific operations on your behalf. They're encrypted (AES-256-GCM) at rest, limited to approved contracts and functions, and rate-limited.",
+  },
+  {
+    q: "Which protocols does SnowMind support?",
+    a: "SnowMind supports a curated set of lending and yield protocols on Avalanche mainnet. The active set evolves over time as integrations are added or removed. Each integration must pass hard filters (audit, exploit history, source verification), and then receives a 9-point informational risk score.",
+  },
+  {
+    q: "How often does SnowMind rebalance?",
+    a: "SnowMind checks rates continuously but executes rebalances only when profitable and safe. Cadence depends on deposit size: <=$3,000 (12h), <=$10,000 (4h), <=$100,000 (2h), >$100,000 (1h). A rebalance must also pass APY-improvement, movement, and profitability gates.",
+  },
+  {
+    q: "How are protocol risk scores calculated?",
+    a: "Each protocol is scored out of 9 across five categories: Oracle Quality (2), Liquidity (3), Collateral Quality (2), Yield Profile (1), and Architecture (1). Liquidity and Yield Profile are dynamic and update daily from on-chain data. Scores are informational and do not control rebalancing execution.",
   },
 ];
 
@@ -326,6 +358,39 @@ export default function LandingPage() {
 
       {/* ═══ TESTIMONIALS ═══ */}
       <Testimonials />
+
+      {/* ═══ FAQ ═══ */}
+      <section className="bg-[#F5F0EB] py-12 md:py-20 px-6">
+        <div className="max-w-[800px] mx-auto">
+          <div className="text-center">
+            <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
+              FAQ
+            </p>
+            <h2 className="font-sans font-bold text-[28px] md:text-[36px] text-[#1A1715] mt-3">
+              Frequently Asked Questions
+            </h2>
+          </div>
+
+          <div className="mt-12 space-y-3">
+            {faqs.map((faq, i) => (
+              <details
+                key={i}
+                className="group bg-[#FAFAF8] border border-[#E8E2DA] rounded-xl overflow-hidden"
+              >
+                <summary className="flex items-center justify-between cursor-pointer px-6 py-5 font-sans font-semibold text-[16px] text-[#1A1715] list-none [&::-webkit-details-marker]:hidden">
+                  {faq.q}
+                  <ChevronDown className="w-5 h-5 text-[#8A837C] transition-transform duration-200 group-open:rotate-180 shrink-0 ml-4" />
+                </summary>
+                <div className="px-6 pb-5">
+                  <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.7]">
+                    {faq.a}
+                  </p>
+                </div>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* ═══ FINAL CTA ═══ */}
       <section className="bg-[#F5F0EB] py-16 md:py-24 px-6">
