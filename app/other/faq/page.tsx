@@ -5,7 +5,11 @@ export const metadata: Metadata = {
   description: "Frequently asked questions about SnowMind's yield optimization, custody, and security.",
 };
 
-const faqs = [
+const faqs: { q: string; a: React.ReactNode }[] = [
+  {
+    q: "How do I know my agent won't do anything unexpected?",
+    a: "SnowMind's agent operates through session keys that are scoped to specific contracts and functions — it can only supply and withdraw on protocols you've approved. It cannot transfer funds to external addresses, interact with unapproved contracts, or perform any action outside its defined permissions. The Snow Optimizer is fully deterministic — given the same inputs, it will always produce the same allocation. All operations are rate-limited and logged, so you can verify exactly what the agent has done at any time.",
+  },
   {
     q: "Is SnowMind custodial?",
     a: "No. Your funds are held in your own ZeroDev smart account. SnowMind's backend can only execute the specific operations you've authorized via session keys (supply/withdraw on approved protocols). You can withdraw your full balance at any time.",
@@ -16,7 +20,12 @@ const faqs = [
   },
   {
     q: "How does the optimizer decide where to put my funds?",
-    a: "SnowMind runs health and safety checks on each integrated protocol, then allocates your USDC among the ones that pass — weighing TWAP-smoothed APY against risk and operational limits. Each protocol is capped at 15% of its available USDC liquidity to ensure withdrawals are always possible, and you can set your own per-protocol allocation limits.",
+    a: (
+      <>
+        Every cycle, the optimizer runs safety checks on each protocol — including utilization guards, APY velocity checks, sanity bounds, and circuit breakers — and discards any that fail. Among the protocols that pass, it identifies the best yield opportunity and allocates capital while respecting the 15% liquidity cap and your per-protocol limits. Rates are TWAP-smoothed over a 15-minute window to avoid chasing short-lived spikes. See the{" "}
+        <a href="/learn/snow-optimizer" className="underline text-snow-accent">Snow Optimizer</a> page for the full breakdown.
+      </>
+    ),
   },
   {
     q: "What are session keys?",
@@ -24,7 +33,7 @@ const faqs = [
   },
   {
     q: "Which protocols does SnowMind support?",
-    a: "SnowMind supports a curated set of lending and yield protocols on Avalanche mainnet. The active set evolves over time as integrations are added or removed. We vet each integration for security, liquidity, and audit history using our 10-point risk scoring framework before enabling it.",
+    a: "SnowMind supports a curated set of lending and yield protocols on Avalanche mainnet. The active set evolves over time as integrations are added or removed. We vet each integration for security, liquidity, and audit history using our 9-point risk scoring framework before enabling it.",
   },
   {
     q: "How often does SnowMind rebalance?",
@@ -32,7 +41,12 @@ const faqs = [
   },
   {
     q: "How are protocol risk scores calculated?",
-    a: "Each protocol is scored out of 10 across five categories: Protocol Safety (3 pts), Liquidity (3 pts), Collateral Quality (2 pts), Yield Profile (2 pts), and Architecture (1 pt). See the Protocol Assessment page for full details.",
+    a: (
+      <>
+        Each protocol must first pass hard filters (audit, no recent exploits, verified source code). Those that pass are scored out of 9 across five categories: Oracle Quality (2 pts), Liquidity (3 pts), Collateral Quality (2 pts), Yield Profile (1 pt), and Architecture (1 pt). Liquidity and Yield Profile are updated daily from on-chain data, so scores reflect current market conditions. See the{" "}
+        <a href="/learn/protocol-assessment" className="underline text-snow-accent">Protocol Assessment</a> page for full details.
+      </>
+    ),
   },
 ];
 

@@ -22,8 +22,7 @@ export default function SnowOptimizerPage() {
       <pre className="bg-snow-surface border border-snow-border text-sm"><code>{`1. Run safety checks on every protocol (rates, TVL, anomalies)
 2. Discard any protocol that fails a check
 3. Among protocols that pass, identify the best yield opportunity
-4. Allocate capital — respecting TVL caps and user limits
-5. Park any remainder in the base allocation layer`}</code></pre>
+4. Allocate capital — respecting TVL caps and user limits`}</code></pre>
       <p>
         Learn about specific health checks at:{" "}
         <a href="/learn/risk-management">Risk Management</a>
@@ -67,6 +66,43 @@ export default function SnowOptimizerPage() {
       </div>
       <p>
         All rates are TWAP-smoothed over a 15-minute window before being used in allocation decisions.
+      </p>
+
+      <h2>Rebalancing Tiers</h2>
+      <p>
+        The optimizer checks for rebalancing opportunities at a frequency based on your deposited amount:
+      </p>
+      <div className="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Deposited Amount</th>
+              <th>Checks per Day</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>$0 – $3K</td>
+              <td>2</td>
+            </tr>
+            <tr>
+              <td>$3K – $10K</td>
+              <td>6</td>
+            </tr>
+            <tr>
+              <td>$10K – $100K</td>
+              <td>12</td>
+            </tr>
+            <tr>
+              <td>$100K+</td>
+              <td>24</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="text-sm text-snow-muted">
+        Note: The Utilization Monitor runs every few seconds regardless of your rebalancing tier,
+        ensuring your funds are always protected from sudden liquidity changes.
       </p>
 
     </article>
