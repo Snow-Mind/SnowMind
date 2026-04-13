@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
 import {
   Check,
   ChevronDown,
@@ -41,7 +40,6 @@ import { cn } from "@/lib/utils";
 
 const SESSION_STORAGE_KEY = "snowmind_assistant_session_id";
 const SESSION_INDEX_STORAGE_KEY = "snowmind_assistant_session_index";
-const SESSION_LABEL = "Ctrl+J";
 const DEFAULT_SESSION_TITLE = "New AI chat";
 const MAX_SESSION_ENTRIES = 24;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -1250,34 +1248,23 @@ export function FloatingAssistant() {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className={cn(
-          "group fixed bottom-4 right-3 z-40 hidden h-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:bottom-5 sm:right-6 sm:inline-flex",
-          isOpen ? "w-12" : "w-[182px]",
-        )}
+        className="group fixed bottom-4 right-3 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:bottom-5 sm:right-6"
         aria-label={isOpen ? "Close SnowMind assistant" : "Open SnowMind assistant"}
       >
         {isOpen ? (
           <Minus className="h-4 w-4" strokeWidth={HEADER_ICON_STROKE} />
         ) : (
-          <Image
-            src="/ask-ai-assistant.png"
-            alt="Ask AI Assistant"
-            width={168}
-            height={40}
-            className="h-9 w-auto"
-            priority
-          />
+          <NeuralSnowflakeLogo className="h-[22px] w-[22px]" />
         )}
         <span
           className={cn(
-            "pointer-events-none absolute -left-[178px] top-1/2 hidden -translate-y-1/2 items-center gap-2 rounded-full border border-[#2F3642] bg-[#131821] px-3 py-1 text-[10px] text-white/80 shadow-lg transition-all duration-200 md:inline-flex",
+            "pointer-events-none absolute -left-[140px] top-1/2 hidden -translate-y-1/2 rounded-md border border-[#2F3642] bg-[#131821] px-2.5 py-1 text-[10px] font-medium tracking-[0.01em] text-white/78 shadow-lg transition-opacity duration-150 sm:inline-flex",
             isOpen
               ? "opacity-0"
-              : "translate-x-2 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-visible:translate-x-0 group-focus-visible:opacity-100",
+              : "opacity-100",
           )}
         >
           Hi, it&apos;s SnowMind AI
-          <span className="rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-[10px] text-white/60">{SESSION_LABEL}</span>
         </span>
       </button>
     </>
