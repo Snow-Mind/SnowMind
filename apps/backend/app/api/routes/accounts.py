@@ -1225,12 +1225,14 @@ async def update_allocation_caps(
             if pid not in set(allowed_scope)
         ]
         if out_of_scope:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "allocationCaps includes protocols outside selected market scope: "
-                    + ", ".join(sorted(out_of_scope))
-                ),
+            # Backward-compat: older/mobile clients can send stale caps for
+            # protocols that are no longer in selected scope. Ignore them and
+            # persist only scoped caps instead of hard-failing the save action.
+            logger.info(
+                "Ignoring out-of-scope allocation caps for %s: %s (allowed_scope=%s)",
+                address,
+                ", ".join(sorted(out_of_scope)),
+                ", ".join(sorted(allowed_scope)),
             )
 
     scoped_caps = _scope_allocation_caps(normalized_caps, allowed_scope)

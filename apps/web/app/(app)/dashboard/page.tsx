@@ -525,6 +525,11 @@ export default function DashboardPage() {
                   <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
                     {formatUsd(stats.totalYield, { maxFractionDigits: 6 })}
                   </p>
+                  {stats.activeProtocols > 0 && stats.totalYield === 0 ? (
+                    <p className="mt-0.5 text-[10px] text-[#8A837C]">
+                      Accruing: small balances may display as $0.00 initially.
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <p className="text-[10px] text-[#8A837C]">APR</p>

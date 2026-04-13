@@ -1151,6 +1151,7 @@ async def get_portfolio(
     reconcile_source: str | None = None
     reconcile_skipped_no_improvement = False
     reconcile_key: str | None = None
+    reconciled_principal: Decimal | None = None
     if reconcile_principal:
         reconcile_key = _principal_reconcile_key(str(account_id), address, owner_address)
         reconciled_principal = await _reconcile_principal_tracking_from_chain(
@@ -1217,6 +1218,7 @@ async def get_portfolio(
         tracked_net_principal is not None
         and (
             (reconcile_skipped_no_improvement and reconcile_source in {"receipt_logs", "activity_logs"})
+            or (reconciled_principal is None and reconcile_source in {"receipt_logs", "activity_logs"})
             or stale_no_improve_source in {"receipt_logs", "activity_logs"}
         )
         and (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
