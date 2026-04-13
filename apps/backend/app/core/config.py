@@ -152,6 +152,7 @@ class Settings(BaseSettings):
     RPC_CONCURRENCY_LIMIT: int = 3       # Max concurrent RPC calls to avoid 429
     GAS_COST_ESTIMATE_USD: float = 0.008  # Realistic Avalanche UserOp gas cost
     PROFITABILITY_BREAKEVEN_DAYS: int = 7  # Rebalance allowed if gas is recouped within N days
+    ENABLE_PROFITABILITY_GATE: bool = False  # Disabled during growth phase; can be re-enabled later
     TWAP_SNAPSHOT_COUNT: int = 3         # Number of snapshots for TWAP calculation
     TWAP_WINDOW_MINUTES: int = 15         # Backward-compatible oracle TWAP window
     SPARK_DEPLOYMENT_RATIO: float = 0.90  # Spark deploys only 90% (10% instant-redemption buffer)
@@ -165,6 +166,7 @@ class Settings(BaseSettings):
     MAX_SINGLE_REBALANCE_USD: float = 25000.0  # Max value movable in one rebalance
     PORTFOLIO_VALUE_DROP_PCT: float = 0.10  # 10% — halt if value drops this much between runs
     RECONCILIATION_ALERT_THRESHOLD_USD: float = 1.0  # $1 discrepancy triggers alert
+    MAX_IDLE_OVERFLOW_PCT: float = 0.80  # If >80% would remain idle, skip rebalance as liquidity-constrained
 
     # ── Fees ──────────────────────────────────────────────
     AGENT_FEE_ENABLED: bool = False      # Temporary freeze: keep fee code paths but do not charge
@@ -242,6 +244,25 @@ class Settings(BaseSettings):
                 self.REBALANCE_CHECK_INTERVAL,
             )
             self.REBALANCE_CHECK_INTERVAL = 3_600
+
+        if not 0 <= self.AGENT_FEE_RATE <= 1:
+            raise ValueError("AGENT_FEE_RATE must be between 0 and 1")
+
+        if not 0 <= self.PROFIT_FEE_PCT <= 1:
+            raise ValueError("PROFIT_FEE_PCT must be between 0 and 1")
+
+        if self.AGENT_FEE_ENABLED:
+            treasury = self.TREASURY_ADDRESS.strip()
+            if not treasury:
+                raise ValueError("TREASURY_ADDRESS is required when AGENT_FEE_ENABLED=true")
+            if treasury == "0x0000000000000000000000000000000000000000":
+                raise ValueError("TREASURY_ADDRESS cannot be the zero address")
+            if not (treasury.startswith("0x") and len(treasury) == 42):
+                raise ValueError("TREASURY_ADDRESS must be a valid EVM address")
+
+        if not 0 <= self.MAX_IDLE_OVERFLOW_PCT <= 1:
+            raise ValueError("MAX_IDLE_OVERFLOW_PCT must be between 0 and 1")
+
         return self
 
 

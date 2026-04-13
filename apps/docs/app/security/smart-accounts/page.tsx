@@ -93,12 +93,12 @@ Any fail → Reject UserOp`}</code></pre>
          → Rate limits, time bounds, gas caps
 
 Layer 2: TWAP + Cross-Validation (off-chain)
-         → 15-min smoothed rates, DefiLlama cross-check
+         → 15-min smoothed rates
          → 25% APY sanity cap
 
 Layer 3: Allocator Constraints (off-chain)
          → 7.5% TVL cap per protocol
-         → Profitability gate (daily gain > gas)
+         → Beat-margin and movement gates
 
 Layer 4: Application Security (off-chain)
          → AES-256-GCM session key encryption at rest

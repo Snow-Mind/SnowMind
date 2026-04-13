@@ -107,6 +107,11 @@ contract SnowMindRegistryTest is Test {
         registry.deregister(alice);
     }
 
+    function test_deregister_revert_zeroAddress() public {
+        vm.expectRevert("Zero address");
+        registry.deregister(address(0));
+    }
+
     function test_deregister_revert_notOwner() public {
         registry.register(alice);
         vm.prank(alice);
@@ -203,6 +208,13 @@ contract SnowMindRegistryTest is Test {
         registry.register(alice);
         vm.expectRevert("Zero amount");
         registry.logRebalance(alice, aavePool, benqiPool, 0);
+    }
+
+    function test_logRebalance_revert_protocolNotAllowed() public {
+        registry.register(alice);
+        address rogueProtocol = address(0xD00D);
+        vm.expectRevert("toProtocol not allowed");
+        registry.logRebalance(alice, aavePool, rogueProtocol, 1000e6);
     }
 
     function test_logRebalance_revert_notOwner() public {
@@ -306,6 +318,28 @@ contract SnowMindRegistryTest is Test {
         vm.prank(alice);
         vm.expectRevert("Not owner");
         registry.cancelOwnershipProposal();
+    }
+
+    function test_setProtocolAllowed_success() public {
+        address customProtocol = address(0xCAFE);
+        registry.setProtocolAllowed(customProtocol, true);
+        assertTrue(registry.allowedProtocols(customProtocol));
+
+        registry.setProtocolAllowed(customProtocol, false);
+        assertFalse(registry.allowedProtocols(customProtocol));
+    }
+
+    function test_setProtocolAllowed_revert_zeroProtocol() public {
+        vm.expectRevert("Zero protocol");
+        registry.setProtocolAllowed(address(0), true);
+    }
+
+    function test_setProtocolAllowlist_revert_zeroProtocol() public {
+        address[] memory protocols = new address[](2);
+        protocols[0] = aavePool;
+        protocols[1] = address(0);
+        vm.expectRevert("Zero protocol");
+        registry.setProtocolAllowlist(protocols, true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

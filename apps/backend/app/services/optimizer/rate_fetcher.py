@@ -15,6 +15,7 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.services.protocols import ALL_ADAPTERS
 from app.services.protocols.base import ProtocolRate
 
 logger = logging.getLogger("snowmind.rate_fetcher")
+_CB_STATE_TABLE = "protocol_circuit_breaker_state"
 
 # ── Response-level cache for rate fetches ────────────────────────────────────
 # Prevents Infura 429 storms when /rates is polled rapidly by the frontend.
@@ -56,8 +58,84 @@ class CircuitBreaker:
 
     _failures: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     _last_failure_at: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    _loaded_from_db: bool = False
+    _persistence_available: bool | None = None
+
+    def _ensure_persistence(self) -> bool:
+        if self._persistence_available is not None:
+            return self._persistence_available
+
+        try:
+            db = get_supabase()
+            db.table(_CB_STATE_TABLE).select("protocol_id").limit(1).execute()
+            self._persistence_available = True
+        except Exception as exc:
+            self._persistence_available = False
+            logger.warning("Rate-fetch circuit-breaker persistence unavailable: %s", exc)
+
+        return self._persistence_available
+
+    def _load_from_db(self) -> None:
+        if self._loaded_from_db:
+            return
+        self._loaded_from_db = True
+
+        if not self._ensure_persistence():
+            return
+
+        try:
+            db = get_supabase()
+            rows = db.table(_CB_STATE_TABLE).select(
+                "protocol_id, failures, last_failure_at"
+            ).execute().data or []
+
+            for row in rows:
+                pid = str(row.get("protocol_id") or "").strip()
+                if not pid:
+                    continue
+                self._failures[pid] = int(row.get("failures") or 0)
+                raw_last_failure = row.get("last_failure_at")
+                if raw_last_failure:
+                    self._last_failure_at[pid] = datetime.fromisoformat(
+                        str(raw_last_failure).replace("Z", "+00:00")
+                    ).timestamp()
+                else:
+                    self._last_failure_at[pid] = 0.0
+        except Exception as exc:
+            logger.warning("Failed to load rate-fetch circuit-breaker state: %s", exc)
+
+    def _persist_protocol(self, protocol_id: str) -> None:
+        if not self._ensure_persistence():
+            return
+
+        failures = self._failures.get(protocol_id, 0)
+        last_failure_at = self._last_failure_at.get(protocol_id, 0.0)
+        state = "closed"
+        if failures >= get_settings().CIRCUIT_BREAKER_THRESHOLD:
+            elapsed = time.time() - last_failure_at
+            state = "half_open" if elapsed >= get_settings().CIRCUIT_BREAKER_COOLDOWN_SECONDS else "open"
+
+        try:
+            db = get_supabase()
+            db.table(_CB_STATE_TABLE).upsert(
+                {
+                    "protocol_id": protocol_id,
+                    "failures": failures,
+                    "state": state,
+                    "last_failure_at": (
+                        datetime.fromtimestamp(last_failure_at, timezone.utc).isoformat()
+                        if last_failure_at > 0
+                        else None
+                    ),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="protocol_id",
+            ).execute()
+        except Exception as exc:
+            logger.warning("Failed to persist rate-fetch circuit state for %s: %s", protocol_id, exc)
 
     def record_failure(self, protocol_id: str) -> None:
+        self._load_from_db()
         self._failures[protocol_id] += 1
         self._last_failure_at[protocol_id] = time.time()
         if self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD:
@@ -66,13 +144,18 @@ class CircuitBreaker:
                 protocol_id,
                 self._failures[protocol_id],
             )
+        self._persist_protocol(protocol_id)
 
     def record_success(self, protocol_id: str) -> None:
+        self._load_from_db()
         if self._failures[protocol_id] >= get_settings().CIRCUIT_BREAKER_THRESHOLD:
             logger.info("Circuit CLOSED for %s after successful half-open probe", protocol_id)
         self._failures[protocol_id] = 0
+        self._last_failure_at[protocol_id] = 0.0
+        self._persist_protocol(protocol_id)
 
     def is_open(self, protocol_id: str) -> bool:
+        self._load_from_db()
         threshold = get_settings().CIRCUIT_BREAKER_THRESHOLD
         if self._failures[protocol_id] < threshold:
             return False
@@ -85,10 +168,12 @@ class CircuitBreaker:
                 protocol_id,
                 elapsed,
             )
+            self._persist_protocol(protocol_id)
             return False
         return True
 
     def get_failure_count(self, protocol_id: str) -> int:
+        self._load_from_db()
         return self._failures[protocol_id]
 
 

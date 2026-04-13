@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { PROTOCOL_CONFIG, EXPLORER, type ProtocolId } from "@/lib/constants";
 import { formatUsd } from "@/lib/format";
+import { humanizeRebalanceReason } from "@/lib/rebalanceReason";
 import type { RebalanceLogEntry } from "@snowmind/shared-types";
 
 function timeAgo(iso: string): string {
@@ -280,7 +281,7 @@ function TransactionDetailsPanel({ tx, className = "" }: { tx: TransactionItem; 
 /** Derive verifiable reasoning for each agent action — Giza-style "Verifiable Decision-Making" */
 function deriveReasoning(entry: RebalanceLogEntry): string | null {
   if (entry.status === "skipped") {
-    return entry.skipReason || "Monitoring complete — no action needed.";
+    return humanizeRebalanceReason(entry.skipReason) || "Monitoring complete — no action needed.";
   }
   if (entry.status === "failed") return "Transaction reverted. Funds remain safe — agent will retry next cycle.";
   if (entry.status === "halted") {

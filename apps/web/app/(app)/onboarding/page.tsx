@@ -158,6 +158,7 @@ function canonicalRateProtocolId(rawProtocolId: string): ProtocolId {
 const RECEIPT_CONFIRMATION_TIMEOUT_MS = 180_000;
 const RECEIPT_POLL_INTERVAL_MS = 3_000;
 const MIN_FUNDED_BALANCE_USDC = 0.01;
+const WALLET_SIGNATURE_TIMEOUT_MS = 45_000;
 
 type Eip1193Provider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -181,6 +182,24 @@ function portfolioHasFunds(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(
+  task: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function errorToMessage(err: unknown): string {
@@ -380,6 +399,7 @@ async function predeploySmartAccountForFunding(params: {
 export default function OnboardingPage() {
   const router = useRouter();
   const smartAccountAddress = usePortfolioStore((s) => s.smartAccountAddress);
+  const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const { activeWallet, login, logout, authenticated, ready } = useAuth();
@@ -534,6 +554,7 @@ export default function OnboardingPage() {
   const [activated, setActivated] = useState(false);
   const [activationPhase, setActivationPhase] = useState<ActivationPhase>("idle");
   const [activationError, setActivationError] = useState<string | null>(null);
+  const [showSignaturePromptHint, setShowSignaturePromptHint] = useState(false);
   const [regrantOnlyMode, setRegrantOnlyMode] = useState(false);
   const [isReauthenticating, setIsReauthenticating] = useState(false);
   const [repairStage, setRepairStage] = useState<"idle" | "await-login">("idle");
@@ -561,6 +582,21 @@ export default function OnboardingPage() {
   const yearlyEarning = effectiveDepositAmount >= 1 ? effectiveDepositAmount * (bestApy / 100) : 0;
 
   const hasAuthError = accountDetailError instanceof APIError && accountDetailError.status === 401;
+
+  useEffect(() => {
+    if (!activating || activationPhase !== "granting-session-key") {
+      setShowSignaturePromptHint(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowSignaturePromptHint(true);
+    }, 15_000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activating, activationPhase]);
 
   useEffect(() => {
     if (!accountDetail?.allocationCaps) return;
@@ -1112,27 +1148,31 @@ export default function OnboardingPage() {
       // Phase 2: Grant session key
       setActivationPhase("granting-session-key");
       const sessionKeyResult = await withRetry(
-        () => grantAndSerializeSessionKey(
-          kernelAccount,
-          kernelClient,
-          {
-            AAVE_POOL: CONTRACTS.AAVE_POOL,
-            BENQI_POOL: CONTRACTS.BENQI_POOL,
-            SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-            EULER_VAULT: CONTRACTS.EULER_VAULT,
-            SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-            SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-            USDC: CONTRACTS.USDC,
-            TREASURY: CONTRACTS.TREASURY,
-            PERMIT2: CONTRACTS.PERMIT2,
-            REGISTRY: CONTRACTS.REGISTRY,
-          },
-          {
-            maxAmountUSDC: Math.max(effectiveDepositAmount * 2, 50_000),
-            durationDays: 30,
-            maxOpsPerDay: 20,
-            userEOA: wallet.address as `0x${string}`,
-          },
+        () => withTimeout(
+          grantAndSerializeSessionKey(
+            kernelAccount,
+            kernelClient,
+            {
+              AAVE_POOL: CONTRACTS.AAVE_POOL,
+              BENQI_POOL: CONTRACTS.BENQI_POOL,
+              SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+              EULER_VAULT: CONTRACTS.EULER_VAULT,
+              SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+              SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+              USDC: CONTRACTS.USDC,
+              TREASURY: CONTRACTS.TREASURY,
+              PERMIT2: CONTRACTS.PERMIT2,
+              REGISTRY: CONTRACTS.REGISTRY,
+            },
+            {
+              maxAmountUSDC: Math.max(effectiveDepositAmount * 2, 50_000),
+              durationDays: 30,
+              maxOpsPerDay: 20,
+              userEOA: wallet.address as `0x${string}`,
+            },
+          ),
+          WALLET_SIGNATURE_TIMEOUT_MS,
+          "Wallet signature timed out. Open your wallet app, approve any pending request, then retry activation.",
         ),
         { maxRetries: 2, label: "grantAndSerializeSessionKey" },
       );
@@ -1253,6 +1293,13 @@ export default function OnboardingPage() {
         // User cancelled — go back to review state, don't show error phase
         setActivationPhase("idle");
         toast.error("Transaction cancelled.");
+      } else if (msg.toLowerCase().includes("wallet signature timed out")) {
+        setActivationPhase("error");
+        setActivationError(
+          "Wallet approval did not arrive in time. Open your wallet app and approve the pending request, then retry activation. "
+          + "If Core still does not show the prompt, switch to MetaMask or WalletConnect.",
+        );
+        toast.error("Wallet signature timed out. Re-open wallet and retry.");
       } else if (msg.includes("codepoint") || msg.includes("UNEXPECTED_CONTINUE")) {
         // Wallet can't handle bytes fields in EIP-712 typed data (e.g. Core wallet)
         setActivationPhase("error");
@@ -1309,11 +1356,13 @@ export default function OnboardingPage() {
   const showOnboardingDecisionLoader =
     ready
     && authenticated
-    && !!smartAccountAddress
     && !activating
     && !activated
     && !hasAuthError
-    && (onboardingPortfolioLoading || (!accountDetail && !accountDetailError));
+    && (
+      (!!smartAccountAddress && (onboardingPortfolioLoading || (!accountDetail && !accountDetailError)))
+      || (storeActivated && !smartAccountAddress)
+    );
 
   if (showOnboardingDecisionLoader) {
     return (
@@ -2077,6 +2126,13 @@ export default function OnboardingPage() {
                   <p className="text-center text-xs text-[#8A837C]">
                     This may require a wallet signature. Do not close this page.
                   </p>
+
+                  {showSignaturePromptHint && activationPhase === "granting-session-key" ? (
+                    <div className="rounded-lg border border-[#E84142]/20 bg-[#E84142]/[0.04] p-3 text-[11px] text-[#5C5550]">
+                      Wallet prompt taking too long. Bring your wallet app to foreground and approve any pending signature.
+                      If no prompt appears, retry activation.
+                    </div>
+                  ) : null}
                 </div>
               ) : activationPhase === "error" ? (
                 <div className="space-y-4">

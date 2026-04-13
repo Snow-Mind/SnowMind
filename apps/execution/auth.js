@@ -53,11 +53,18 @@ export function verifyInternalRequest({
     return { ok: false, status: 401, error: "Request timestamp expired" }
   }
 
-  if (!skipReplayCheck) {
-    pruneNonces(recentNonces, nowSeconds, ttlSeconds)
-    if (recentNonces.has(nonce)) {
-      return { ok: false, status: 409, error: "Replay request blocked" }
-    }
+  // Always keep in-process replay protection enabled.
+  // Even when persistent nonce storage is active, this blocks same-process
+  // races before the external store write completes.
+  pruneNonces(recentNonces, nowSeconds, ttlSeconds)
+  if (recentNonces.has(nonce)) {
+    return { ok: false, status: 409, error: "Replay request blocked" }
+  }
+
+  if (skipReplayCheck) {
+    // Backward compatibility note: skipReplayCheck no longer disables local
+    // replay protection; persistent stores are still used for cross-instance
+    // replay prevention.
   }
 
   const expected = crypto
@@ -69,8 +76,6 @@ export function verifyInternalRequest({
     return { ok: false, status: 401, error: "Invalid request signature" }
   }
 
-  if (!skipReplayCheck) {
-    recentNonces.set(nonce, tsInt)
-  }
+  recentNonces.set(nonce, tsInt)
   return { ok: true, nonce, timestamp: tsInt }
 }

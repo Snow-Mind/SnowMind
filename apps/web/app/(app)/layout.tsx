@@ -517,6 +517,12 @@ export default function AppLayout({
     || awaitingAddressRecovery
     || (!effectiveSmartAccountAddress && !addressResolutionGraceElapsed && pathname !== "/onboarding")
     || (
+      pathname === "/onboarding"
+      && storeActivated
+      && !hasAuthFault
+      && !accountDataReady
+    )
+    || (
       !!effectiveSmartAccountAddress
       && !hasAuthFault
       && (

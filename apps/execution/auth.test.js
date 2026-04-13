@@ -112,3 +112,37 @@ test("verifyInternalRequest rejects replay nonce", () => {
   assert.equal(second.status, 409)
   assert.equal(second.error, "Replay request blocked")
 })
+
+test("verifyInternalRequest still blocks replay when skipReplayCheck=true", () => {
+  const nonces = new Map()
+  const headers = signedHeaders({ nonce: "persistent-mode-nonce" })
+
+  const first = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: KEY,
+    ttlSeconds: 300,
+    recentNonces: nonces,
+    skipReplayCheck: true,
+  })
+  assert.equal(first.ok, true)
+
+  const second = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000001,
+    key: KEY,
+    ttlSeconds: 300,
+    recentNonces: nonces,
+    skipReplayCheck: true,
+  })
+
+  assert.equal(second.ok, false)
+  assert.equal(second.status, 409)
+  assert.equal(second.error, "Replay request blocked")
+})

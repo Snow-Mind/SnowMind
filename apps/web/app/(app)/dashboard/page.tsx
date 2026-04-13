@@ -20,6 +20,7 @@ import PortfolioChart from "@/components/dashboard/PortfolioChart";
 import AgentManager from "@/components/dashboard/AgentManager";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatUsd, formatPct } from "@/lib/format";
+import { humanizeRebalanceReason } from "@/lib/rebalanceReason";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
 import { useRealtimePortfolio } from "@/hooks/useRealtimePortfolio";
@@ -262,6 +263,7 @@ export default function DashboardPage() {
   const deploySkipReason = rebalanceStatus?.reasonDetail
     ?? rebalanceStatus?.lastLog?.skipReason
     ?? null;
+  const deploySkipReasonDisplay = humanizeRebalanceReason(deploySkipReason);
   const showDeployRetry = isIdleOnlyDeployment
     && hasActiveSessionKey
     && ["skipped", "failed", "halted"].includes(deployStatus);
@@ -578,9 +580,9 @@ export default function DashboardPage() {
               <p className="text-[11px] text-[#8A837C]">
                 The optimizer is moving your idle USDC on-chain. This usually finishes in 1-3 minutes.
               </p>
-              {showDeployRetry && deploySkipReason && (
+              {showDeployRetry && deploySkipReasonDisplay && (
                 <p className="mt-1 text-[11px] text-[#7A736D]">
-                  Latest check: {deploySkipReason}
+                  Latest check: {deploySkipReasonDisplay}
                 </p>
               )}
             </div>

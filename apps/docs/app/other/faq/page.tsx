@@ -28,7 +28,7 @@ const faqs = [
   },
   {
     q: "How often does SnowMind rebalance?",
-    a: "SnowMind checks rates continuously but executes rebalances only when profitable and safe. Cadence depends on deposit size: <=$3,000 (12h), <=$10,000 (4h), <=$100,000 (2h), >$100,000 (1h). A rebalance must also pass APY-improvement, movement, and profitability gates.",
+    a: "SnowMind checks rates continuously and rebalances when safety checks pass and the new allocation is meaningfully better. Cadence depends on deposit size: <=$3,000 (12h), <=$10,000 (4h), <=$100,000 (2h), >$100,000 (1h).",
   },
   {
     q: "What is the deposit limit?",

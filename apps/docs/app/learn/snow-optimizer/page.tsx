@@ -74,9 +74,9 @@ export default function SnowOptimizerPage() {
         <li><strong>Base Layer:</strong> $5,000 (base layer receives the remainder)</li>
       </ul>
 
-      <Callout variant="info" title="Why the 0.1% margin?">
-        Moving money costs gas. If a protocol is only 0.05% better, the gas and additional
-        risk exposure is not worth it. The margin prevents unnecessary rebalancing.
+      <Callout variant="info" title="Why keep a beat margin?">
+        A tiny APY gap can flip quickly and cause churn. The beat margin avoids
+        unnecessary back-and-forth movement when differences are noise-level.
       </Callout>
 
       <h2>Allocation Limits</h2>
@@ -105,7 +105,7 @@ export default function SnowOptimizerPage() {
             <tr>
               <td>Interest-bearing token market</td>
               <td><code>qiToken.supplyRatePerTimestamp()</code></td>
-              <td>Per-second rate</td>
+              <td>Per-second factor (1e18-scaled)</td>
             </tr>
             <tr>
               <td>Vault-style market</td>
@@ -116,8 +116,8 @@ export default function SnowOptimizerPage() {
         </table>
       </div>
       <p>
-        All rates are TWAP-smoothed over a 15-minute window and cross-validated against
-        DefiLlama&apos;s yield API before being used in allocation decisions.
+        All rates are TWAP-smoothed over a 15-minute window before allocation decisions.
+        On-chain protocol reads are authoritative.
       </p>
 
       <h2>Diversification Preferences</h2>

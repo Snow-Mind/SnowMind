@@ -35,8 +35,8 @@ export default function RiskManagementPage() {
 
       <h3>Cross-Validation</h3>
       <p>
-        Every TWAP rate is compared against DefiLlama&apos;s yield API. If the on-chain rate diverges
-        by more than the configured threshold, SnowMind logs a warning for monitoring and operator review.
+        On-chain protocol reads are the authoritative source. SnowMind applies additional
+        sanity and health gates before rates are used for allocation decisions.
       </p>
 
       <h3>Sanity Bounds</h3>
@@ -66,7 +66,7 @@ export default function RiskManagementPage() {
       <ol>
         <li><strong>Cadence gate (deposit-size aware):</strong> &lt;=$3,000: 12h, &lt;=$10,000: 4h, &lt;=$100,000: 2h, &gt;$100,000: 1h since the last successful optimizer activity</li>
         <li><strong>Minimum movement:</strong> total movement must be at least $1</li>
-        <li><strong>Profitability:</strong> estimated daily gain must exceed estimated execution cost</li>
+        <li><strong>Profitability gate:</strong> currently disabled during growth phase to allow more early-cycle rebalances</li>
         <li><strong>Max rebalance size:</strong> if a single rebalance would move more than the configured cap, it is halted for manual review</li>
         <li><strong>Idempotency guard:</strong> identical target allocations executed recently are skipped</li>
         <li><strong>Portfolio circuit breaker:</strong> if portfolio value drops more than 10% between runs, rebalancing is halted and alerts fire</li>

@@ -1163,6 +1163,23 @@ class Rebalancer:
             ),
         )
 
+        idle_ratio = Decimal("0")
+        if total_usd > Decimal("0"):
+            idle_ratio = allocation_result.idle_amount / total_usd
+        max_idle_ratio = Decimal(str(self.settings.MAX_IDLE_OVERFLOW_PCT))
+        if allocation_result.details.get("tvl_overflow") and idle_ratio > max_idle_ratio:
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason=(
+                    "Liquidity-constrained cycle: too much capital would remain idle "
+                    f"({float(idle_ratio * Decimal('100')):.1f}% > "
+                    f"{float(max_idle_ratio * Decimal('100')):.1f}% threshold)."
+                ),
+                proposed=allocation_result.allocations,
+            )
+
         result_allocations = allocation_result.allocations
         ranked_protocols = allocation_result.details.get("ranked_order", [])
         new_weighted_apy = allocation_result.weighted_apy
@@ -1251,9 +1268,16 @@ class Rebalancer:
                 proposed=result_allocations,
             )
 
-        # 8b. Profitability gate — skip if expected gain does not cover gas.
-        # Bypassed for initial deployments: idle USDC at 0% should be deployed.
-        if global_flag == RebalanceFlag.NONE and total_usd > 0 and not skip_performance_gates:
+        # 8b. Profitability gate (optional): temporarily disabled by default.
+        # Product choice: prioritize visible early-stage optimization activity
+        # on Avalanche where gas costs are low. Re-enable with
+        # ENABLE_PROFITABILITY_GATE=true when platform TVL/traffic grows.
+        if (
+            self.settings.ENABLE_PROFITABILITY_GATE
+            and global_flag == RebalanceFlag.NONE
+            and total_usd > 0
+            and not skip_performance_gates
+        ):
             daily_gain = apy_improvement * total_usd / Decimal("365")
             gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
             breakeven_days = Decimal(str(self.settings.PROFITABILITY_BREAKEVEN_DAYS))
@@ -1263,8 +1287,8 @@ class Rebalancer:
                     account_id,
                     "skipped",
                     reason=(
-                        f"Profitability gate: {int(breakeven_days)}d gain "
-                        f"${float(daily_gain * breakeven_days):.4f} < gas ${float(gas_cost):.4f}"
+                        "Projected short-term improvement is too small for this cycle "
+                        f"(window={int(breakeven_days)}d)."
                     ),
                     proposed=result_allocations,
                 )
