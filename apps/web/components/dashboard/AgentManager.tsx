@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Check, LayoutGrid, Loader2, Minus, Pencil, Plus, Save, X } from "lucide-react";
+import { Check, ExternalLink, LayoutGrid, Loader2, Minus, Pencil, Plus, Save, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
+import { cn, openExternalUrl } from "@/lib/utils";
 import { PROTOCOL_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import type { ProtocolRateResponse } from "@snowmind/shared-types";
@@ -79,11 +79,21 @@ function normalizeAllocationCaps(
   return normalized;
 }
 
-function areCapsEqual(
+function scopedCapsForProtocols(
+  protocols: CanonicalProtocolId[],
+  caps: Record<CanonicalProtocolId, number>,
+): Record<string, number> {
+  return Object.fromEntries(
+    protocols.map((pid) => [pid, caps[pid] ?? 100]),
+  );
+}
+
+function areScopedCapsEqual(
+  protocols: CanonicalProtocolId[],
   a: Record<CanonicalProtocolId, number>,
   b: Record<CanonicalProtocolId, number>,
 ): boolean {
-  return CANONICAL_PROTOCOL_IDS.every((pid) => a[pid] === b[pid]);
+  return protocols.every((pid) => a[pid] === b[pid]);
 }
 
 function formatTvl(tvl: number | undefined): string {
@@ -154,11 +164,15 @@ export default function AgentManager({
   }, [currentScopeKey, currentScope, currentCapsKey, currentCaps]);
 
   const selectedOrdered = CANONICAL_PROTOCOL_IDS.filter((id) => selectedProtocols.has(id));
+  const scopedCapsPayload = useMemo(
+    () => scopedCapsForProtocols(selectedOrdered, protocolCaps),
+    [selectedOrdered, protocolCaps],
+  );
   const hasDeployableSelectedMarket = selectedOrdered.some(
     (pid) => (protocolCaps[pid] ?? 100) > 0,
   );
   const scopeChanged = selectedOrdered.length > 0 && !isSameOrderedScope(selectedOrdered, currentScope);
-  const capsChanged = !areCapsEqual(protocolCaps, currentCaps);
+  const capsChanged = !areScopedCapsEqual(selectedOrdered, protocolCaps, currentCaps);
   const canSave = selectedOrdered.length > 0 && hasDeployableSelectedMarket && (scopeChanged || capsChanged);
 
   const toggleProtocol = (protocolId: CanonicalProtocolId, isEnabled: boolean) => {
@@ -230,7 +244,7 @@ export default function AgentManager({
         await api.updateAllowedProtocols(address, selectedOrdered);
       }
       if (capsChanged) {
-        await api.updateAllocationCaps(address, protocolCaps as Record<string, number>);
+        await api.updateAllocationCaps(address, scopedCapsPayload);
       }
 
       await Promise.allSettled([
@@ -246,6 +260,7 @@ export default function AgentManager({
       } else {
         toast.success("Allocation caps updated.");
       }
+      toast.info("Changes apply on next rebalance. If a current position exceeds a new cap, SnowMind forces a rebalance on the next trigger.");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update agent preferences";
       toast.error(message);
@@ -315,17 +330,13 @@ export default function AgentManager({
               <div
                 key={protocol.id}
                 className={cn(
-                  "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 px-3 py-3 transition-all cursor-pointer md:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] md:items-center",
+                  "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 px-3 py-3 transition-all md:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] md:items-center",
                   idx > 0 && "border-t border-[#E8E2DA]",
                   !isEnabled && "cursor-not-allowed opacity-55",
                   isSelected ? "bg-[#E84142]/[0.03]" : "bg-white opacity-60",
                   isEditingRow && "bg-[#FFF4F3] shadow-[inset_0_0_0_1px_rgba(232,65,66,0.35)]",
                   editingCapProtocol && !isEditingRow && "opacity-55",
                 )}
-                onClick={() => {
-                  if (editingCapProtocol) return;
-                  toggleProtocol(protocolId, isEnabled);
-                }}
               >
                 <div className="flex min-w-0 items-start gap-3">
                   <Image
@@ -351,6 +362,22 @@ export default function AgentManager({
                         <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
                           Soon
                         </span>
+                      )}
+                      {protocol.vaultUrl && (
+                        <a
+                          href={protocol.vaultUrl}
+                          target="_blank"
+                          rel="noopener noreferrer external"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openExternalUrl(protocol.vaultUrl);
+                          }}
+                          className="shrink-0 text-[#8A837C] transition-colors hover:text-[#E84142]"
+                          title={`View ${protocol.name} market`}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
                       )}
                     </div>
                     <p className="mt-0.5 hidden text-[10px] text-[#8A837C] sm:block">

@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any
 
 from web3 import AsyncWeb3
+from web3.middleware import ExtraDataToPOAMiddleware
 from web3.providers import AsyncHTTPProvider
 
 from app.core.config import get_settings
@@ -133,7 +134,11 @@ class RPCManager:
                 url,
                 request_kwargs={"timeout": 15},
             )
-            self._web3_instances[url] = AsyncWeb3(provider)
+            w3 = AsyncWeb3(provider)
+            # Avalanche C-Chain uses PoA-style extraData headers. Inject middleware
+            # once per client to avoid ExtraDataLengthError during block reads.
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+            self._web3_instances[url] = w3
         return self._web3_instances[url]
 
     def _get_active_provider(self) -> ProviderHealth:

@@ -53,7 +53,7 @@ import {
   grantAndSerializeSessionKey,
   withRetry,
 } from "@/lib/zerodev";
-import { cn } from "@/lib/utils";
+import { cn, openExternalUrl } from "@/lib/utils";
 import type { DiversificationPreference, ProtocolRateResponse } from "@snowmind/shared-types";
 
 const ERC20_ABI = [
@@ -1698,8 +1698,12 @@ export default function OnboardingPage() {
                               <a
                                 href={protocol.vaultUrl}
                                 target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
+                                rel="noopener noreferrer external"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  openExternalUrl(protocol.vaultUrl);
+                                }}
                                 className="shrink-0 text-[#8A837C] transition-colors hover:text-[#E84142]"
                                 title={`View ${protocol.name} vault`}
                               >

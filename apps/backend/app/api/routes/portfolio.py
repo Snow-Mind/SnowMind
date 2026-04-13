@@ -57,6 +57,7 @@ _PRINCIPAL_RECONCILE_MAX_TX = 5000
 _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
 _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 _PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
+_PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS = 3600
 _YIELD_DUST_EPSILON_USD = Decimal("0.00001")
 _UNSUPPORTED_PROTOCOL_SCAN_LIMIT = 250
 _SNOWTRACE_PAGE_SIZE = 1000
@@ -68,6 +69,8 @@ _RPC_LOG_SCAN_MIN_BLOCK_STEP = 100_000
 # Short-lived in-memory cache to dampen duplicate dashboard polling.
 _portfolio_cache: dict[str, tuple[float, dict]] = {}
 _principal_reconcile_cooldowns: dict[str, float] = {}
+_principal_reconcile_last_source: dict[str, str] = {}
+_principal_reconcile_no_improve_until: dict[str, tuple[float, str]] = {}
 
 
 def _canonical_protocol_id(protocol_id: str) -> str:
@@ -175,6 +178,23 @@ def _portfolio_cache_put(cache_key: str, response: PortfolioResponse, ttl_second
         time.monotonic() + ttl_seconds,
         response.model_dump(),
     )
+
+
+def _principal_reconcile_key(account_id: str, smart_address: str, owner_address: str) -> str:
+    return f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
+
+
+def _read_no_improve_reconcile_source(cooldown_key: str) -> str | None:
+    marker = _principal_reconcile_no_improve_until.get(cooldown_key)
+    if marker is None:
+        return None
+
+    until_mono, source = marker
+    if time.monotonic() >= until_mono:
+        _principal_reconcile_no_improve_until.pop(cooldown_key, None)
+        return None
+
+    return source
 
 
 def _topic_to_address(topic_hex: str) -> str:
@@ -664,7 +684,7 @@ async def _reconcile_principal_tracking_from_chain(
     historical tracking rows. It is throttled per account to avoid repeated
     expensive receipt scans under dashboard polling.
     """
-    cooldown_key = f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
+    cooldown_key = _principal_reconcile_key(account_id, smart_address, owner_address)
     now_mono = time.monotonic()
     next_allowed = _principal_reconcile_cooldowns.get(cooldown_key, 0.0)
     if now_mono < next_allowed:
@@ -722,6 +742,7 @@ async def _reconcile_principal_tracking_from_chain(
                         account_id=account_id,
                     )
                     if activity_totals is None:
+                        _principal_reconcile_last_source[cooldown_key] = "none"
                         _principal_reconcile_cooldowns[cooldown_key] = (
                             time.monotonic() + _PRINCIPAL_RECONCILE_RETRY_SECONDS
                         )
@@ -772,11 +793,14 @@ async def _reconcile_principal_tracking_from_chain(
             withdrawn_q,
             reconciled_net_principal,
         )
+        _principal_reconcile_no_improve_until.pop(cooldown_key, None)
+        _principal_reconcile_last_source[cooldown_key] = source_used
         _principal_reconcile_cooldowns[cooldown_key] = (
             time.monotonic() + _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS
         )
         return reconciled_net_principal
     except Exception as exc:
+        _principal_reconcile_last_source[cooldown_key] = "error"
         _principal_reconcile_cooldowns[cooldown_key] = (
             time.monotonic() + _PRINCIPAL_RECONCILE_RETRY_SECONDS
         )
@@ -1124,13 +1148,18 @@ async def get_portfolio(
 
         reconcile_principal = principal_overcount or (principal_undercount and recent_funding_transfer)
 
+    reconcile_source: str | None = None
+    reconcile_skipped_no_improvement = False
+    reconcile_key: str | None = None
     if reconcile_principal:
+        reconcile_key = _principal_reconcile_key(str(account_id), address, owner_address)
         reconciled_principal = await _reconcile_principal_tracking_from_chain(
             db,
             account_id=str(account_id),
             smart_address=address,
             owner_address=owner_address,
         )
+        reconcile_source = _principal_reconcile_last_source.get(reconcile_key)
         if reconciled_principal is not None:
             before_drift = abs(tracked_net_principal - total_current_value)
             after_drift = abs(reconciled_principal - total_current_value)
@@ -1141,12 +1170,25 @@ async def get_portfolio(
             ):
                 tracked_net_principal = reconciled_principal
             else:
+                reconcile_skipped_no_improvement = True
+                _principal_reconcile_cooldowns[reconcile_key] = (
+                    time.monotonic() + _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS
+                )
+                if reconcile_source in {"receipt_logs", "activity_logs"}:
+                    _principal_reconcile_no_improve_until[reconcile_key] = (
+                        time.monotonic() + _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS,
+                        reconcile_source,
+                    )
                 logger.warning(
                     "Skipping reconciled principal for %s: before_drift=%s after_drift=%s",
                     address,
                     before_drift,
                     after_drift,
                 )
+
+    stale_no_improve_source: str | None = None
+    if reconcile_key is not None:
+        stale_no_improve_source = _read_no_improve_reconcile_source(reconcile_key)
 
     has_executed_rebalance = bool(last_rb.data)
     net_principal = tracked_net_principal if tracked_net_principal is not None else total_current_value
@@ -1162,6 +1204,27 @@ async def get_portfolio(
     if unsupported_history_normalization:
         logger.warning(
             "Principal normalization due unsupported protocol history for %s: tracked=%s current=%s",
+            address,
+            tracked_net_principal,
+            total_current_value,
+        )
+        net_principal = total_current_value
+
+    # If owner-transfer reconciliation repeatedly fails to improve and the best
+    # available source is log-derived (receipt/activity), clamp principal for
+    # display to avoid persistent misleading negative-PnL artifacts.
+    unresolved_log_reconcile_normalization = (
+        tracked_net_principal is not None
+        and (
+            (reconcile_skipped_no_improvement and reconcile_source in {"receipt_logs", "activity_logs"})
+            or stale_no_improve_source in {"receipt_logs", "activity_logs"}
+        )
+        and (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
+    )
+    if unresolved_log_reconcile_normalization:
+        logger.warning(
+            "Principal normalization due unresolved %s drift for %s: tracked=%s current=%s",
+            reconcile_source or stale_no_improve_source,
             address,
             tracked_net_principal,
             total_current_value,

@@ -138,6 +138,44 @@ def _build_user_preferences(
     return preferences
 
 
+def _detect_user_cap_breaches(
+    *,
+    current_allocations: dict[str, Decimal],
+    total_usd: Decimal,
+    allocation_caps: dict[str, int] | None,
+) -> list[str]:
+    """Return protocol IDs currently above user max cap percentages."""
+    if total_usd <= Decimal("0.01") or not isinstance(allocation_caps, dict):
+        return []
+
+    breaches: list[str] = []
+    epsilon = Decimal("0.001")  # 0.1% tolerance for on-chain/read precision jitter
+
+    for pid, amount in current_allocations.items():
+        if pid == "idle" or amount <= Decimal("0.01"):
+            continue
+
+        cap_value = allocation_caps.get(pid)
+        if cap_value is None and pid == "aave_v3":
+            cap_value = allocation_caps.get("aave")
+        if cap_value is None:
+            continue
+
+        try:
+            if isinstance(cap_value, bool):
+                continue
+            cap_int = max(0, min(int(str(cap_value).strip()), 100))
+        except Exception:
+            continue
+
+        max_pct = Decimal(str(cap_int)) / Decimal("100")
+        current_pct = amount / total_usd
+        if current_pct > (max_pct + epsilon):
+            breaches.append(pid)
+
+    return breaches
+
+
 class Rebalancer:
     """Decides whether to rebalance and executes the on-chain moves."""
 
@@ -1100,6 +1138,19 @@ class Rebalancer:
                 )
 
         allocation_caps = session_key_record.get("allocation_caps")
+        user_cap_breaches = _detect_user_cap_breaches(
+            current_allocations=current,
+            total_usd=total_usd,
+            allocation_caps=allocation_caps if isinstance(allocation_caps, dict) else None,
+        )
+        if user_cap_breaches and global_flag == RebalanceFlag.NONE:
+            global_flag = RebalanceFlag.FORCED_REBALANCE
+            logger.warning(
+                "User cap breach for %s: forcing rebalance out of %s",
+                smart_account_address,
+                ", ".join(sorted(user_cap_breaches)),
+            )
+
         allocation_result = compute_allocation(
             health_results=health_results,
             twap_apys=apy_by_protocol,

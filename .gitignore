@@ -67,3 +67,12 @@ zany-moseying-penguin.md
 zany-moseying-penguin (2).md
 tvl-cap-liquidity.md
 tech_stack.md
+
+# ── Local audit/report markdown artifacts (keep local only) ───────
+_xlsx_report.md
+docs/AUDIT_FIRM_SCOPE_PACKAGE.md
+docs/CTO_AUDIT_BRIEFING.md
+docs/ENTERPRISE_BUDGET_MAPPING.md
+docs/ENTERPRISE_PRODUCTION_READINESS_PLAN.md
+docs/LEAN_SAFE_MODE_CHECKLIST.md
+docs/SERVICE_TOOLING_COST_TABLE_2026-04.md

@@ -7,6 +7,7 @@ import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
 import { getRebalanceCadence } from "@/lib/rebalanceCadence";
+import { openExternalUrl } from "@/lib/utils";
 
 function canonicalProtocolId(rawProtocolId: string): string {
   const normalized = (rawProtocolId || "").trim().toLowerCase();
@@ -120,7 +121,11 @@ export default function LiveRates({
             <a
               href={meta.vaultUrl}
               target="_blank"
-              rel="noopener noreferrer"
+              rel="noopener noreferrer external"
+              onClick={(event) => {
+                event.preventDefault();
+                openExternalUrl(meta.vaultUrl as string);
+              }}
               className="inline-flex items-center gap-1 hover:text-glacier"
             >
               View protocol page

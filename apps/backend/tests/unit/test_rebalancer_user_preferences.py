@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.services.optimizer.rebalancer import _build_user_preferences
+from app.services.optimizer.rebalancer import _build_user_preferences, _detect_user_cap_breaches
 
 
 def test_build_user_preferences_without_caps_keeps_unbounded_preferences() -> None:
@@ -45,3 +45,33 @@ def test_build_user_preferences_ignores_malformed_cap_values() -> None:
     # Malformed caps should be ignored (treated as unbounded), not crash rebalance.
     assert prefs["aave_v3"].max_pct is None
     assert prefs["spark"].max_pct is None
+
+
+def test_detect_user_cap_breaches_flags_protocol_over_cap() -> None:
+    breaches = _detect_user_cap_breaches(
+        current_allocations={"silo_savusd_usdc": Decimal("80"), "benqi": Decimal("20")},
+        total_usd=Decimal("100"),
+        allocation_caps={"silo_savusd_usdc": 70, "benqi": 100},
+    )
+
+    assert breaches == ["silo_savusd_usdc"]
+
+
+def test_detect_user_cap_breaches_uses_aave_alias_cap() -> None:
+    breaches = _detect_user_cap_breaches(
+        current_allocations={"aave_v3": Decimal("60")},
+        total_usd=Decimal("100"),
+        allocation_caps={"aave": 50},
+    )
+
+    assert breaches == ["aave_v3"]
+
+
+def test_detect_user_cap_breaches_ignores_idle_and_small_jitter() -> None:
+    breaches = _detect_user_cap_breaches(
+        current_allocations={"idle": Decimal("10"), "benqi": Decimal("50.05")},
+        total_usd=Decimal("100"),
+        allocation_caps={"benqi": 50},
+    )
+
+    assert breaches == []

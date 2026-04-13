@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
+import Image from "next/image";
 import {
   Check,
   ChevronDown,
@@ -241,7 +241,6 @@ function compactApiErrorMessage(err: APIError, fallback: string): string {
 }
 
 export function FloatingAssistant() {
-  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<StoredSessionSummary[]>([]);
@@ -259,7 +258,6 @@ export function FloatingAssistant() {
   const [sessionFetchVersion, setSessionFetchVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const onboardingAutoOpenRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -355,18 +353,6 @@ export function FloatingAssistant() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  useEffect(() => {
-    if (pathname === "/onboarding") {
-      if (!onboardingAutoOpenRef.current) {
-        setIsOpen(true);
-        onboardingAutoOpenRef.current = true;
-      }
-      return;
-    }
-
-    onboardingAutoOpenRef.current = false;
-  }, [pathname]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1264,13 +1250,23 @@ export function FloatingAssistant() {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="group fixed bottom-4 right-3 z-40 inline-flex h-12 w-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:bottom-5 sm:right-6"
+        className={cn(
+          "group fixed bottom-4 right-3 z-40 hidden h-12 items-center justify-center rounded-[12px] border border-[#2D3440] bg-[#111318] text-white shadow-[0_10px_22px_rgba(0,0,0,0.35)] transition hover:border-[#E84142]/65 sm:bottom-5 sm:right-6 sm:inline-flex",
+          isOpen ? "w-12" : "w-[182px]",
+        )}
         aria-label={isOpen ? "Close SnowMind assistant" : "Open SnowMind assistant"}
       >
         {isOpen ? (
           <Minus className="h-4 w-4" strokeWidth={HEADER_ICON_STROKE} />
         ) : (
-          <NeuralSnowflakeLogo className="h-[22px] w-[22px]" />
+          <Image
+            src="/ask-ai-assistant.png"
+            alt="Ask AI Assistant"
+            width={168}
+            height={40}
+            className="h-9 w-auto"
+            priority
+          />
         )}
         <span
           className={cn(

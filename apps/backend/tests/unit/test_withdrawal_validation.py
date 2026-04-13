@@ -219,3 +219,39 @@ def test_withdrawal_quote_guard_keeps_valid_quote_unchanged():
 
     assert normalized.user_receives == Decimal("50")
     assert normalized.agent_fee == Decimal("0")
+
+
+def test_conservative_erc4626_assets_prefers_preview_when_lower():
+    from app.api.routes.withdrawal import _conservative_erc4626_assets
+
+    assert _conservative_erc4626_assets(808148, 808147) == 808147
+
+
+def test_conservative_erc4626_assets_falls_back_to_convert_when_preview_missing():
+    from app.api.routes.withdrawal import _conservative_erc4626_assets
+
+    assert _conservative_erc4626_assets(808148, None) == 808148
+
+
+def test_conservative_erc4626_shares_prefers_max_redeem_when_lower():
+    from app.api.routes.withdrawal import _conservative_erc4626_shares
+
+    assert _conservative_erc4626_shares(1_000_000, 900_000) == 900_000
+
+
+def test_conservative_erc4626_shares_keeps_requested_when_max_missing():
+    from app.api.routes.withdrawal import _conservative_erc4626_shares
+
+    assert _conservative_erc4626_shares(1_000_000, None) == 1_000_000
+
+
+def test_cap_benqi_redeemable_shares_limited_by_pool_cash():
+    from app.api.routes.withdrawal import _cap_benqi_redeemable_shares
+
+    # exchange rate = 2e18 => each qi redeem needs 2 underlying units
+    capped = _cap_benqi_redeemable_shares(
+        user_qi_shares=1_000,
+        cash_raw=1_500,
+        exchange_rate_raw=2 * 10**18,
+    )
+    assert capped == 750

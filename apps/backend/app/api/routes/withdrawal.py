@@ -6,6 +6,7 @@ kept in place but currently disabled behind configuration.
 """
 
 import logging
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -42,6 +43,12 @@ _FULL_WITHDRAWAL_DUST_USDC = Decimal("0.01")
 # Maximum withdrawal: $10M (sanity guard)
 _MAX_WITHDRAWAL_USDC = Decimal("10000000")
 _WITHDRAW_SIGNATURE_TTL_SECONDS = 300
+_WITHDRAWABLE_ERC4626_PROTOCOLS = {
+    "spark",
+    "euler_v2",
+    "silo_savusd_usdc",
+    "silo_susdp_usdc",
+}
 
 _ERC20_BALANCE_OF_ABI = [
     {
@@ -51,6 +58,47 @@ _ERC20_BALANCE_OF_ABI = [
         "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     }
+]
+
+_ERC4626_WITHDRAWABLE_ABI = [
+    {
+        "name": "maxRedeem",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "previewRedeem",
+        "type": "function",
+        "inputs": [{"name": "shares", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "convertToAssets",
+        "type": "function",
+        "inputs": [{"name": "shares", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+]
+
+_BENQI_LIQUIDITY_ABI = [
+    {
+        "name": "getCash",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "exchangeRateStored",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
 ]
 
 
@@ -154,12 +202,31 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
 
     Uses protocol adapters for accurate balance reading.
     """
+    settings = get_settings()
+    w3 = get_shared_async_web3()
+
     total_raw = 0
     failed_protocols: list[str] = []
 
     for pid, adapter in ACTIVE_ADAPTERS.items():
         try:
-            balance = await adapter.get_balance(smart_account)
+            if pid in _WITHDRAWABLE_ERC4626_PROTOCOLS:
+                shares = int(await adapter.get_shares(smart_account))
+                if shares <= 0:
+                    balance = 0
+                else:
+                    vault_address = _erc4626_vault_address(pid, settings)
+                    if not vault_address:
+                        raise RuntimeError(f"Missing vault address for {pid}")
+                    balance = await _read_erc4626_withdrawable_raw(
+                        w3,
+                        vault_address=vault_address,
+                        owner_address=smart_account,
+                        shares=shares,
+                        protocol_id=pid,
+                    )
+            else:
+                balance = await adapter.get_balance(smart_account)
             total_raw += int(balance)
         except Exception as exc:
             failed_protocols.append(pid)
@@ -173,8 +240,6 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
     # Include idle USDC held directly in the smart account so full-withdrawal
     # previews/executions represent the actual amount user can receive.
     try:
-        settings = get_settings()
-        w3 = get_shared_async_web3()
         usdc = w3.eth.contract(
             address=w3.to_checksum_address(settings.USDC_ADDRESS),
             abi=_ERC20_BALANCE_OF_ABI,
@@ -201,6 +266,127 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
         )
 
     return Decimal(str(total_raw)) / Decimal("1e6")
+
+
+def _erc4626_vault_address(protocol_id: str, settings) -> str | None:
+    if protocol_id == "spark":
+        return settings.SPARK_SPUSDC
+    if protocol_id == "euler_v2":
+        return settings.EULER_VAULT
+    if protocol_id == "silo_savusd_usdc":
+        return settings.SILO_SAVUSD_VAULT
+    if protocol_id == "silo_susdp_usdc":
+        return settings.SILO_SUSDP_VAULT
+    return None
+
+
+def _conservative_erc4626_assets(convert_to_assets_raw: int, preview_redeem_raw: int | None) -> int:
+    """Pick the safer redeem estimate to prevent over-transfers on withdrawal."""
+    if preview_redeem_raw is None:
+        return int(convert_to_assets_raw)
+    return int(min(int(convert_to_assets_raw), int(preview_redeem_raw)))
+
+
+def _conservative_erc4626_shares(shares_raw: int, max_redeem_raw: int | None) -> int:
+    """Limit redeem shares to what the vault currently allows to redeem."""
+    if max_redeem_raw is None:
+        return int(shares_raw)
+    return int(min(int(shares_raw), int(max_redeem_raw)))
+
+
+async def _read_erc4626_withdrawable_raw(
+    w3,
+    *,
+    vault_address: str,
+    owner_address: str,
+    shares: int,
+    protocol_id: str,
+) -> int:
+    vault = w3.eth.contract(
+        address=w3.to_checksum_address(vault_address),
+        abi=_ERC4626_WITHDRAWABLE_ABI,
+    )
+
+    redeemable_shares = await _read_erc4626_redeemable_shares(
+        w3,
+        vault_address=vault_address,
+        owner_address=owner_address,
+        shares=shares,
+        protocol_id=protocol_id,
+    )
+    if redeemable_shares <= 0:
+        return 0
+
+    convert_raw = int(await vault.functions.convertToAssets(redeemable_shares).call())
+
+    preview_raw: int | None = None
+    try:
+        preview_raw = int(await vault.functions.previewRedeem(redeemable_shares).call())
+    except Exception as exc:
+        logger.debug("previewRedeem unavailable for %s: %s", protocol_id, exc)
+
+    conservative_raw = _conservative_erc4626_assets(convert_raw, preview_raw)
+    if preview_raw is not None and conservative_raw < convert_raw:
+        logger.info(
+            "Using previewRedeem for %s withdrawal quote (convert=%s preview=%s)",
+            protocol_id,
+            convert_raw,
+            preview_raw,
+        )
+    return conservative_raw
+
+
+async def _read_erc4626_redeemable_shares(
+    w3,
+    *,
+    vault_address: str,
+    owner_address: str,
+    shares: int,
+    protocol_id: str,
+) -> int:
+    if shares <= 0:
+        return 0
+
+    vault = w3.eth.contract(
+        address=w3.to_checksum_address(vault_address),
+        abi=_ERC4626_WITHDRAWABLE_ABI,
+    )
+
+    max_redeem_raw: int | None = None
+    try:
+        max_redeem_raw = int(
+            await vault.functions.maxRedeem(
+                w3.to_checksum_address(owner_address)
+            ).call()
+        )
+    except Exception as exc:
+        logger.debug("maxRedeem unavailable for %s: %s", protocol_id, exc)
+
+    redeemable_shares = _conservative_erc4626_shares(shares, max_redeem_raw)
+    if max_redeem_raw is not None and redeemable_shares < shares:
+        logger.warning(
+            "Capping %s redeem shares from %s to %s due maxRedeem liquidity",
+            protocol_id,
+            shares,
+            redeemable_shares,
+        )
+
+    return redeemable_shares
+
+
+def _cap_benqi_redeemable_shares(
+    *,
+    user_qi_shares: int,
+    cash_raw: int,
+    exchange_rate_raw: int,
+) -> int:
+    if user_qi_shares <= 0:
+        return 0
+    if exchange_rate_raw <= 0:
+        return 0
+
+    max_redeemable_qi = (int(cash_raw) * (10**18)) // int(exchange_rate_raw)
+    return int(min(int(user_qi_shares), max(int(max_redeemable_qi), 0)))
 
 
 def _compute_fee(
@@ -546,6 +732,7 @@ async def execute_withdrawal(
             )
         session_key = session_record["serialized_permission"]
         session_private_key = session_record.get("session_private_key", "")
+        w3 = get_shared_async_web3()
 
         benqi_qi_balance = 0
         spark_share_balance = 0
@@ -559,16 +746,53 @@ async def execute_withdrawal(
         try:
             benqi_adapter = get_adapter("benqi")
             benqi_qi_balance = int(await benqi_adapter.get_shares(address))
+            if benqi_qi_balance > 0:
+                benqi_pool = w3.eth.contract(
+                    address=w3.to_checksum_address(settings.BENQI_QIUSDC),
+                    abi=_BENQI_LIQUIDITY_ABI,
+                )
+                cash_raw, exchange_rate_raw = await asyncio.gather(
+                    benqi_pool.functions.getCash().call(),
+                    benqi_pool.functions.exchangeRateStored().call(),
+                )
+                capped_benqi_qi = _cap_benqi_redeemable_shares(
+                    user_qi_shares=benqi_qi_balance,
+                    cash_raw=int(cash_raw),
+                    exchange_rate_raw=int(exchange_rate_raw),
+                )
+                if capped_benqi_qi < benqi_qi_balance:
+                    logger.warning(
+                        "Capping Benqi redeem shares from %s to %s due pool cash liquidity",
+                        benqi_qi_balance,
+                        capped_benqi_qi,
+                    )
+                benqi_qi_balance = capped_benqi_qi
         except Exception as exc:
             logger.warning("Failed to read Benqi share balance for %s: %s", address, exc)
         try:
             spark_adapter = get_adapter("spark")
             spark_share_balance = int(await spark_adapter.get_shares(address))
+            if spark_share_balance > 0 and settings.SPARK_SPUSDC:
+                spark_share_balance = await _read_erc4626_redeemable_shares(
+                    w3,
+                    vault_address=settings.SPARK_SPUSDC,
+                    owner_address=address,
+                    shares=spark_share_balance,
+                    protocol_id="spark",
+                )
         except Exception as exc:
             logger.warning("Failed to read Spark share balance for %s: %s", address, exc)
         try:
             euler_adapter = get_adapter("euler_v2")
             euler_share_balance = int(await euler_adapter.get_shares(address))
+            if euler_share_balance > 0 and settings.EULER_VAULT:
+                euler_share_balance = await _read_erc4626_redeemable_shares(
+                    w3,
+                    vault_address=settings.EULER_VAULT,
+                    owner_address=address,
+                    shares=euler_share_balance,
+                    protocol_id="euler_v2",
+                )
         except Exception as exc:
             logger.warning("Failed to read Euler share balance for %s: %s", address, exc)
 
@@ -577,11 +801,27 @@ async def execute_withdrawal(
         try:
             silo_savusd_adapter = get_adapter("silo_savusd_usdc")
             silo_savusd_share_balance = int(await silo_savusd_adapter.get_shares(address))
+            if silo_savusd_share_balance > 0 and settings.SILO_SAVUSD_VAULT:
+                silo_savusd_share_balance = await _read_erc4626_redeemable_shares(
+                    w3,
+                    vault_address=settings.SILO_SAVUSD_VAULT,
+                    owner_address=address,
+                    shares=silo_savusd_share_balance,
+                    protocol_id="silo_savusd_usdc",
+                )
         except Exception as exc:
             logger.warning("Failed to read Silo savUSD share balance for %s: %s", address, exc)
         try:
             silo_susdp_adapter = get_adapter("silo_susdp_usdc")
             silo_susdp_share_balance = int(await silo_susdp_adapter.get_shares(address))
+            if silo_susdp_share_balance > 0 and settings.SILO_SUSDP_VAULT:
+                silo_susdp_share_balance = await _read_erc4626_redeemable_shares(
+                    w3,
+                    vault_address=settings.SILO_SUSDP_VAULT,
+                    owner_address=address,
+                    shares=silo_susdp_share_balance,
+                    protocol_id="silo_susdp_usdc",
+                )
         except Exception as exc:
             logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
 
