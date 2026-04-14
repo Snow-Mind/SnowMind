@@ -29,6 +29,7 @@ from app.services.execution.session_key import (
     revoke_session_key,
     store_session_key,
 )
+from app.services.execution.executor import verify_userop_execution
 from app.services.protocols import get_adapter
 
 
@@ -706,6 +707,120 @@ async def _trigger_initial_rebalance(account_id: str, address: str) -> None:
                     )
 
 
+async def _recover_failed_full_withdrawal_deactivation(
+    db: Client,
+    account_row: dict,
+) -> dict:
+    """Re-activate accounts that were deactivated by a failed full-withdrawal tx.
+
+    Historical bug pattern: backend accepted a tx hash as success and immediately
+    deactivated the account, even when EntryPoint reported an inner user-op revert.
+    This recovery runs only for currently inactive accounts and only flips account
+    state when on-chain receipt verification proves the recorded withdrawal failed.
+    """
+    if account_row.get("is_active", True):
+        return account_row
+
+    account_id = str(account_row.get("id") or "").strip()
+    address = str(account_row.get("address") or "").strip()
+    if not account_id or not address:
+        return account_row
+
+    try:
+        latest_withdrawal = (
+            db.table("rebalance_logs")
+            .select("id, tx_hash, created_at, status")
+            .eq("account_id", account_id)
+            .eq("from_protocol", "withdrawal")
+            .eq("to_protocol", "user_eoa")
+            .eq("status", "executed")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to load latest withdrawal log for %s (%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        return account_row
+
+    if not latest_withdrawal.data:
+        return account_row
+
+    withdrawal_log = latest_withdrawal.data[0]
+    tx_hash = str(withdrawal_log.get("tx_hash") or "").strip()
+    if not tx_hash:
+        return account_row
+
+    verification = await verify_userop_execution(
+        tx_hash,
+        address,
+        timeout_seconds=25,
+    )
+
+    if verification.succeeded:
+        return account_row
+
+    if not verification.terminal:
+        logger.warning(
+            "Skipping inactive-account recovery for %s: tx verification inconclusive (%s)",
+            address,
+            verification.reason,
+        )
+        return account_row
+
+    is_proven_withdraw_failure = (
+        verification.reason == "entrypoint_transaction_reverted"
+        or verification.reason.startswith("useroperation_failed_inside_entrypoint")
+    )
+    if not is_proven_withdraw_failure:
+        return account_row
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        db.table("accounts").update(
+            {
+                "is_active": True,
+                "updated_at": now_iso,
+            }
+        ).eq("id", account_id).execute()
+    except Exception as exc:
+        logger.error(
+            "Failed to recover inactive account state for %s (%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        return account_row
+
+    try:
+        db.table("rebalance_logs").update(
+            {
+                "status": "failed",
+                "skip_reason": f"WITHDRAWAL_USEROP_FAILED:{verification.reason}"[:500],
+            }
+        ).eq("id", withdrawal_log.get("id")).execute()
+    except Exception as exc:
+        logger.warning(
+            "Failed to update withdrawal log status during recovery for %s: %s",
+            address,
+            exc,
+        )
+
+    logger.error(
+        "Recovered false full-withdrawal deactivation for %s (tx=%s reason=%s)",
+        address,
+        tx_hash,
+        verification.reason,
+    )
+    patched = dict(account_row)
+    patched["is_active"] = True
+    return patched
+
+
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("30/minute")
 async def register_account(
@@ -765,6 +880,7 @@ async def get_account(
 
     row = acct.data[0]
     verify_account_ownership(_auth, row, db=db)
+    row = await _recover_failed_full_withdrawal_deactivation(db, row)
 
     # Fetch latest active session key metadata with robust expiry handling.
     sk_meta = get_active_session_key_metadata(db, row["id"])

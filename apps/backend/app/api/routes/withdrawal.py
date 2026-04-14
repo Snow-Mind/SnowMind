@@ -28,7 +28,11 @@ from app.services.fee_calculator import (
     record_withdrawal,
 )
 from app.services.execution.session_key import get_active_session_key, get_active_session_key_record, revoke_session_key
-from app.services.execution.executor import ExecutionService
+from app.services.execution.executor import (
+    ExecutionService,
+    UserOpExecutionFailedError,
+    UserOpReceiptUnavailableError,
+)
 from app.services.protocols import ACTIVE_ADAPTERS, get_adapter
 from app.services.protocols.base import get_shared_async_web3
 
@@ -867,6 +871,26 @@ async def execute_withdrawal(
         execution = ExecutionService()
         try:
             result = await execution.execute_withdrawal(payload)
+        except UserOpExecutionFailedError as exc:
+            logger.error(
+                "Withdrawal UserOperation failed on-chain for %s: %s",
+                address,
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Withdrawal failed on-chain and reverted. Funds remain in your account positions.",
+            )
+        except UserOpReceiptUnavailableError as exc:
+            logger.error(
+                "Withdrawal confirmation unavailable for %s: %s",
+                address,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Withdrawal submission could not be confirmed yet. Please retry shortly.",
+            )
         except Exception as exc:
             err_msg = str(exc)
             # Only revoke on definitively invalid session key errors.

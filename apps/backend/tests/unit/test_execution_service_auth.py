@@ -74,3 +74,95 @@ async def test_post_raises_without_internal_service_key() -> None:
     ):
         with pytest.raises(RuntimeError, match="INTERNAL_SERVICE_KEY is required"):
             await service._post("/execute/withdrawal", payload)
+
+
+@pytest.mark.asyncio
+async def test_execute_withdrawal_requires_userop_confirmation() -> None:
+    service = ExecutionService()
+    payload = {"smartAccountAddress": "0x1111111111111111111111111111111111111111"}
+
+    with (
+        patch.object(
+            service,
+            "_post",
+            new=AsyncMock(return_value={"txHash": "0xabc"}),
+        ) as mock_post,
+        patch(
+            "app.services.execution.executor.assert_userop_execution_succeeded",
+            new=AsyncMock(),
+        ) as mock_assert,
+    ):
+        result = await service.execute_withdrawal(payload)
+
+    mock_post.assert_awaited_once_with("/execute/withdrawal", payload)
+    mock_assert.assert_awaited_once_with(
+        "0xabc",
+        "0x1111111111111111111111111111111111111111",
+    )
+    assert result["userOpConfirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_withdrawal_rejects_missing_tx_hash() -> None:
+    service = ExecutionService()
+    payload = {"smartAccountAddress": "0x1111111111111111111111111111111111111111"}
+
+    with (
+        patch.object(
+            service,
+            "_post",
+            new=AsyncMock(return_value={}),
+        ) as mock_post,
+        patch(
+            "app.services.execution.executor.assert_userop_execution_succeeded",
+            new=AsyncMock(),
+        ) as mock_assert,
+    ):
+        with pytest.raises(RuntimeError, match="missing txHash"):
+            await service.execute_withdrawal(payload)
+
+    mock_post.assert_awaited_once_with("/execute/withdrawal", payload)
+    mock_assert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_rebalance_requires_userop_confirmation() -> None:
+    service = ExecutionService()
+
+    settings = MagicMock(
+        AAVE_V3_POOL="0x0000000000000000000000000000000000000001",
+        BENQI_QIUSDC="0x0000000000000000000000000000000000000002",
+        SPARK_SPUSDC="0x0000000000000000000000000000000000000003",
+        EULER_VAULT="0x0000000000000000000000000000000000000004",
+        SILO_SAVUSD_VAULT="0x0000000000000000000000000000000000000005",
+        SILO_SUSDP_VAULT="0x0000000000000000000000000000000000000006",
+        USDC_ADDRESS="0x0000000000000000000000000000000000000007",
+        PERMIT2="0x0000000000000000000000000000000000000008",
+        REGISTRY_CONTRACT_ADDRESS="0x0000000000000000000000000000000000000009",
+    )
+
+    with (
+        patch("app.services.execution.executor.get_settings", return_value=settings),
+        patch.object(
+            service,
+            "_post",
+            new=AsyncMock(return_value={"txHash": "0xdef"}),
+        ) as mock_post,
+        patch(
+            "app.services.execution.executor.assert_userop_execution_succeeded",
+            new=AsyncMock(),
+        ) as mock_assert,
+    ):
+        result = await service.execute_rebalance(
+            serialized_permission="perm",
+            smart_account_address="0x2222222222222222222222222222222222222222",
+            withdrawals=[],
+            deposits=[],
+        )
+
+    assert result["userOpConfirmed"] is True
+    mock_post.assert_awaited_once()
+    mock_assert.assert_awaited_once_with(
+        "0xdef",
+        "0x2222222222222222222222222222222222222222",
+    )
