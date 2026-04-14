@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { PieChart, Pie, Cell, Tooltip } from "recharts";
 import type { Portfolio } from "@snowmind/shared-types";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
@@ -12,40 +13,65 @@ interface PortfolioChartProps {
 }
 
 export default function PortfolioChart({ portfolio, compact = false }: PortfolioChartProps) {
-  if (!portfolio || portfolio.allocations.length === 0) {
-    return null;
-  }
-
   // Build pie data from allocations — include idle USDC so users see their funds
-  const chartData = portfolio.allocations
-    .filter((a) => Number(a.amountUsdc) > 0)
-    .map((a) => {
-      if (a.protocolId === "idle") {
+  const chartData = useMemo(
+    () => (portfolio?.allocations ?? [])
+      .filter((a) => Number(a.amountUsdc) > 0)
+      .map((a) => {
+        if (a.protocolId === "idle") {
+          return {
+            name: "Idle USDC",
+            value: Number(a.amountUsdc),
+            color: "#C4BDB6", // warm gray for undeployed funds
+            protocolId: a.protocolId,
+          };
+        }
+        const protocolConfig = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
         return {
-          name: "Idle USDC",
+          name: protocolConfig?.name || a.protocolId,
           value: Number(a.amountUsdc),
-          color: "#C4BDB6",  // warm gray for undeployed funds
+          color: protocolConfig?.color || "#E8E2DA",
           protocolId: a.protocolId,
         };
-      }
-      const protocolConfig = PROTOCOL_CONFIG[a.protocolId as keyof typeof PROTOCOL_CONFIG];
-      return {
-        name: protocolConfig?.name || a.protocolId,
-        value: Number(a.amountUsdc),
-        color: protocolConfig?.color || "#E8E2DA",
-        protocolId: a.protocolId,
-      };
-    });
+      }),
+    [portfolio?.allocations],
+  );
 
-  if (chartData.length === 0) {
+  const [selectedProtocolId, setSelectedProtocolId] = useState<string | null>(null);
+
+  const totalAllocated = useMemo(
+    () => chartData.reduce((sum, item) => sum + item.value, 0),
+    [chartData],
+  );
+  const topAllocation = useMemo(
+    () => [...chartData].sort((a, b) => b.value - a.value)[0] ?? null,
+    [chartData],
+  );
+
+  const selectedAllocation = useMemo(
+    () => chartData.find((item) => item.protocolId === selectedProtocolId)
+      ?? topAllocation
+      ?? chartData[0]
+      ?? null,
+    [chartData, selectedProtocolId, topAllocation],
+  );
+
+  if (!portfolio || chartData.length === 0 || !selectedAllocation) {
     return null;
   }
 
-  const totalAllocated = chartData.reduce((sum, item) => sum + item.value, 0);
-  const topAllocation = [...chartData].sort((a, b) => b.value - a.value)[0];
-  const topAllocationPct = topAllocation
-    ? ((topAllocation.value / totalAllocated) * 100).toFixed(1)
+  const selectedAllocationPct = totalAllocated > 0
+    ? ((selectedAllocation.value / totalAllocated) * 100).toFixed(1)
     : "0.0";
+
+  const selectedIndex = chartData.findIndex((item) => item.protocolId === selectedAllocation.protocolId);
+
+  const handleSliceSelect = (_entry: unknown, index: number) => {
+    if (index < 0 || index >= chartData.length) {
+      return;
+    }
+    setSelectedProtocolId(chartData[index].protocolId);
+  };
 
   if (compact) {
     return (
@@ -62,10 +88,22 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
                 paddingAngle={2}
                 labelLine={false}
                 dataKey="value"
+                onMouseEnter={handleSliceSelect}
+                onClick={handleSliceSelect}
+                onTouchStart={handleSliceSelect}
               >
-                {chartData.map((entry, index) => (
-                  <Cell key={`compact-cell-${index}`} fill={entry.color} />
-                ))}
+                {chartData.map((entry, index) => {
+                  const isSelected = index === selectedIndex;
+                  return (
+                    <Cell
+                      key={`compact-cell-${index}`}
+                      fill={entry.color}
+                      stroke={isSelected ? "#FFFFFF" : "#F1ECE6"}
+                      strokeWidth={isSelected ? 3 : 1}
+                      fillOpacity={isSelected ? 1 : 0.92}
+                    />
+                  );
+                })}
               </Pie>
               <Tooltip
                 formatter={(value?: number) => value ? formatUsd(value) : "—"}
@@ -83,8 +121,9 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
         </div>
         <div className="-mt-2 text-center">
           <p className="text-[11px] font-medium text-[#5C5550]">
-            {topAllocation?.name} {topAllocationPct}%
+            {selectedAllocation.name} {selectedAllocationPct}%
           </p>
+          <p className="text-[11px] font-mono text-[#8A837C]">{formatUsd(selectedAllocation.value)}</p>
         </div>
       </div>
     );
@@ -105,10 +144,21 @@ export default function PortfolioChart({ portfolio, compact = false }: Portfolio
               outerRadius={80}
               fill="#8884d8"
               dataKey="value"
+              onMouseEnter={handleSliceSelect}
+              onClick={handleSliceSelect}
             >
-              {chartData.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.color} />
-              ))}
+              {chartData.map((entry, index) => {
+                const isSelected = index === selectedIndex;
+                return (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={entry.color}
+                    stroke={isSelected ? "#FFFFFF" : "#F1ECE6"}
+                    strokeWidth={isSelected ? 3 : 1}
+                    fillOpacity={isSelected ? 1 : 0.92}
+                  />
+                );
+              })}
             </Pie>
             <Tooltip
               formatter={(value?: number) => value ? formatUsd(value) : "—"}

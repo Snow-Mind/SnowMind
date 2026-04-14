@@ -174,6 +174,7 @@ export default function AgentManager({
   const scopeChanged = selectedOrdered.length > 0 && !isSameOrderedScope(selectedOrdered, currentScope);
   const capsChanged = !areScopedCapsEqual(selectedOrdered, protocolCaps, currentCaps);
   const canSave = selectedOrdered.length > 0 && hasDeployableSelectedMarket && (scopeChanged || capsChanged);
+  const saveToastId = "agent-manager-save";
 
   const toggleProtocol = (protocolId: CanonicalProtocolId, isEnabled: boolean) => {
     if (!isEnabled) return;
@@ -222,19 +223,19 @@ export default function AgentManager({
 
   const handleSave = async () => {
     if (!address) {
-      toast.error("Smart account not found. Refresh and retry.");
+      toast.error("Smart account not found. Refresh and retry.", { id: saveToastId });
       return;
     }
     if (!hasActiveSessionKey) {
-      toast.error("Session key is not active. Re-grant first in Settings.");
+      toast.error("Session key is not active. Re-grant first in Settings.", { id: saveToastId });
       return;
     }
     if (selectedOrdered.length === 0) {
-      toast.error("Select at least one market.");
+      toast.error("Select at least one market.", { id: saveToastId });
       return;
     }
     if (!hasDeployableSelectedMarket) {
-      toast.error("At least one selected market must have a cap above 0%.");
+      toast.error("At least one selected market must have a cap above 0%.", { id: saveToastId });
       return;
     }
 
@@ -253,17 +254,22 @@ export default function AgentManager({
         queryClient.invalidateQueries({ queryKey: ["rebalance-history", address] }),
       ]);
 
-      if (scopeChanged && capsChanged) {
-        toast.success("Agent markets and max caps updated.");
-      } else if (scopeChanged) {
-        toast.success("Agent market scope updated.");
-      } else {
-        toast.success("Allocation caps updated.");
-      }
-      toast.info("Changes apply on next rebalance. If a current position exceeds a new cap, SnowMind forces a rebalance on the next trigger.");
+      const summary = scopeChanged && capsChanged
+        ? "Agent markets and max caps updated."
+        : scopeChanged
+          ? "Agent market scope updated."
+          : "Allocation caps updated.";
+
+      toast.success(
+        `${summary} Changes apply on next rebalance. If a current position exceeds a new cap, SnowMind forces a rebalance on the next trigger.`,
+        {
+          id: saveToastId,
+          duration: 6500,
+        },
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update agent preferences";
-      toast.error(message);
+      toast.error(message, { id: saveToastId });
     } finally {
       setSaving(false);
     }

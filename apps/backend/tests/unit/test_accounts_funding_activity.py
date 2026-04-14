@@ -107,3 +107,27 @@ def test_record_funding_transfer_skips_existing_account_without_tx_hash() -> Non
 
     assert db.rebalance_logs.inserted_rows == []
     record_deposit.assert_not_called()
+
+
+def test_record_funding_transfer_existing_account_with_new_tx_tracks_top_up() -> None:
+    """Existing accounts should still track additional deposits when tx hash is provided."""
+    db = _FakeDB(existing_tx=False)
+
+    with patch("app.services.fee_calculator.record_deposit") as record_deposit:
+        accounts._record_funding_transfer(
+            db=db,
+            account_id="acct-1",
+            address="0xabc",
+            funding_tx_hash="0xFEDCBA",
+            funding_amount_usdc="25",
+            funding_source="dashboard_topup",
+            is_existing_account=True,
+        )
+
+    assert len(db.rebalance_logs.inserted_rows) == 1
+    inserted = db.rebalance_logs.inserted_rows[0]
+    assert inserted["tx_hash"] == "0xfedcba"
+    assert inserted["amount_moved"] == "25.000000"
+    assert inserted["correlation_id"] == "funding:dashboard_topup"
+
+    record_deposit.assert_called_once_with(db, "acct-1", accounts.Decimal("25.000000"))
