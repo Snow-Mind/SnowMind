@@ -13,7 +13,7 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import { formatUsd, formatPct } from "@/lib/format";
+import { formatUsd, formatUsdExact, formatPct } from "@/lib/format";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { usePortfolioStore } from "@/stores/portfolio.store";
@@ -191,7 +191,7 @@ export default function PortfolioPage() {
               <div className="mt-1 flex items-center gap-1">
                 <ArrowUpRight className="h-3 w-3 text-mint" />
                 <span className="text-xs font-medium text-mint">
-                  {totalYield > 0 ? "+" : ""}{formatUsd(totalYield)}
+                  {totalYield > 0 ? "+" : ""}{formatUsdExact(totalYield, { maxFractionDigits: 12 })}
                 </span>
                 <span className="text-xs text-muted-foreground">all time</span>
               </div>

@@ -152,7 +152,7 @@ These are **hardcoded defaults** in the codebase. Override via environment varia
 | **Aave V3 Pool** | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` | Avalanche C-Chain |
 | **Benqi qiUSDCn** | `0xB715808a78F6041E46d61Cb123C9B4A27056AE9C` | Avalanche C-Chain |
 | **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Avalanche C-Chain |
-| **SnowMindRegistry** | `0x849Ca487D5DeD85c93fc3600338a419B100833a8` | Avalanche C-Chain |
+| **SnowMindRegistry** | `0x4a9B6B145F75bFf175EdE9320D9D17D41018dCE8` | Avalanche C-Chain |
 | **Spark spUSDC** | `0x28B3a8fb53B741A8Fd78c0fb9A6B2393d896a43d` | Avalanche C-Chain |
 | **Euler V2 / 9Summits Vault** | `0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e` | Avalanche C-Chain |
 | **Silo savUSD/USDC** | `0x33fAdB3dB0A1687Cdd4a55AB0afa94c8102856A1` | Avalanche C-Chain |
@@ -536,7 +536,7 @@ forge script script/DeployMainnet.s.sol:DeployMainnet \
 The script will print the deployed Registry address. Example output:
 ```
 === MAINNET DEPLOYMENT COMPLETE ===
-SnowMindRegistry: 0x849Ca487D5DeD85c93fc3600338a419B100833a8
+SnowMindRegistry: 0x4a9B6B145F75bFf175EdE9320D9D17D41018dCE8
 Owner:            0x97950A98980a2Fc61ea7eb043bb7666845f77071
 ```
 
@@ -544,9 +544,9 @@ Owner:            0x97950A98980a2Fc61ea7eb043bb7666845f77071
 
 | Location | Variable | Example |
 |----------|----------|---------|
-| **Backend env** (Railway) | `REGISTRY_CONTRACT_ADDRESS` | `0x849Ca...33a8` |
-| **Frontend env** (Vercel) | `NEXT_PUBLIC_REGISTRY_ADDRESS` | `0x849Ca...33a8` |
-| **Root .env** (local dev) | Both of the above | `0x849Ca...33a8` |
+| **Backend env** (Railway) | `REGISTRY_CONTRACT_ADDRESS` | `0x4a9B6...dCE8` |
+| **Frontend env** (Vercel) | `NEXT_PUBLIC_REGISTRY_ADDRESS` | `0x4a9B6...dCE8` |
+| **Root .env** (local dev) | Both of the above | `0x4a9B6...dCE8` |
 
 **Then transfer ownership to your Gnosis Safe multisig:**
 ```bash

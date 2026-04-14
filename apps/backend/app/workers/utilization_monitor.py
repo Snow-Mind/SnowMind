@@ -139,76 +139,83 @@ class UtilizationMonitor:
         """Return current monitored protocol positions for active accounts only."""
         now = datetime.now(timezone.utc)
 
-        accounts = (
-            self.db.table("accounts")
-            .select("id, address")
-            .eq("is_active", True)
-            .execute()
-            .data
-            or []
-        )
-        account_map = {
-            str(row.get("id")): str(row.get("address"))
-            for row in accounts
-            if row.get("id") and row.get("address")
-        }
-        if not account_map:
-            return {}
+        try:
+            accounts = (
+                self.db.table("accounts")
+                .select("id, address")
+                .eq("is_active", True)
+                .execute()
+                .data
+                or []
+            )
+            account_map = {
+                str(row.get("id")): str(row.get("address"))
+                for row in accounts
+                if row.get("id") and row.get("address")
+            }
+            if not account_map:
+                return {}
 
-        active_keys = (
-            self.db.table("session_keys")
-            .select("account_id, expires_at")
-            .eq("is_active", True)
-            .execute()
-            .data
-            or []
-        )
-        valid_session_accounts = {
-            str(row.get("account_id"))
-            for row in active_keys
-            if row.get("account_id")
-            and is_session_key_expiry_valid(row.get("expires_at"), now)
-        }
-        if not valid_session_accounts:
-            return {}
+            active_keys = (
+                self.db.table("session_keys")
+                .select("account_id, expires_at")
+                .eq("is_active", True)
+                .execute()
+                .data
+                or []
+            )
+            valid_session_accounts = {
+                str(row.get("account_id"))
+                for row in active_keys
+                if row.get("account_id")
+                and is_session_key_expiry_valid(row.get("expires_at"), now)
+            }
+            if not valid_session_accounts:
+                return {}
 
-        alloc_rows = (
-            self.db.table("allocations")
-            .select("account_id, protocol_id, amount_usdc")
-            .gt("amount_usdc", "0")
-            .execute()
-            .data
-            or []
-        )
-
-        positions_by_protocol: dict[str, list[PositionSnapshot]] = defaultdict(list)
-        for row in alloc_rows:
-            account_id = str(row.get("account_id") or "")
-            protocol_id = str(row.get("protocol_id") or "")
-            if protocol_id not in _MONITORED_PROTOCOLS:
-                continue
-            if account_id not in valid_session_accounts:
-                continue
-            address = account_map.get(account_id)
-            if not address:
-                continue
-
-            try:
-                amount_usdc = Decimal(str(row.get("amount_usdc", "0")))
-            except Exception:
-                continue
-            if amount_usdc <= _MIN_POSITION_USDC:
-                continue
-
-            positions_by_protocol[protocol_id].append(
-                PositionSnapshot(
-                    account_id=account_id,
-                    smart_account_address=address,
-                    amount_usdc=amount_usdc,
-                )
+            alloc_rows = (
+                self.db.table("allocations")
+                .select("account_id, protocol_id, amount_usdc")
+                .gt("amount_usdc", "0")
+                .execute()
+                .data
+                or []
             )
 
-        return dict(positions_by_protocol)
+            positions_by_protocol: dict[str, list[PositionSnapshot]] = defaultdict(list)
+            for row in alloc_rows:
+                account_id = str(row.get("account_id") or "")
+                protocol_id = str(row.get("protocol_id") or "")
+                if protocol_id not in _MONITORED_PROTOCOLS:
+                    continue
+                if account_id not in valid_session_accounts:
+                    continue
+                address = account_map.get(account_id)
+                if not address:
+                    continue
+
+                try:
+                    amount_usdc = Decimal(str(row.get("amount_usdc", "0")))
+                except Exception:
+                    continue
+                if amount_usdc <= _MIN_POSITION_USDC:
+                    continue
+
+                positions_by_protocol[protocol_id].append(
+                    PositionSnapshot(
+                        account_id=account_id,
+                        smart_account_address=address,
+                        amount_usdc=amount_usdc,
+                    )
+                )
+
+            return dict(positions_by_protocol)
+        except Exception as exc:
+            logger.warning(
+                "Utilization monitor position snapshot failed; skipping this poll cycle: %s",
+                exc,
+            )
+            return {}
 
     async def _fetch_utilizations(
         self,

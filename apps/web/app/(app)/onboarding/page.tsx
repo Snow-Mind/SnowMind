@@ -158,7 +158,8 @@ function canonicalRateProtocolId(rawProtocolId: string): ProtocolId {
 const RECEIPT_CONFIRMATION_TIMEOUT_MS = 180_000;
 const RECEIPT_POLL_INTERVAL_MS = 3_000;
 const MIN_FUNDED_BALANCE_USDC = 0.01;
-const WALLET_SIGNATURE_TIMEOUT_MS = 45_000;
+const WALLET_SIGNATURE_TIMEOUT_MS = 120_000;
+const WALLET_REQUEST_TIMEOUT_MS = 90_000;
 
 type Eip1193Provider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -200,6 +201,17 @@ async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function withWalletRequestTimeout<T>(
+  request: Promise<T>,
+  actionLabel: string,
+): Promise<T> {
+  return withTimeout(
+    request,
+    WALLET_REQUEST_TIMEOUT_MS,
+    `${actionLabel} wallet prompt did not appear. Open your wallet app, approve any pending request, then retry activation.`,
+  );
 }
 
 function errorToMessage(err: unknown): string {
@@ -584,7 +596,10 @@ export default function OnboardingPage() {
   const hasAuthError = accountDetailError instanceof APIError && accountDetailError.status === 401;
 
   useEffect(() => {
-    if (!activating || activationPhase !== "granting-session-key") {
+    const awaitingWalletPrompt = activating
+      && (activationPhase === "transferring-usdc" || activationPhase === "granting-session-key");
+
+    if (!awaitingWalletPrompt) {
       setShowSignaturePromptHint(false);
       return;
     }
@@ -927,23 +942,34 @@ export default function OnboardingPage() {
 
         const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
         try {
-          await provider.request({
-            method: "wallet_switchEthereumChain",
-            params: [{ chainId: hexChainId }],
-          });
+          await withWalletRequestTimeout(
+            provider.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: hexChainId }],
+            }),
+            "Network switch",
+          );
         } catch (switchErr: unknown) {
+          const switchMsg = switchErr instanceof Error ? switchErr.message : String(switchErr);
+          if (switchMsg.toLowerCase().includes("wallet prompt did not appear")) {
+            throw switchErr;
+          }
+
           const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
           if (code === 4902 || code === -32603) {
-            await provider.request({
-              method: "wallet_addEthereumChain",
-              params: [{
-                chainId: hexChainId,
-                chainName: CHAIN.name,
-                nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-                rpcUrls: [AVALANCHE_RPC_URL],
-                blockExplorerUrls: [EXPLORER.base],
-              }],
-            });
+            await withWalletRequestTimeout(
+              provider.request({
+                method: "wallet_addEthereumChain",
+                params: [{
+                  chainId: hexChainId,
+                  chainName: CHAIN.name,
+                  nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
+                  rpcUrls: [AVALANCHE_RPC_URL],
+                  blockExplorerUrls: [EXPLORER.base],
+                }],
+              }),
+              "Add Avalanche network",
+            );
           } else {
             throw new Error(
               "Failed to switch to Avalanche network. Please manually switch your wallet to Avalanche C-Chain and try again."
@@ -986,12 +1012,15 @@ export default function OnboardingPage() {
 
         let transferHash: `0x${string}` | undefined;
         try {
-          transferHash = await walletClient.sendTransaction({
-            account: eoaAddress as `0x${string}`,
-            to: CONTRACTS.USDC,
-            data: transferData,
-            value: 0n,
-          });
+          transferHash = await withWalletRequestTimeout(
+            walletClient.sendTransaction({
+              account: eoaAddress as `0x${string}`,
+              to: CONTRACTS.USDC,
+              data: transferData,
+              value: 0n,
+            }),
+            "USDC transfer",
+          );
         } catch (transferErr: unknown) {
           const transferMsg = transferErr instanceof Error ? transferErr.message : String(transferErr);
 
@@ -1061,10 +1090,13 @@ export default function OnboardingPage() {
               const fallbackErrors: string[] = [];
               for (const txParams of fallbackVariants) {
                 try {
-                  const fallbackHash = await provider.request({
-                    method: "eth_sendTransaction",
-                    params: [txParams],
-                  }) as `0x${string}`;
+                  const fallbackHash = await withWalletRequestTimeout(
+                    provider.request({
+                      method: "eth_sendTransaction",
+                      params: [txParams],
+                    }) as Promise<`0x${string}`>,
+                    "USDC transfer",
+                  );
                   if (fallbackHash) {
                     transferHash = fallbackHash;
                     break;
@@ -1300,6 +1332,14 @@ export default function OnboardingPage() {
           + "If Core still does not show the prompt, switch to MetaMask or WalletConnect.",
         );
         toast.error("Wallet signature timed out. Re-open wallet and retry.");
+      } else if (msg.toLowerCase().includes("wallet prompt did not appear")) {
+        setActivationPhase("error");
+        setActivationError(
+          "Wallet request did not resolve because the provider never surfaced a signing/transaction prompt in time. "
+          + "This can happen on Core mobile when the app handoff stalls or the wallet stays backgrounded. "
+          + "Bring the wallet to foreground, approve any pending request, then retry activation.",
+        );
+        toast.error("Wallet prompt not detected. Open wallet app and retry.");
       } else if (msg.includes("codepoint") || msg.includes("UNEXPECTED_CONTINUE")) {
         // Wallet can't handle bytes fields in EIP-712 typed data (e.g. Core wallet)
         setActivationPhase("error");
@@ -2127,10 +2167,11 @@ export default function OnboardingPage() {
                     This may require a wallet signature. Do not close this page.
                   </p>
 
-                  {showSignaturePromptHint && activationPhase === "granting-session-key" ? (
+                  {showSignaturePromptHint && (activationPhase === "transferring-usdc" || activationPhase === "granting-session-key") ? (
                     <div className="rounded-lg border border-[#E84142]/20 bg-[#E84142]/[0.04] p-3 text-[11px] text-[#5C5550]">
-                      Wallet prompt taking too long. Bring your wallet app to foreground and approve any pending signature.
-                      If no prompt appears, retry activation.
+                      {activationPhase === "transferring-usdc"
+                        ? "Wallet transfer prompt is taking too long. Bring your wallet app to foreground and approve any pending transaction. If no prompt appears, retry activation."
+                        : "Wallet signature prompt is taking too long. Bring your wallet app to foreground and approve any pending signature. If no prompt appears, retry activation."}
                     </div>
                   ) : null}
                 </div>

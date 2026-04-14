@@ -19,7 +19,7 @@ import LiveTxFeed from "@/components/dashboard/LiveTxFeed";
 import PortfolioChart from "@/components/dashboard/PortfolioChart";
 import AgentManager from "@/components/dashboard/AgentManager";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { formatUsd, formatPct } from "@/lib/format";
+import { formatUsd, formatUsdExact, formatPct } from "@/lib/format";
 import { humanizeRebalanceReason } from "@/lib/rebalanceReason";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { useRebalanceStatus, useRebalanceHistory } from "@/hooks/useRebalanceHistory";
@@ -33,7 +33,7 @@ import type { Portfolio } from "@snowmind/shared-types";
 function deriveOverviewStats(p: Portfolio) {
   const totalDep = Number(p.totalDepositedUsd);
   const rawTotalYld = Number(p.totalYieldUsd);
-  const totalYld = Math.abs(rawTotalYld) <= 0.00001 ? 0 : rawTotalYld;
+  const totalYld = rawTotalYld;
   const blendedApy =
     p.allocations.reduce((s, a) => s + a.currentApy * a.allocationPct, 0) * 100;
 
@@ -525,13 +525,8 @@ export default function DashboardPage() {
                 <div>
                   <p className="text-[10px] text-[#8A837C]">Net earned</p>
                   <p className="mt-0.5 font-mono text-sm font-medium text-arctic">
-                    {formatUsd(stats.totalYield, { maxFractionDigits: 6 })}
+                    {formatUsdExact(stats.totalYield, { maxFractionDigits: 12 })}
                   </p>
-                  {stats.activeProtocols > 0 && stats.totalYield === 0 ? (
-                    <p className="mt-0.5 text-[10px] text-[#8A837C]">
-                      Accruing: small balances may display as $0.00 initially.
-                    </p>
-                  ) : null}
                 </div>
                 <div>
                   <p className="text-[10px] text-[#8A837C]">APR</p>

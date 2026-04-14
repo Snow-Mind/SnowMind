@@ -12,7 +12,7 @@ import {
   Copy,
 } from "lucide-react";
 import { EXPLORER, PROTOCOL_CONFIG, CONTRACTS, type ProtocolId } from "@/lib/constants";
-import { formatUsd } from "@/lib/format";
+import { formatUsd, formatUsdExact } from "@/lib/format";
 import { toast } from "sonner";
 import type { Portfolio } from "@snowmind/shared-types";
 import type { SessionKeyStatusResponse } from "@snowmind/shared-types";
@@ -229,7 +229,7 @@ export default function FundTransparency({
                 </span>
                 {totalYield > 0 && (
                   <span className="ml-2 text-[10px] font-medium text-[#059669]">
-                    +{formatUsd(totalYield, { maxFractionDigits: 6 })} earned
+                    +{formatUsdExact(totalYield, { maxFractionDigits: 12 })} earned
                   </span>
                 )}
               </div>

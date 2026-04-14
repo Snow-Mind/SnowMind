@@ -27,9 +27,9 @@ const DETAILED_STEPS = [
     icon: Cpu,
     title: "Optimization",
     description:
-      "Our waterfall allocator sorts lending protocols by APY and fills from the top, capped at 15% of each pool's TVL. Spark Savings acts as the stable yield floor — funds park there when no protocol beats it.",
+      "Snow Optimizer ranks lending protocols by APY and allocates with risk and liquidity caps, capped at 15% of each pool's TVL. Spark Savings acts as the stable yield floor when no market beats it.",
     details: [
-      "Waterfall fills highest-APY protocol first, overflows to next",
+      "Snow Optimizer prioritizes highest qualified APY, then balances across safe alternatives",
       "15% TVL cap prevents owning too much of any pool",
       "Spark as yield floor — safe parking when no protocol beats it",
       "TWAP-confirmed rates prevent manipulation",

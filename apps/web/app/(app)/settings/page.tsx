@@ -7,7 +7,6 @@ import { useSmartAccount } from "@/hooks/useSmartAccount";
 import { EXPLORER, CHAIN } from "@/lib/constants";
 import { openExternalUrl } from "@/lib/utils";
 import SessionKeyStatus from "@/components/dashboard/SessionKeyStatus";
-import EmergencyPanel from "@/components/dashboard/EmergencyPanel";
 
 function truncateAddress(addr: string | null | undefined): string {
   if (!addr) return "—";
@@ -122,17 +121,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </motion.div>
-
-      {/* Emergency Withdrawal */}
-      <motion.div
-        variants={fadeUp}
-        initial="hidden"
-        animate="visible"
-        custom={2}
-      >
-        <EmergencyPanel />
-      </motion.div>
-
     </div>
   );
 }

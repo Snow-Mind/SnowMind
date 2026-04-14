@@ -35,7 +35,7 @@ export default function OptimizerPreview() {
             Optimizer Preview
           </h2>
           <p className="text-xs text-muted-foreground">
-            See how the waterfall optimizer would allocate your deposit.
+            See how Snow Optimizer would allocate your deposit.
           </p>
         </div>
       </div>
