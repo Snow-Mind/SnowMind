@@ -6,8 +6,6 @@ suppress logging output.
 """
 
 import base64
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -206,48 +204,27 @@ def _get_kms_client():
 
 
 def _get_legacy_aes_key() -> bytes:
-    """Return the 32-byte AES-256 key for local session-key encryption.
+    """Return the explicit 32-byte AES-256 key for local session-key encryption.
 
-    Priority:
-      1. ``SESSION_KEY_ENCRYPTION_KEY`` env var (64 hex chars → 32 bytes).
-      2. Auto-derived from ``SUPABASE_SERVICE_KEY`` via HMAC-SHA256 so
-         Railway deploys that forget to set the dedicated env var still
-         have a stable, deterministic encryption key.
-      3. RuntimeError if neither is available.
+    This local key path is a fallback when KMS is not configured. The key must
+    be explicitly provided via ``SESSION_KEY_ENCRYPTION_KEY`` in all
+    environments.
     """
     settings = get_settings()
-    raw = settings.SESSION_KEY_ENCRYPTION_KEY
-    if raw:
+    raw = str(settings.SESSION_KEY_ENCRYPTION_KEY or "").strip()
+    if not raw:
+        raise RuntimeError(
+            "SESSION_KEY_ENCRYPTION_KEY must be set when KMS_KEY_ID is not configured"
+        )
+
+    try:
         key = bytes.fromhex(raw)
-        if len(key) != 32:
-            raise ValueError("SESSION_KEY_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)")
-        return key
+    except ValueError as exc:
+        raise ValueError("SESSION_KEY_ENCRYPTION_KEY must be valid hex") from exc
 
-    # Auto-derive from SUPABASE_SERVICE_KEY — deterministic, stable across restarts
-    supabase_key = settings.SUPABASE_SERVICE_KEY
-    if supabase_key:
-        if not settings.DEBUG:
-            raise RuntimeError(
-                "SESSION_KEY_ENCRYPTION_KEY must be set when KMS_KEY_ID is not configured"
-            )
-
-        derived = hmac.new(
-            key=supabase_key.encode("utf-8"),
-            msg=b"snowmind-session-key-encryption-v1",
-            digestmod=hashlib.sha256,
-        ).digest()
-        if not getattr(_get_legacy_aes_key, "_warned", False):
-            logger.warning(
-                "SESSION_KEY_ENCRYPTION_KEY not set — auto-derived from SUPABASE_SERVICE_KEY. "
-                "Set SESSION_KEY_ENCRYPTION_KEY in production for explicit control."
-            )
-            _get_legacy_aes_key._warned = True  # type: ignore[attr-defined]
-        return derived  # 32 bytes from SHA-256
-
-    raise RuntimeError(
-        "Neither SESSION_KEY_ENCRYPTION_KEY nor SUPABASE_SERVICE_KEY is configured. "
-        "Cannot encrypt session keys."
-    )
+    if len(key) != 32:
+        raise ValueError("SESSION_KEY_ENCRYPTION_KEY must be exactly 32 bytes (64 hex chars)")
+    return key
 
 
 def _encode_envelope(ciphertext: bytes, nonce: bytes, encrypted_data_key: bytes) -> str:
@@ -463,28 +440,14 @@ def store_session_key(
 
     encrypted = encrypt_session_key(envelope)
 
-    # Deactivate ALL existing active keys for this account before inserting.
-    # Multiple active keys cause race conditions when concurrent rebalance
-    # attempts pick up different keys with different permissionHashes.
-    try:
-        deactivate_result = db.table("session_keys").update(
-            {"is_active": False}
-        ).eq("account_id", str(account_id)).eq("is_active", True).execute()
-        deactivated_count = len(deactivate_result.data) if deactivate_result.data else 0
-        if deactivated_count > 0:
-            logger.info(
-                "Deactivated %d old session key(s) for account %s before storing new key",
-                deactivated_count, account_id,
-            )
-    except Exception as exc:
-        logger.warning("Failed to deactivate old session keys for %s: %s", account_id, exc)
-
     row_payload = {
         "account_id": str(account_id),
         "serialized_permission": encrypted,
         "key_address": key_address,
         "expires_at": expires_at,
-        "is_active": True,
+        # Insert inactive first so an insert failure cannot orphan the account
+        # without an active key.
+        "is_active": False,
         "allowed_protocols": session_key_data.get("allowed_protocols")
             or session_key_data.get("allowedProtocols")
             or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
@@ -513,6 +476,99 @@ def store_session_key(
             .execute()
         )
     new_id = row.data[0]["id"]
+
+    previous_active_ids: list[str] = []
+    try:
+        active_rows = (
+            db.table("session_keys")
+            .select("id")
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+        )
+        previous_active_ids = [
+            str(item.get("id"))
+            for item in (active_rows.data or [])
+            if item.get("id")
+        ]
+    except Exception as exc:
+        logger.warning(
+            "Failed to snapshot active session keys for %s before promotion: %s",
+            account_id,
+            exc,
+        )
+
+    # Promote newly inserted key to active and deactivate older rows.
+    try:
+        deactivate_result = (
+            db.table("session_keys")
+            .update({"is_active": False})
+            .eq("account_id", str(account_id))
+            .eq("is_active", True)
+            .neq("id", new_id)
+            .execute()
+        )
+        deactivated_count = len(deactivate_result.data) if deactivate_result.data else 0
+
+        activated = (
+            db.table("session_keys")
+            .update({"is_active": True})
+            .eq("id", new_id)
+            .eq("account_id", str(account_id))
+            .execute()
+        )
+        if not activated.data:
+            raise RuntimeError(f"Unable to activate newly stored session key {new_id}")
+
+        if deactivated_count > 0:
+            logger.info(
+                "Deactivated %d old session key(s) for account %s before activating new key",
+                deactivated_count,
+                account_id,
+            )
+    except Exception as exc:
+        logger.error(
+            "Failed to activate new session key %s for account %s: %s",
+            new_id,
+            account_id,
+            exc,
+        )
+        restored = False
+        for prev_id in previous_active_ids:
+            try:
+                restore = (
+                    db.table("session_keys")
+                    .update({"is_active": True})
+                    .eq("id", prev_id)
+                    .eq("account_id", str(account_id))
+                    .execute()
+                )
+                if restore.data:
+                    restored = True
+                    logger.warning(
+                        "Restored previous active session key %s for account %s after activation failure",
+                        prev_id,
+                        account_id,
+                    )
+                    break
+            except Exception as restore_exc:
+                logger.warning(
+                    "Failed to restore previous active session key %s for %s: %s",
+                    prev_id,
+                    account_id,
+                    restore_exc,
+                )
+
+        if previous_active_ids and not restored:
+            logger.error(
+                "Activation rollback failed for account %s; previous keys=%s",
+                account_id,
+                previous_active_ids,
+            )
+        raise
+
     logger.info("Session key stored for account %s (key_id=%s)", account_id, new_id)
     return new_id
 

@@ -703,12 +703,22 @@ async def execute_withdrawal(
     # ── Treasury address guard ──────────────────────────────────────────
     # Fee collection is currently disabled; keep this guard for when fees are
     # re-enabled so misconfiguration cannot silently route funds incorrectly.
+    zero_address = "0x" + "0" * 40
+    treasury_for_payload = zero_address
     if settings.AGENT_FEE_ENABLED:
-        if not settings.TREASURY_ADDRESS or settings.TREASURY_ADDRESS == "0x" + "0" * 40:
+        treasury_candidate = str(settings.TREASURY_ADDRESS or "").strip()
+        if not treasury_candidate or treasury_candidate.lower() == zero_address:
             raise HTTPException(
                 status_code=500,
                 detail="Treasury address not configured — withdrawals disabled",
             )
+        try:
+            treasury_for_payload = validate_eth_address(treasury_candidate)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Treasury address is invalid — withdrawals disabled",
+            ) from exc
 
     # Read on-chain balance
     current_balance = await _get_on_chain_balance(address)
@@ -940,7 +950,7 @@ async def execute_withdrawal(
                 "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
                 "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
                 "USDC": settings.USDC_ADDRESS,
-                "TREASURY": settings.TREASURY_ADDRESS,
+                "TREASURY": treasury_for_payload,
             },
             "balances": {
                 "aaveATokenBalance": str(aave_atoken_balance),

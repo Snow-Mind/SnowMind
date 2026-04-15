@@ -1070,14 +1070,19 @@ export async function executeRebalance({
     }
   }
 
-  if (feeTransfer && feeTransfer.to && feeTransfer.amountUSDC > 0) {
+  const feeTransferAmount = Number(feeTransfer?.amountUSDC ?? 0)
+  if (feeTransferAmount > 0) {
+    const feeRecipient = String(feeTransfer?.to || "").trim()
+    if (!feeRecipient || feeRecipient.toLowerCase() === zeroAddress.toLowerCase()) {
+      throw new Error("feeTransfer requires a non-zero recipient address when amountUSDC > 0")
+    }
     calls.push({
       to: contracts.USDC,
       value: 0n,
       data: encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "transfer",
-        args: [feeTransfer.to, parseUnits(String(feeTransfer.amountUSDC), 6)],
+        args: [feeRecipient, parseUnits(String(feeTransfer.amountUSDC), 6)],
       }),
     })
   }

@@ -1,5 +1,7 @@
 import crypto from "node:crypto"
 
+const NONCE_HEX_RE = /^[a-fA-F0-9]{16,128}$/
+
 export function pruneNonces(recentNonces, nowSeconds, ttlSeconds) {
   for (const [nonce, ts] of recentNonces.entries()) {
     if (nowSeconds - ts > ttlSeconds) {
@@ -43,6 +45,10 @@ export function verifyInternalRequest({
   const signature = String(headers["x-request-signature"] || "")
   if (!timestamp || !nonce || !signature) {
     return { ok: false, status: 401, error: "Missing request signature headers" }
+  }
+
+  if (!NONCE_HEX_RE.test(nonce)) {
+    return { ok: false, status: 401, error: "Invalid request nonce" }
   }
 
   const tsInt = Number(timestamp)

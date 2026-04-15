@@ -276,18 +276,32 @@ def record_withdrawal_fee(
     account_id: str,
     withdrawn_usdc: Decimal,
     fee_usdc: Decimal,
+    fee_exempt: bool = False,
 ) -> None:
     """Legacy compatibility API used by older withdrawal paths."""
+    effective_fee = _ZERO if fee_exempt else fee_usdc
+    if effective_fee < _ZERO:
+        raise ValueError("fee_usdc cannot be negative")
+    if effective_fee > withdrawn_usdc:
+        raise ValueError("fee_usdc cannot exceed withdrawn_usdc")
+
+    fee_rate = _ZERO if fee_exempt else Decimal("0.10")
+    attributable_profit = (
+        effective_fee / Decimal("0.10")
+        if effective_fee > _ZERO and fee_rate > _ZERO
+        else _ZERO
+    )
+
     fee_calc = FeeCalculation(
         withdraw_amount=withdrawn_usdc,
         current_balance=withdrawn_usdc,
         net_principal=withdrawn_usdc,
-        accrued_profit=fee_usdc / Decimal("0.10") if fee_usdc > _ZERO else _ZERO,
-        attributable_profit=fee_usdc / Decimal("0.10") if fee_usdc > _ZERO else _ZERO,
-        agent_fee=fee_usdc,
-        user_receives=withdrawn_usdc - fee_usdc,
+        accrued_profit=attributable_profit,
+        attributable_profit=attributable_profit,
+        agent_fee=effective_fee,
+        user_receives=withdrawn_usdc - effective_fee,
         new_net_principal=_ZERO,
-        fee_exempt=False,
-        fee_rate=Decimal("0.10"),
+        fee_exempt=fee_exempt,
+        fee_rate=fee_rate,
     )
     record_withdrawal(db, account_id, fee_calc)

@@ -11,7 +11,7 @@ function signedHeaders({
   path = "/execute/withdrawal",
   body = "{}",
   timestamp = "1700000000",
-  nonce = "nonce-1",
+  nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   key = KEY,
 }) {
   const message = buildSignatureMessage(method, path, timestamp, nonce, body)
@@ -83,7 +83,7 @@ test("verifyInternalRequest rejects expired timestamp", () => {
 
 test("verifyInternalRequest rejects replay nonce", () => {
   const nonces = new Map()
-  const headers = signedHeaders({ nonce: "replay-nonce" })
+  const headers = signedHeaders({ nonce: "dddddddddddddddddddddddddddddddd" })
 
   const first = verifyInternalRequest({
     method: "POST",
@@ -106,6 +106,101 @@ test("verifyInternalRequest rejects replay nonce", () => {
     key: KEY,
     ttlSeconds: 300,
     recentNonces: nonces,
+  })
+
+  assert.equal(second.ok, false)
+  assert.equal(second.status, 409)
+  assert.equal(second.error, "Replay request blocked")
+})
+
+test("verifyInternalRequest rejects timestamps too far in the future", () => {
+  const nonces = new Map()
+  const headers = signedHeaders({ timestamp: "1700000045", nonce: "cccccccccccccccccccccccccccccccc" })
+
+  const result = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: KEY,
+    ttlSeconds: 300,
+    futureSkewSeconds: 30,
+    recentNonces: nonces,
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.status, 401)
+  assert.equal(result.error, "Request timestamp is too far in the future")
+})
+
+test("verifyInternalRequest rejects short nonce", () => {
+  const nonces = new Map()
+  const headers = signedHeaders({ nonce: "abc123" })
+
+  const result = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: KEY,
+    ttlSeconds: 300,
+    recentNonces: nonces,
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.status, 401)
+  assert.equal(result.error, "Invalid request nonce")
+})
+
+test("verifyInternalRequest rejects nonce with non-hex characters", () => {
+  const nonces = new Map()
+  const headers = signedHeaders({ nonce: "gggggggggggggggggggggggggggggggg" })
+
+  const result = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: KEY,
+    ttlSeconds: 300,
+    recentNonces: nonces,
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.status, 401)
+  assert.equal(result.error, "Invalid request nonce")
+})
+
+test("verifyInternalRequest still blocks replay when skipReplayCheck=true", () => {
+  const nonces = new Map()
+  const headers = signedHeaders({ nonce: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" })
+
+  const first = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: KEY,
+    ttlSeconds: 300,
+    recentNonces: nonces,
+    skipReplayCheck: true,
+  })
+  assert.equal(first.ok, true)
+
+  const second = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000001,
+    key: KEY,
+    ttlSeconds: 300,
+    recentNonces: nonces,
+    skipReplayCheck: true,
   })
 
   assert.equal(second.ok, false)

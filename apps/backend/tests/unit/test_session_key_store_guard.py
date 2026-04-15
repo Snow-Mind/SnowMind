@@ -23,6 +23,7 @@ def _build_db(execute_results: list[MagicMock]):
     query.order.return_value = query
     query.limit.return_value = query
     query.update.return_value = query
+    query.neq.return_value = query
     query.insert.return_value = query
     query.execute.side_effect = execute_results
 
@@ -58,6 +59,8 @@ def test_store_session_key_allows_explicit_regrant_when_key_changes() -> None:
 
     db, query = _build_db([
         MagicMock(data=[{"expires_at": existing_expires, "key_address": "0xoldkey"}]),
+        MagicMock(data=[{"id": "new-key-id"}]),
+        MagicMock(data=[{"id": "old-key"}]),
         MagicMock(data=[{"id": "old-key"}]),
         MagicMock(data=[{"id": "new-key-id"}]),
     ])

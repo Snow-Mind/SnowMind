@@ -2030,6 +2030,18 @@ class Rebalancer:
         idle_usdc = await self._get_idle_usdc_balance(smart_account_address)
         total_value = current_value + idle_usdc
 
+        account_row = (
+            db.table("accounts")
+            .select("owner_address, fee_exempt")
+            .eq("id", account_id)
+            .limit(1)
+            .execute()
+        )
+        owner_addr = account_row.data[0]["owner_address"] if account_row.data else None
+        account_fee_exempt = bool(account_row.data[0].get("fee_exempt")) if account_row.data else False
+        if not owner_addr:
+            raise ValueError(f"No owner_address found for account {account_id}")
+
         from app.services.fee_calculator import (
             calculate_withdrawal_fee,
             get_yield_tracking,
@@ -2057,7 +2069,14 @@ class Rebalancer:
             total_deposited_usdc=deposited_total,
             total_withdrawn_usdc=withdrawn_total,
         )
-        if not agent_fee_enabled:
+        if account_fee_exempt:
+            fee_breakdown = {
+                "profit_usd": fee_breakdown["profit_usd"],
+                "fee_usd": Decimal("0"),
+                "net_withdrawal_usd": total_value,
+                "fee_pct": Decimal("0"),
+            }
+        elif not agent_fee_enabled:
             fee_breakdown = {
                 "profit_usd": fee_breakdown["profit_usd"],
                 "fee_usd": Decimal("0"),
@@ -2068,8 +2087,12 @@ class Rebalancer:
         # Include transfers in the atomic batch (Mark's approach:
         # withdraw from protocols + fee to treasury + remainder to user EOA in one UserOp)
         fee_transfer = None
-        treasury = self.settings.TREASURY_ADDRESS
-        if fee_breakdown["fee_usd"] > Decimal("0.01") and treasury:
+        treasury = str(self.settings.TREASURY_ADDRESS or "").strip()
+        if fee_breakdown["fee_usd"] > Decimal("0.01"):
+            if not treasury or treasury.lower() == ("0x" + "0" * 40):
+                raise ValueError(
+                    "Treasury address is required when emergency withdrawal fee is non-zero"
+                )
             fee_transfer = {
                 "to": treasury,
                 "amountUSDC": float(fee_breakdown["fee_usd"]),
@@ -2084,16 +2107,6 @@ class Rebalancer:
         # doesn't need on-chain resolution (which fails on ZeroDev v5.x).
         user_transfer = None
         if fee_breakdown["net_withdrawal_usd"] > Decimal("0.01"):
-            owner_row = (
-                db.table("accounts")
-                .select("owner_address")
-                .eq("id", account_id)
-                .limit(1)
-                .execute()
-            )
-            owner_addr = owner_row.data[0]["owner_address"] if owner_row.data else None
-            if not owner_addr:
-                raise ValueError(f"No owner_address found for account {account_id}")
             user_transfer = {
                 "to": owner_addr,
                 "amountUSDC": float(fee_breakdown["net_withdrawal_usd"]),
@@ -2115,6 +2128,7 @@ class Rebalancer:
                 db, account_id,
                 withdrawn_usdc=total_value,
                 fee_usdc=fee_breakdown["fee_usd"],
+                fee_exempt=account_fee_exempt,
             )
 
         # Revoke session keys + mark account inactive

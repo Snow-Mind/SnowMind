@@ -236,6 +236,13 @@ const ERC4626_ABI = [
 
 const ERC20_ABI = [
   {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
     name: "approve",
     type: "function",
     stateMutability: "nonpayable",
@@ -1063,14 +1070,19 @@ export async function executeRebalance({
     }
   }
 
-  if (feeTransfer && feeTransfer.to && feeTransfer.amountUSDC > 0) {
+  const feeTransferAmount = Number(feeTransfer?.amountUSDC ?? 0)
+  if (feeTransferAmount > 0) {
+    const feeRecipient = String(feeTransfer?.to || "").trim()
+    if (!feeRecipient || feeRecipient.toLowerCase() === zeroAddress.toLowerCase()) {
+      throw new Error("feeTransfer requires a non-zero recipient address when amountUSDC > 0")
+    }
     calls.push({
       to: contracts.USDC,
       value: 0n,
       data: encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "transfer",
-        args: [feeTransfer.to, parseUnits(String(feeTransfer.amountUSDC), 6)],
+        args: [feeRecipient, parseUnits(String(feeTransfer.amountUSDC), 6)],
       }),
     })
   }
@@ -1236,9 +1248,7 @@ export async function executeRebalance({
   try {
     const usdcBalance = await execPublicClient.readContract({
       address: contracts.USDC,
-      abi: [{ name: "balanceOf", type: "function", stateMutability: "view",
-              inputs: [{ name: "account", type: "address" }],
-              outputs: [{ name: "", type: "uint256" }] }],
+      abi: ERC20_ABI,
       functionName: "balanceOf",
       args: [smartAccountAddress],
     })

@@ -285,12 +285,8 @@ def _validate_environment() -> None:
     if not settings.INTERNAL_SERVICE_KEY:
         errors.append("INTERNAL_SERVICE_KEY is required")
 
-    # In production, enforce explicit session-key encryption keying material.
-    if (
-        not settings.DEBUG
-        and not settings.KMS_KEY_ID
-        and not settings.SESSION_KEY_ENCRYPTION_KEY
-    ):
+    # Enforce explicit session-key encryption keying material in every env.
+    if not settings.KMS_KEY_ID and not settings.SESSION_KEY_ENCRYPTION_KEY:
         errors.append(
             "Set KMS_KEY_ID or SESSION_KEY_ENCRYPTION_KEY for session-key encryption"
         )
