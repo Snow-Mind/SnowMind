@@ -1,7 +1,6 @@
-"""Unit tests for withdrawal activity logging in rebalance routes."""
+"""Unit tests for deprecated withdrawal endpoints in rebalance routes."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -35,48 +34,9 @@ def _request() -> Request:
     return Request({
         "type": "http",
         "method": "POST",
-        "path": "/api/v1/rebalance/0xabc/withdraw-all",
+        "path": "/api/v1/rebalance/0xabc/partial-withdraw",
         "headers": [],
     })
-
-
-@pytest.mark.asyncio
-async def test_withdraw_all_logs_withdrawal_activity(monkeypatch) -> None:
-    db = _FakeDB()
-
-    async def _fake_lookup_account(_db, _address, _auth):
-        return {"id": "acct-1", "address": "0xabc"}
-
-    monkeypatch.setattr(rebalance, "_lookup_account", _fake_lookup_account)
-
-    with patch("app.services.optimizer.rebalancer.Rebalancer") as rebalancer_cls:
-        rebalancer_instance = rebalancer_cls.return_value
-        rebalancer_instance.execute_emergency_withdrawal = AsyncMock(
-            return_value=(
-                "0xtxhash",
-                {
-                    "fee_usd": "0.500000",
-                    "net_withdrawal_usd": "100.000000",
-                    "fee_pct": "0.10",
-                    "profit_usd": "5.000000",
-                },
-            )
-        )
-
-        result = await rebalance.withdraw_all(
-            request=_request(),
-            address="0xabc",
-            db=db,
-            _auth={"sub": "did:privy:test"},
-        )
-
-    assert result["status"] == "executed"
-    assert len(db.rebalance_logs.inserted_rows) == 1
-    inserted = db.rebalance_logs.inserted_rows[0]
-    assert inserted["from_protocol"] == "withdrawal"
-    assert inserted["to_protocol"] == "user_eoa"
-    assert inserted["amount_moved"] == "100.500000"
-    assert inserted["tx_hash"] == "0xtxhash"
 
 
 @pytest.mark.asyncio

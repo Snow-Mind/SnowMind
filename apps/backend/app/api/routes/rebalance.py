@@ -491,68 +491,6 @@ async def get_rebalance_history(
     )
 
 
-# ── POST /{address}/withdraw-all — emergency withdraw from all protocols ────
-
-@router.post("/{address}/withdraw-all")
-@limiter.limit("3/minute")
-async def withdraw_all(
-    request: Request,
-    address: str,
-    db: Client = Depends(get_db),
-    _auth: dict = Depends(require_privy_auth),
-):
-    """Withdraw all funds from every active protocol back to the smart account.
-
-    Calculates and deducts a 10% profit fee (on yield earned, not principal).
-    Fee transfer to treasury is included atomically in the same UserOp batch.
-    Returns the fee breakdown so the user can see exactly what was charged.
-    """
-    account = await _lookup_account(db, address, _auth)
-    addr = account["address"]
-    account_id = account["id"]
-
-    from app.services.optimizer.rebalancer import Rebalancer
-
-    rebalancer = Rebalancer()
-
-    try:
-        tx_hash, fee_breakdown = await rebalancer.execute_emergency_withdrawal(
-            account_id=account_id,
-            smart_account_address=addr,
-        )
-
-        try:
-            fee_usd = Decimal(str(fee_breakdown.get("fee_usd", "0")))
-            net_withdrawal_usd = Decimal(str(fee_breakdown.get("net_withdrawal_usd", "0")))
-            total_withdrawal_usd = (fee_usd + net_withdrawal_usd).quantize(Decimal("0.000001"))
-            db.table("rebalance_logs").insert({
-                "account_id": account_id,
-                "status": "executed",
-                "skip_reason": None,
-                "from_protocol": "withdrawal",
-                "to_protocol": "user_eoa",
-                "amount_moved": str(total_withdrawal_usd),
-                "tx_hash": tx_hash,
-                "apr_improvement": None,
-            }).execute()
-        except Exception as exc:
-            logger.warning("Failed to log emergency withdrawal activity for %s: %s", addr, exc)
-
-        return {
-            "status": "executed",
-            "txHash": tx_hash,
-            "feeBreakdown": {
-                "profitUsd": str(fee_breakdown["profit_usd"]),
-                "feeUsd": str(fee_breakdown["fee_usd"]),
-                "feePct": str(fee_breakdown["fee_pct"]),
-                "netWithdrawalUsd": str(fee_breakdown["net_withdrawal_usd"]),
-            },
-        }
-    except ValueError as exc:
-        # "No positions to withdraw" or "No active session key"
-        return {"status": "skipped", "txHash": None, "reason": str(exc)}
-
-
 # ── POST /{address}/partial-withdraw — partial withdrawal, no fee ────────────
 
 class PartialWithdrawRequest(CamelModel):

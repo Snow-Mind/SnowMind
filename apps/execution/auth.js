@@ -30,6 +30,7 @@ export function verifyInternalRequest({
   nowSeconds,
   key,
   ttlSeconds,
+  futureSkewSeconds = 30,
   recentNonces,
   skipReplayCheck = false,
 }) {
@@ -49,7 +50,11 @@ export function verifyInternalRequest({
     return { ok: false, status: 401, error: "Invalid request timestamp" }
   }
 
-  if (Math.abs(nowSeconds - tsInt) > ttlSeconds) {
+  if (tsInt > nowSeconds + futureSkewSeconds) {
+    return { ok: false, status: 401, error: "Request timestamp is too far in the future" }
+  }
+
+  if ((nowSeconds - tsInt) > ttlSeconds) {
     return { ok: false, status: 401, error: "Request timestamp expired" }
   }
 

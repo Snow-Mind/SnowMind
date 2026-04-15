@@ -800,8 +800,16 @@ export default function OnboardingPage() {
     ]);
 
     const [latestAccountDetailResult, latestPortfolioResult] = await Promise.allSettled([
-      api.getAccountDetail(address),
-      api.getPortfolio(address),
+      withTimeout(
+        api.getAccountDetail(address),
+        2500,
+        "Account state sync timed out",
+      ),
+      withTimeout(
+        api.getPortfolio(address),
+        2500,
+        "Portfolio sync timed out",
+      ),
     ]);
 
     const latestAccountDetail = latestAccountDetailResult.status === "fulfilled"
@@ -811,9 +819,12 @@ export default function OnboardingPage() {
       ? latestPortfolioResult.value
       : null;
 
-    const hasLiveSessionKey = Boolean(latestAccountDetail?.isActive && latestAccountDetail?.sessionKey?.isActive);
+    const accountExplicitlyInactive = latestAccountDetail?.isActive === false;
+    const hasLiveSessionKey = latestAccountDetailResult.status === "fulfilled"
+      ? Boolean(latestAccountDetail?.isActive && latestAccountDetail?.sessionKey?.isActive)
+      : true;
     const hasLiveFunds = portfolioHasFunds(latestPortfolio) || expectedFundsHint;
-    const canEnterDashboard = hasLiveSessionKey && hasLiveFunds;
+    const canEnterDashboard = !accountExplicitlyInactive && hasLiveSessionKey && hasLiveFunds;
 
     setAgentActivated(canEnterDashboard);
     setActivated(canEnterDashboard);
@@ -824,7 +835,7 @@ export default function OnboardingPage() {
           ? "Activation confirmed. Redirecting to dashboard…"
           : "Agent activated! Redirecting to dashboard…"
       );
-      setTimeout(() => router.push("/dashboard?tab=agent-log&activated=1"), 1500);
+      router.replace("/dashboard?tab=agent-log&activated=1");
       return;
     }
 

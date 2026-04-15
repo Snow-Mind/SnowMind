@@ -76,6 +76,33 @@ def test_owner_mismatch_rejected() -> None:
     assert exc.value.status_code == 403
 
 
+def test_future_timestamp_rejected() -> None:
+    signer = Account.create()
+    ts = int(datetime.now(timezone.utc).timestamp()) + 120
+
+    msg = _build_withdrawal_authorization_message(
+        smart_account_address="0x1234567890abcdef1234567890abcdef12345678",
+        owner_address=signer.address,
+        withdraw_amount_raw=1_000_000,
+        is_full_withdrawal=True,
+        signature_timestamp=ts,
+    )
+    sig = signer.sign_message(encode_defunct(text=msg)).signature.hex()
+
+    req = _base_request(
+        ownerSignature=f"0x{sig}",
+        signatureMessage=msg,
+        signatureTimestamp=ts,
+    )
+    account = {"owner_address": signer.address}
+
+    with pytest.raises(HTTPException) as exc:
+        _verify_withdrawal_authorization(req, account)
+
+    assert exc.value.status_code == 401
+    assert "too far in the future" in str(exc.value.detail)
+
+
 def test_valid_signature_passes() -> None:
     signer = Account.create()
     ts = int(datetime.now(timezone.utc).timestamp())

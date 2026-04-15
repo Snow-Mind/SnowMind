@@ -114,6 +114,53 @@ def _normalize_yield_dust(total_yield: Decimal) -> Decimal:
     return total_yield
 
 
+def _persist_principal_normalization(
+    db: Client,
+    *,
+    account_id: str,
+    target_net_principal: Decimal,
+    tracked_cumulative_deposited: Decimal | None,
+    tracked_cumulative_withdrawn: Decimal | None,
+) -> bool:
+    """Persist a reconciled net-principal baseline to stop repeated drift loops."""
+    target_net_q = max(target_net_principal, Decimal("0")).quantize(Decimal("0.000001"))
+
+    if (
+        tracked_cumulative_deposited is not None
+        and tracked_cumulative_withdrawn is not None
+    ):
+        previous_net_q = max(
+            tracked_cumulative_deposited - tracked_cumulative_withdrawn,
+            Decimal("0"),
+        ).quantize(Decimal("0.000001"))
+        if abs(previous_net_q - target_net_q) <= Decimal("0.01"):
+            return False
+        deposited_q = max(tracked_cumulative_deposited, Decimal("0")).quantize(Decimal("0.000001"))
+        withdrawn_q = max(deposited_q - target_net_q, Decimal("0")).quantize(Decimal("0.000001"))
+    else:
+        previous_net_q = None
+        deposited_q = target_net_q
+        withdrawn_q = Decimal("0.000000")
+
+    db.table("account_yield_tracking").upsert(
+        {
+            "account_id": account_id,
+            "cumulative_deposited": str(deposited_q),
+            "cumulative_net_withdrawn": str(withdrawn_q),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="account_id",
+    ).execute()
+
+    logger.warning(
+        "Persisted principal normalization for account_id=%s: previous_net=%s new_net=%s",
+        account_id,
+        previous_net_q,
+        target_net_q,
+    )
+    return True
+
+
 def _payload_has_unsupported_protocol(payload: object) -> bool:
     """Return True when an allocation payload references unsupported protocol ids."""
     if not isinstance(payload, dict):
@@ -952,6 +999,8 @@ async def get_portfolio(
 
     # Principal baseline from the same ledger used by withdrawal fee logic.
     tracked_net_principal: Decimal | None = None
+    tracked_cumulative_deposited: Decimal | None = None
+    tracked_cumulative_withdrawn: Decimal | None = None
     try:
         tracking = (
             db.table("account_yield_tracking")
@@ -961,9 +1010,16 @@ async def get_portfolio(
             .execute()
         )
         if tracking.data:
-            cumulative_deposited = Decimal(str(tracking.data[0].get("cumulative_deposited") or 0))
-            cumulative_withdrawn = Decimal(str(tracking.data[0].get("cumulative_net_withdrawn") or 0))
-            tracked_net_principal = max(cumulative_deposited - cumulative_withdrawn, Decimal("0"))
+            tracked_cumulative_deposited = Decimal(
+                str(tracking.data[0].get("cumulative_deposited") or 0)
+            )
+            tracked_cumulative_withdrawn = Decimal(
+                str(tracking.data[0].get("cumulative_net_withdrawn") or 0)
+            )
+            tracked_net_principal = max(
+                tracked_cumulative_deposited - tracked_cumulative_withdrawn,
+                Decimal("0"),
+            )
     except Exception as exc:
         logger.warning("Failed to read yield tracking for %s: %s", address, exc)
 
@@ -1027,6 +1083,7 @@ async def get_portfolio(
     # Run balance reads + APY fetch concurrently
     balance_results = await asyncio.gather(*balance_tasks, idle_task, apy_task)
     onchain_balances = dict(zip(protocol_ids, balance_results[:len(protocol_ids)]))
+    has_onchain_balance_gaps = any(value is None for value in onchain_balances.values())
     idle_usdc = balance_results[len(protocol_ids)]
     live_apys = balance_results[len(protocol_ids) + 1]
 
@@ -1232,6 +1289,22 @@ async def get_portfolio(
             total_current_value,
         )
         net_principal = total_current_value
+        if not has_onchain_balance_gaps:
+            try:
+                if _persist_principal_normalization(
+                    db,
+                    account_id=str(account_id),
+                    target_net_principal=total_current_value,
+                    tracked_cumulative_deposited=tracked_cumulative_deposited,
+                    tracked_cumulative_withdrawn=tracked_cumulative_withdrawn,
+                ):
+                    tracked_net_principal = total_current_value
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist principal normalization for %s: %s",
+                    address,
+                    exc,
+                )
 
     if _should_normalize_idle_only_principal(
         has_non_idle_positions=has_non_idle_positions,

@@ -81,6 +81,27 @@ test("verifyInternalRequest rejects expired timestamp", () => {
   assert.equal(result.error, "Request timestamp expired")
 })
 
+test("verifyInternalRequest rejects timestamps too far in the future", () => {
+  const nonces = new Map()
+  const headers = signedHeaders({ timestamp: "1700000045", nonce: "future-nonce" })
+
+  const result = verifyInternalRequest({
+    method: "POST",
+    path: "/execute/withdrawal",
+    headers,
+    rawBody: "{}",
+    nowSeconds: 1700000000,
+    key: KEY,
+    ttlSeconds: 300,
+    futureSkewSeconds: 30,
+    recentNonces: nonces,
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.status, 401)
+  assert.equal(result.error, "Request timestamp is too far in the future")
+})
+
 test("verifyInternalRequest rejects replay nonce", () => {
   const nonces = new Map()
   const headers = signedHeaders({ nonce: "replay-nonce" })

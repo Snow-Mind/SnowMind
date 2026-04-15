@@ -358,12 +358,6 @@ export const api = {
       { method: "POST" },
     ),
 
-  withdrawAll: (address: string) =>
-    request<{ status: string; txHash: string | null }>(
-      `/api/v1/rebalance/${encodeURIComponent(address)}/withdraw-all`,
-      { method: "POST" },
-    ),
-
   // Session Key
   revokeSessionKey: (address: string) =>
     request<{ success: boolean }>(

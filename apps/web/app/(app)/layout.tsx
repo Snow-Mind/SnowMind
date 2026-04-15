@@ -185,6 +185,7 @@ export default function AppLayout({
   const storeActivated = usePortfolioStore((s) => s.isAgentActivated);
   const setAgentActivated = usePortfolioStore((s) => s.setAgentActivated);
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
+  const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [addressResolutionGraceElapsed, setAddressResolutionGraceElapsed] = useState(false);
@@ -218,8 +219,13 @@ export default function AppLayout({
   };
 
   const handleDisconnect = async () => {
-    await logout();
+    clearSmartAccount();
     router.replace("/");
+    try {
+      await logout();
+    } catch {
+      // Best-effort logout; route transition should not block on provider cleanup.
+    }
   };
 
   // Agent is "active" when it has an active session key (backend can auto-rebalance)
@@ -357,7 +363,7 @@ export default function AppLayout({
     }, 0);
     const timer = window.setTimeout(() => {
       setAddressResolutionGraceElapsed(true);
-    }, 4000);
+    }, 1500);
 
     return () => {
       window.clearTimeout(resetTimer);
@@ -515,7 +521,11 @@ export default function AppLayout({
     !clientReady
     || awaitingWalletResolution
     || awaitingAddressRecovery
-    || (!effectiveSmartAccountAddress && !addressResolutionGraceElapsed && pathname !== "/onboarding")
+    || (
+      !effectiveSmartAccountAddress
+      && !addressResolutionGraceElapsed
+      && (pathname !== "/onboarding" || storeActivated || isOnboardingInProgress)
+    )
     || (
       pathname === "/onboarding"
       && storeActivated

@@ -47,6 +47,7 @@ _FULL_WITHDRAWAL_DUST_USDC = Decimal("0.01")
 # Maximum withdrawal: $10M (sanity guard)
 _MAX_WITHDRAWAL_USDC = Decimal("10000000")
 _WITHDRAW_SIGNATURE_TTL_SECONDS = 300
+_WITHDRAW_SIGNATURE_MAX_FUTURE_SKEW_SECONDS = 30
 _WITHDRAWABLE_ERC4626_PROTOCOLS = {
     "spark",
     "euler_v2",
@@ -456,6 +457,35 @@ def _to_raw_usdc(amount_usdc: Decimal) -> int:
     return int((normalized * Decimal("1e6")).to_integral_exact())
 
 
+def _truncate_skip_reason(reason: str, max_len: int = 240) -> str:
+    """Keep DB log reasons compact and predictable for UI rendering."""
+    normalized = " ".join(str(reason).split())
+    return normalized[:max_len]
+
+
+def _mark_withdrawal_log_executed(
+    db: Client,
+    log_id: str,
+    *,
+    amount_moved: Decimal,
+    tx_hash: str | None,
+) -> None:
+    db.table("rebalance_logs").update({
+        "status": "executed",
+        "skip_reason": None,
+        "amount_moved": str(amount_moved.quantize(Decimal("0.000001"))),
+        "tx_hash": tx_hash,
+    }).eq("id", log_id).execute()
+
+
+def _mark_withdrawal_log_failed(db: Client, log_id: str, reason: str) -> None:
+    db.table("rebalance_logs").update({
+        "status": "failed",
+        "skip_reason": _truncate_skip_reason(reason),
+        "tx_hash": None,
+    }).eq("id", log_id).execute()
+
+
 def _ensure_withdrawal_quote_within_onchain_balance(
     fee_calc: FeeCalculation,
     current_balance_usdc: Decimal,
@@ -543,7 +573,13 @@ def _verify_withdrawal_authorization(req: WithdrawalExecuteRequest, account: dic
         )
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    if abs(now_ts - int(signature_timestamp)) > _WITHDRAW_SIGNATURE_TTL_SECONDS:
+    signature_ts = int(signature_timestamp)
+    if signature_ts > now_ts + _WITHDRAW_SIGNATURE_MAX_FUTURE_SKEW_SECONDS:
+        raise HTTPException(
+            status_code=401,
+            detail="Withdrawal authorization timestamp is too far in the future.",
+        )
+    if (now_ts - signature_ts) > _WITHDRAW_SIGNATURE_TTL_SECONDS:
         raise HTTPException(
             status_code=401,
             detail="Withdrawal authorization expired. Please sign again.",
@@ -674,29 +710,6 @@ async def execute_withdrawal(
                 detail="Treasury address not configured — withdrawals disabled",
             )
 
-    # ── Concurrent withdrawal lock ──────────────────────────────────────
-    # Prevent double-submit: one in-flight withdrawal per account at a time.
-    lock_key = f"withdrawal_lock:{account['id']}"
-    try:
-        lock_result = (
-            db.table("rebalance_logs")
-            .select("id, status")
-            .eq("account_id", account["id"])
-            .eq("from_protocol", "withdrawal")
-            .eq("status", "pending")
-            .limit(1)
-            .execute()
-        )
-        if lock_result.data:
-            raise HTTPException(
-                status_code=409,
-                detail="A withdrawal is already in progress for this account. Please wait.",
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.warning("Lock check failed for %s: %s — proceeding", address, exc)
-
     # Read on-chain balance
     current_balance = await _get_on_chain_balance(address)
     if current_balance <= Decimal("0"):
@@ -725,6 +738,77 @@ async def execute_withdrawal(
         account,
         yield_tracking,
     )
+
+    # Insert pending withdrawal row BEFORE execution so UI/DB never records an
+    # unconfirmed withdrawal as completed, and concurrent submits are blocked.
+    pending_log_id: str | None = None
+    pending_amount = Decimal(req.withdraw_amount).quantize(Decimal("0.000001"))
+    try:
+        existing_pending = (
+            db.table("rebalance_logs")
+            .select("id")
+            .eq("account_id", account["id"])
+            .eq("from_protocol", "withdrawal")
+            .eq("status", "pending")
+            .limit(1)
+            .execute()
+        )
+        if existing_pending.data:
+            raise HTTPException(
+                status_code=409,
+                detail="A withdrawal is already in progress for this account. Please wait.",
+            )
+
+        pending_insert = db.table("rebalance_logs").insert({
+            "account_id": account["id"],
+            "status": "pending",
+            "skip_reason": None,
+            "from_protocol": "withdrawal",
+            "to_protocol": "user_eoa",
+            "amount_moved": str(pending_amount),
+            "tx_hash": None,
+            "apr_improvement": None,
+        }).execute()
+
+        if pending_insert.data:
+            pending_log_id = str(pending_insert.data[0].get("id") or "").strip() or None
+
+        if not pending_log_id:
+            pending_lookup = (
+                db.table("rebalance_logs")
+                .select("id")
+                .eq("account_id", account["id"])
+                .eq("from_protocol", "withdrawal")
+                .eq("status", "pending")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if pending_lookup.data:
+                pending_log_id = str(pending_lookup.data[0].get("id") or "").strip() or None
+
+        if not pending_log_id:
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to acquire withdrawal lock. Please retry shortly.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        err_msg = str(exc).lower()
+        if (
+            "uq_rebalance_logs_pending_withdrawal" in err_msg
+            or "duplicate key value violates unique constraint" in err_msg
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="A withdrawal is already in progress for this account. Please wait.",
+            )
+        logger.error("Failed to create pending withdrawal lock for %s: %s", address, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to acquire withdrawal lock. Please retry shortly.",
+        )
 
     # Build and submit withdrawal UserOp via Execution Service
     try:
@@ -921,17 +1005,13 @@ async def execute_withdrawal(
         # Record withdrawal in yield tracking
         record_withdrawal(db, account["id"], fee_calc)
 
-        # Log the withdrawal
-        db.table("rebalance_logs").insert({
-            "account_id": account["id"],
-            "status": "executed",
-            "skip_reason": None,
-            "from_protocol": "withdrawal",
-            "to_protocol": "user_eoa",
-            "amount_moved": str(withdraw_amount),
-            "tx_hash": tx_hash,
-            "apr_improvement": None,
-        }).execute()
+        # Transition pending -> executed atomically for this request.
+        _mark_withdrawal_log_executed(
+            db,
+            pending_log_id,
+            amount_moved=withdraw_amount,
+            tx_hash=tx_hash,
+        )
 
         # If full withdrawal, deactivate account and clear live allocations.
         # Keep historical rows (yield tracking, rebalance logs, session-key
@@ -969,9 +1049,30 @@ async def execute_withdrawal(
             ),
         )
 
-    except HTTPException:
+    except HTTPException as exc:
+        if pending_log_id:
+            try:
+                detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                _mark_withdrawal_log_failed(db, pending_log_id, detail)
+            except Exception as mark_exc:
+                logger.error(
+                    "Failed to mark pending withdrawal log as failed for %s (log=%s): %s",
+                    address,
+                    pending_log_id,
+                    mark_exc,
+                )
         raise
     except Exception as exc:
+        if pending_log_id:
+            try:
+                _mark_withdrawal_log_failed(db, pending_log_id, str(exc))
+            except Exception as mark_exc:
+                logger.error(
+                    "Failed to mark pending withdrawal log as failed for %s (log=%s): %s",
+                    address,
+                    pending_log_id,
+                    mark_exc,
+                )
         logger.error("Withdrawal failed for %s: %s", address, exc)
         raise HTTPException(
             status_code=500,

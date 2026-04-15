@@ -7,8 +7,13 @@ import { executeRebalance, executeWithdrawal } from "./execute.js"
 
 const VERSION = "1.5.1"
 const REQUEST_TTL_SECONDS = Number(process.env.INTERNAL_REQUEST_TTL_SECONDS || 300)
+const INTERNAL_REQUEST_MAX_FUTURE_SKEW_SECONDS = Number(process.env.INTERNAL_REQUEST_MAX_FUTURE_SKEW_SECONDS || 30)
 const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 60000)
 const MAX_CONCURRENT_OPS = Number(process.env.MAX_CONCURRENT_OPS || 2)
+const SENDER_LOCK_STALE_MS = Number(
+  process.env.SENDER_LOCK_STALE_MS
+  || Math.max(EXECUTION_TIMEOUT_MS + 30_000, 180_000),
+)
 const NONCE_STORE_MODE = String(process.env.NONCE_STORE_MODE || "memory").toLowerCase()
 const NONCE_STORE_STRICT = String(process.env.NONCE_STORE_STRICT || "false").toLowerCase() === "true"
 const NONCE_STORE_TABLE = String(process.env.NONCE_STORE_TABLE || "internal_request_nonces")
@@ -127,14 +132,14 @@ let activeOps = 0
 // Per-sender concurrency lock: prevents two concurrent UserOps for the same
 // smart account from being submitted to the bundler simultaneously.
 // This avoids "duplicate permissionHash" and nonce collision errors.
-// Uses a Map with timestamps so stale entries auto-expire after 90 seconds
-// (e.g. if a UserOp times out and the finally block doesn't run).
+// Uses a Map with timestamps so stale entries auto-expire after the execution
+// timeout window (plus a safety buffer) if the finally block never runs.
 const activeSenders = new Map()
 
 function isSenderActive(sender) {
   const ts = activeSenders.get(sender)
   if (!ts) return false
-  if (Date.now() - ts > 90_000) {
+  if (Date.now() - ts > SENDER_LOCK_STALE_MS) {
     activeSenders.delete(sender)
     return false
   }
@@ -234,6 +239,7 @@ app.use(async (req, res, next) => {
     nowSeconds,
     key,
     ttlSeconds: REQUEST_TTL_SECONDS,
+    futureSkewSeconds: INTERNAL_REQUEST_MAX_FUTURE_SKEW_SECONDS,
     recentNonces,
     skipReplayCheck: usePersistentNonceStore,
   })
