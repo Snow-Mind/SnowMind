@@ -283,6 +283,7 @@ const ERC20_ABI = [
 // ERC-20 transferFrom.  Deposits require: USDC.approve(PERMIT2, amount) +
 // PERMIT2.approve(USDC, euler_vault, amount, deadline) before euler.deposit().
 const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+const PERMIT2_DEADLINE_SECONDS = 3 * 60 * 60
 
 const PERMIT2_ABI = [
   {
@@ -1466,8 +1467,8 @@ export async function executeRebalance({
             args: [permit2Addr, totalAmount],
           }),
         })
-        // Set Permit2 allowance for the Euler vault with 1-hour expiry
-        const permit2Deadline = BigInt(Math.floor(Date.now() / 1000) + 3600)
+        // Set Permit2 allowance with extra headroom for bundler/mempool delays.
+        const permit2Deadline = BigInt(Math.floor(Date.now() / 1000) + PERMIT2_DEADLINE_SECONDS)
         calls.push({
           to: permit2Addr,
           value: 0n,

@@ -8,6 +8,7 @@ These tests verify the fixes for the production failure where:
 import asyncio
 import pytest
 from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ def rebalancer():
         settings.EXECUTION_HMAC_SECRET = "test-secret"
         settings.BEAT_MARGIN = 0.001
         settings.MIN_REBALANCE_INTERVAL_HOURS = 6
+        settings.SESSION_KEY_EXPIRY_GRACE_SECONDS = 120
         settings.GAS_COST_ESTIMATE_USD = 0.01
         settings.TVL_CAP_PCT = 0.01
         settings.MAX_SINGLE_REBALANCE_USD = 50000
@@ -44,6 +46,7 @@ class TestBalanceGuard:
         """When deposits exceed available funds, rebalance should be skipped."""
         account_id = str(uuid4())
         smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expires_later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
 
         # Mock: on-chain shows euler=0, DB has euler=5
         mock_allocations = {
@@ -62,6 +65,7 @@ class TestBalanceGuard:
                 "serialized_permission": "test",
                 "session_private_key": "0xabc",
                 "allowed_protocols": ["silo_susdp_usdc", "benqi"],
+                "expires_at": expires_later,
             }
 
             # Target: deposit $5 into Silo (but there's no USDC)
@@ -80,6 +84,7 @@ class TestBalanceGuard:
         """When withdrawal covers deposit, balance guard should pass."""
         account_id = str(uuid4())
         smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expires_later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
 
         # Mock: on-chain shows euler=5 (correct)
         mock_allocations = {
@@ -102,6 +107,7 @@ class TestBalanceGuard:
                 "serialized_permission": "test",
                 "session_private_key": "0xabc",
                 "allowed_protocols": ["silo_susdp_usdc", "euler_v2"],
+                "expires_at": expires_later,
             }
             mock_adapter.return_value = None  # benqi adapter not needed
 
@@ -122,6 +128,7 @@ class TestBalanceGuard:
         """Idle USDC alone should be enough to pass the balance guard."""
         account_id = str(uuid4())
         smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expires_later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
 
         mock_allocations = {}  # no existing positions
 
@@ -140,6 +147,7 @@ class TestBalanceGuard:
                 "serialized_permission": "test",
                 "session_private_key": "0xabc",
                 "allowed_protocols": ["benqi"],
+                "expires_at": expires_later,
             }
 
             # Target: deposit $10 into Benqi from idle USDC
@@ -158,6 +166,7 @@ class TestBalanceGuard:
         """Known idle balance from preflight should prevent false deposit guard skips."""
         account_id = str(uuid4())
         smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expires_later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
 
         with patch.object(rebalancer, "_get_current_allocations", new_callable=AsyncMock) as mock_current, \
              patch.object(rebalancer, "_get_idle_usdc_balance", new_callable=AsyncMock) as mock_idle, \
@@ -174,6 +183,7 @@ class TestBalanceGuard:
                 "serialized_permission": "test",
                 "session_private_key": "0xabc",
                 "allowed_protocols": ["benqi"],
+                "expires_at": expires_later,
             }
 
             result = await rebalancer.execute_rebalance(
@@ -233,6 +243,74 @@ class TestExecutionLock:
             lock.release()
             rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()
 
+
+class TestSessionKeyExpirySafety:
+    """Tests for session-key expiry grace protections."""
+
+    @pytest.mark.asyncio
+    async def test_check_and_rebalance_skips_when_key_expires_within_grace(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+
+        expiring_soon = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+        session_record = {
+            "serialized_permission": "test",
+            "session_private_key": "0xabc",
+            "allowed_protocols": ["benqi"],
+            "expires_at": expiring_soon,
+        }
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as mock_key, \
+             patch.object(rebalancer.rate_fetcher, "fetch_all_rates", new_callable=AsyncMock) as mock_rates, \
+             patch.object(rebalancer, "_log", new_callable=AsyncMock) as mock_log:
+
+            mock_db_fn.return_value = MagicMock()
+            mock_key.return_value = session_record
+            mock_log.return_value = {
+                "status": "skipped",
+                "skip_reason": "Session key expires within 120s safety window",
+            }
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=smart_account,
+            )
+
+            assert result["status"] == "skipped"
+            mock_rates.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalance_raises_when_key_expires_within_grace(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expiring_soon = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+
+        with patch.object(rebalancer, "_get_current_allocations", new_callable=AsyncMock) as mock_current, \
+             patch.object(rebalancer, "_get_idle_usdc_balance", new_callable=AsyncMock) as mock_idle, \
+             patch.object(rebalancer, "_call_execution_service", new_callable=AsyncMock) as mock_exec, \
+             patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as mock_sk:
+
+            mock_current.return_value = {}
+            mock_idle.return_value = Decimal("1.00")
+            mock_db_fn.return_value = MagicMock()
+            mock_sk.return_value = {
+                "serialized_permission": "test",
+                "session_private_key": "0xabc",
+                "allowed_protocols": ["benqi"],
+                "expires_at": expiring_soon,
+            }
+
+            with pytest.raises(ValueError, match="expires within"):
+                await rebalancer.execute_rebalance(
+                    account_id=account_id,
+                    smart_account_address=smart_account,
+                    target_allocations={"benqi": Decimal("1.00")},
+                )
+
+            mock_exec.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_check_and_rebalance_short_circuits_when_lock_is_in_flight(self, rebalancer):
         account_id = str(uuid4())
@@ -254,6 +332,7 @@ class TestExecutionLock:
                     "serialized_permission": "test",
                     "session_private_key": "0xabc",
                     "allowed_protocols": ["benqi"],
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 }
                 mock_log.return_value = {
                     "status": "skipped",

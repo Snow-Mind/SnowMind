@@ -17,9 +17,9 @@ from app.core.config import get_settings
 from app.core.database import get_supabase
 from app.services.execution.executor import ExecutionService
 from app.services.execution.session_key import (
-    get_active_session_key,
     get_active_session_key_record,
     get_deactivated_session_key_records,
+    is_session_key_expiry_valid,
     reactivate_session_key,
     revoke_session_key,
 )
@@ -287,6 +287,23 @@ class Rebalancer:
         scheduler_seconds = max(int(self.settings.REBALANCE_CHECK_INTERVAL), 60)
         return timedelta(seconds=max(tier_seconds, scheduler_seconds))
 
+    def _session_key_expiry_grace_seconds(self) -> int:
+        """Return configured key-expiry safety window before execution."""
+        try:
+            raw = getattr(self.settings, "SESSION_KEY_EXPIRY_GRACE_SECONDS", 120)
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 120
+
+    def _session_key_expires_soon(self, expires_at: object) -> bool:
+        """Return True when the key is too close to expiry for safe execution."""
+        grace_seconds = self._session_key_expiry_grace_seconds()
+        if grace_seconds <= 0:
+            return False
+
+        safety_cutoff = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
+        return not is_session_key_expiry_valid(expires_at, safety_cutoff)
+
     def _should_record_initial_deposit(self, db, account_id: str) -> bool:
         """Return True when initial deposit tracking should be (re)seeded.
 
@@ -486,6 +503,18 @@ class Rebalancer:
             logger.debug("No active session key for %s — skipping", account_id)
             return await self._log(db, account_id, "skipped",
                                    reason="No active session key")
+
+        if self._session_key_expires_soon(session_key_record.get("expires_at")):
+            grace_seconds = self._session_key_expiry_grace_seconds()
+            return await self._log(
+                db,
+                account_id,
+                "skipped",
+                reason=(
+                    f"Session key expires within {grace_seconds}s safety window; "
+                    "re-grant session key before next rebalance"
+                ),
+            )
 
         account_owner_address = ""
         try:
@@ -1943,6 +1972,14 @@ class Rebalancer:
             raise ValueError(str(exc)) from exc
         if not session_record:
             raise ValueError(f"No active session key for account {account_id}")
+
+        if self._session_key_expires_soon(session_record.get("expires_at")):
+            grace_seconds = self._session_key_expiry_grace_seconds()
+            raise ValueError(
+                f"Active session key expires within {grace_seconds}s safety window. "
+                "Re-grant session key and retry."
+            )
+
         session_key = session_record["serialized_permission"]
         session_private_key = session_record.get("session_private_key", "")
 
@@ -2035,9 +2072,22 @@ class Rebalancer:
         db = get_supabase()
         amount = Decimal(str(amount_usdc))
 
-        session_key = get_active_session_key(db, UUID(account_id))
-        if not session_key:
+        try:
+            session_record = get_active_session_key_record(db, UUID(account_id))
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not session_record:
             raise ValueError(f"No active session key for account {account_id}")
+
+        if self._session_key_expires_soon(session_record.get("expires_at")):
+            grace_seconds = self._session_key_expiry_grace_seconds()
+            raise ValueError(
+                f"Active session key expires within {grace_seconds}s safety window. "
+                "Re-grant session key and retry."
+            )
+
+        session_key = session_record["serialized_permission"]
+        session_private_key = session_record.get("session_private_key", "")
 
         # Build withdrawal instruction
         entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount)}
@@ -2052,6 +2102,7 @@ class Rebalancer:
             smart_account_address=smart_account_address,
             withdrawals=[entry],
             deposits=[],
+            session_private_key=session_private_key,
             account_id=account_id,
         )
 
@@ -2129,9 +2180,22 @@ class Rebalancer:
         if not exec_withdrawals:
             raise ValueError("No positions to withdraw")
 
-        session_key = get_active_session_key(db, UUID(account_id))
-        if not session_key:
+        try:
+            session_record = get_active_session_key_record(db, UUID(account_id))
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not session_record:
             raise ValueError(f"No active session key for account {account_id}")
+
+        if self._session_key_expires_soon(session_record.get("expires_at")):
+            grace_seconds = self._session_key_expiry_grace_seconds()
+            raise ValueError(
+                f"Active session key expires within {grace_seconds}s safety window. "
+                "Re-grant session key and retry."
+            )
+
+        session_key = session_record["serialized_permission"]
+        session_private_key = session_record.get("session_private_key", "")
 
         # Calculate withdrawal accounting values.
         current_value = sum(current.values())
@@ -2225,6 +2289,7 @@ class Rebalancer:
             smart_account_address=smart_account_address,
             withdrawals=exec_withdrawals,
             deposits=[],
+            session_private_key=session_private_key,
             account_id=account_id,
             fee_transfer=fee_transfer,
             user_transfer=user_transfer,

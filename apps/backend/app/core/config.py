@@ -129,6 +129,7 @@ class Settings(BaseSettings):
     # Legacy cooldown knob; accept fractional hours for backward compatibility
     # with existing envs that used 0.1 (6 minutes).
     MIN_REBALANCE_INTERVAL_HOURS: float = 1.0
+    SESSION_KEY_EXPIRY_GRACE_SECONDS: int = 120  # Do not start execution this close to key expiry
     SCHEDULER_LOCK_TTL_MINUTES: int = 35  # Lock expires after 35 min
 
     # ── Optimizer Thresholds ─────────────────────────────────
