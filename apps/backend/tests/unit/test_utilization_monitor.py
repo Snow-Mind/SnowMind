@@ -226,6 +226,79 @@ async def test_execute_targeted_withdrawal_non_retryable_failure_sets_cooldown(
     assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
 
 
+def test_non_retryable_classifier_includes_liquidity_exhaustion(
+    monitor: UtilizationMonitor,
+) -> None:
+    assert monitor._is_non_retryable_withdrawal_error(
+        "NotEnoughLiquidity() while simulating withdrawal"
+    )
+    assert monitor._is_non_retryable_withdrawal_error(
+        "simulation reverted with reason: 0x4323a555"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_withdrawable_amount_caps_to_erc4626_max_withdraw(
+    monitor: UtilizationMonitor,
+) -> None:
+    monitor.settings.SILO_SAVUSD_VAULT = "0x606fe9a70338e798a292CA22C1F28C829F24048E"
+
+    adapter = MagicMock()
+    adapter.get_balance = AsyncMock(return_value=100_000_000)
+
+    w3 = MagicMock()
+    w3.to_checksum_address.side_effect = lambda value: value
+    max_withdraw_call = MagicMock()
+    max_withdraw_call.call = AsyncMock(return_value=25_000_000)
+    vault = MagicMock()
+    vault.functions.maxWithdraw.return_value = max_withdraw_call
+    w3.eth.contract.return_value = vault
+
+    position = PositionSnapshot(
+        account_id="acct-4",
+        smart_account_address="0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556",
+        amount_usdc=Decimal("40"),
+    )
+
+    with patch("app.workers.utilization_monitor.get_adapter", return_value=adapter), patch(
+        "app.workers.utilization_monitor.get_web3", return_value=w3
+    ):
+        amount = await monitor._resolve_withdrawable_amount(position, "silo_savusd_usdc")
+
+    assert amount == Decimal("25.000000")
+
+
+@pytest.mark.asyncio
+async def test_resolve_withdrawable_amount_returns_zero_when_max_withdraw_is_zero(
+    monitor: UtilizationMonitor,
+) -> None:
+    monitor.settings.SILO_SAVUSD_VAULT = "0x606fe9a70338e798a292CA22C1F28C829F24048E"
+
+    adapter = MagicMock()
+    adapter.get_balance = AsyncMock(return_value=100_000_000)
+
+    w3 = MagicMock()
+    w3.to_checksum_address.side_effect = lambda value: value
+    max_withdraw_call = MagicMock()
+    max_withdraw_call.call = AsyncMock(return_value=0)
+    vault = MagicMock()
+    vault.functions.maxWithdraw.return_value = max_withdraw_call
+    w3.eth.contract.return_value = vault
+
+    position = PositionSnapshot(
+        account_id="acct-5",
+        smart_account_address="0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556",
+        amount_usdc=Decimal("40"),
+    )
+
+    with patch("app.workers.utilization_monitor.get_adapter", return_value=adapter), patch(
+        "app.workers.utilization_monitor.get_web3", return_value=w3
+    ):
+        amount = await monitor._resolve_withdrawable_amount(position, "silo_savusd_usdc")
+
+    assert amount == Decimal("0")
+
+
 @pytest.mark.asyncio
 async def test_fetch_utilizations_retries_then_succeeds(monitor: UtilizationMonitor) -> None:
     adapter = MagicMock()

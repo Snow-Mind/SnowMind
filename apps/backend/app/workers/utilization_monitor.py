@@ -17,6 +17,7 @@ from decimal import Decimal, ROUND_DOWN
 
 from app.core.config import get_settings
 from app.core.database import get_supabase
+from app.core.rpc import get_web3
 from app.services.execution.session_key import (
     get_active_session_key_record,
     is_session_key_expiry_valid,
@@ -38,6 +39,21 @@ _UTILIZATION_READ_BASE_BACKOFF_SECONDS = 0.25
 _MIN_EMERGENCY_UTILIZATION_THRESHOLD = Decimal("0.92")
 _SESSION_KEY_LOG_COOLDOWN_SECONDS = 900
 _NON_RETRYABLE_FAILURE_COOLDOWN_SECONDS = 900
+_ERC4626_MAX_WITHDRAW_ABI = [
+    {
+        "name": "maxWithdraw",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "maxAssets", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+]
+_ERC4626_VAULT_SETTING_BY_PROTOCOL = {
+    "spark": "SPARK_SPUSDC",
+    "euler_v2": "EULER_VAULT",
+    "silo_savusd_usdc": "SILO_SAVUSD_VAULT",
+    "silo_susdp_usdc": "SILO_SUSDP_VAULT",
+}
 
 
 @dataclass(frozen=True)
@@ -165,7 +181,45 @@ class UtilizationMonitor:
             or "missing session private key" in normalized
             or "no active session key" in normalized
             or "expires within" in normalized
+            or "not enough liquidity" in normalized
+            or "notenoughliquidity" in normalized
+            or "0x4323a555" in normalized
         )
+
+    async def _read_erc4626_max_withdrawable_assets(
+        self,
+        protocol_id: str,
+        owner_address: str,
+    ) -> Decimal | None:
+        setting_name = _ERC4626_VAULT_SETTING_BY_PROTOCOL.get(protocol_id)
+        if not setting_name:
+            return None
+
+        vault_address = str(getattr(self.settings, setting_name, "") or "").strip()
+        if not vault_address:
+            return None
+
+        try:
+            w3 = get_web3()
+            vault = w3.eth.contract(
+                address=w3.to_checksum_address(vault_address),
+                abi=_ERC4626_MAX_WITHDRAW_ABI,
+            )
+            max_withdraw_raw = int(
+                await vault.functions.maxWithdraw(
+                    w3.to_checksum_address(owner_address),
+                ).call()
+            )
+            max_withdraw = Decimal(str(max_withdraw_raw)) / Decimal("1000000")
+            return max(max_withdraw, Decimal("0"))
+        except Exception as exc:
+            logger.debug(
+                "Failed to read ERC4626 maxWithdraw for account=%s protocol=%s: %s",
+                owner_address,
+                protocol_id,
+                exc,
+            )
+            return None
 
     def _load_active_positions(self) -> dict[str, list[PositionSnapshot]]:
         """Return current monitored protocol positions for active accounts only."""
@@ -552,6 +606,22 @@ class UtilizationMonitor:
                 protocol_id,
                 exc,
             )
+
+        max_withdrawable_assets = await self._read_erc4626_max_withdrawable_assets(
+            protocol_id=protocol_id,
+            owner_address=position.smart_account_address,
+        )
+        if max_withdrawable_assets is not None:
+            if max_withdrawable_assets < onchain_amount:
+                logger.info(
+                    "Capping utilization-triggered withdrawal for account=%s protocol=%s "
+                    "by ERC4626 maxWithdraw: balance=$%.6f maxWithdraw=$%.6f",
+                    position.account_id,
+                    protocol_id,
+                    float(onchain_amount),
+                    float(max_withdrawable_assets),
+                )
+            onchain_amount = min(onchain_amount, max_withdrawable_assets)
 
         safe_amount = min(db_amount, max(onchain_amount, Decimal("0")))
         if safe_amount <= _MIN_POSITION_USDC:

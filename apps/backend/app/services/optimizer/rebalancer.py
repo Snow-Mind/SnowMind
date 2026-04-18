@@ -1749,6 +1749,20 @@ class Rebalancer:
                 )
                 raise
 
+            # Deterministic liquidity exhaustion (e.g. ERC4626 NotEnoughLiquidity)
+            # should not be treated as a session-key fault.
+            if (
+                "not enough liquidity" in combined_error_lower
+                or "notenoughliquidity" in combined_error_lower
+                or "0x4323a555" in combined_error_lower
+                or "erc4626exceededmaxwithdraw" in combined_error_lower
+                or "erc4626exceededmaxredeem" in combined_error_lower
+            ):
+                raise ValueError(
+                    f"Withdrawal temporarily unavailable for {smart_account_address}: "
+                    "not enough protocol liquidity."
+                ) from exc
+
             # Validation failures can be deterministic and non-retryable.
             if (
                 status_code == 400

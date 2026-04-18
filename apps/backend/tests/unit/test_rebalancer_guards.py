@@ -396,6 +396,40 @@ class TestSessionKeyPrivateKeySafety:
             mock_revoke.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_call_execution_service_maps_not_enough_liquidity_to_value_error(self, rebalancer):
+        request = httpx.Request("POST", "https://execution-service.example.com/execute-rebalance")
+        response = httpx.Response(
+            status_code=500,
+            request=request,
+            json={
+                "error": (
+                    "Both enable and regular modes failed. Primary (regular): "
+                    "Execution reverted with reason: UserOperation reverted during simulation "
+                    "with reason: 0x4323a555."
+                ),
+            },
+        )
+        execution_error = httpx.HTTPStatusError(
+            "500 Internal Server Error",
+            request=request,
+            response=response,
+        )
+
+        with patch("app.services.optimizer.rebalancer.ExecutionService") as mock_exec_cls:
+            mock_exec = mock_exec_cls.return_value
+            mock_exec.execute_rebalance = AsyncMock(side_effect=execution_error)
+
+            with pytest.raises(ValueError, match="not enough protocol liquidity"):
+                await rebalancer._call_execution_service(
+                    serialized_permission="serialized",
+                    smart_account_address="0xea5e76244dcAE7b17d9787b804F76dAaF6923184",
+                    withdrawals=[{"protocol": "silo_savusd_usdc", "amountUSDC": 100.0}],
+                    deposits=[],
+                    session_private_key="0xabc",
+                    account_id=str(uuid4()),
+                )
+
+    @pytest.mark.asyncio
     async def test_execute_rebalance_deactivates_key_when_private_key_missing(self, rebalancer):
         account_id = str(uuid4())
         smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
