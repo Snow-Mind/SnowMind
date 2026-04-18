@@ -17,7 +17,10 @@ from decimal import Decimal, ROUND_DOWN
 
 from app.core.config import get_settings
 from app.core.database import get_supabase
-from app.services.execution.session_key import is_session_key_expiry_valid
+from app.services.execution.session_key import (
+    get_active_session_key_record,
+    is_session_key_expiry_valid,
+)
 from app.services.optimizer.rebalancer import Rebalancer, _REBALANCE_EXECUTION_LOCKS
 from app.services.protocols import ALL_ADAPTERS, get_adapter
 
@@ -33,6 +36,8 @@ _USDC_QUANT = Decimal("0.000001")
 _UTILIZATION_READ_MAX_ATTEMPTS = 3
 _UTILIZATION_READ_BASE_BACKOFF_SECONDS = 0.25
 _MIN_EMERGENCY_UTILIZATION_THRESHOLD = Decimal("0.92")
+_SESSION_KEY_LOG_COOLDOWN_SECONDS = 900
+_NON_RETRYABLE_FAILURE_COOLDOWN_SECONDS = 900
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,7 @@ class UtilizationMonitor:
             pid: deque(maxlen=_HISTORY_SIZE) for pid in _MONITORED_PROTOCOLS
         }
         self._cooldowns: dict[tuple[str, str], datetime] = {}
+        self._session_key_warning_cooldowns: dict[str, datetime] = {}
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -135,6 +141,32 @@ class UtilizationMonitor:
                 except asyncio.TimeoutError:
                     pass
 
+    def _throttle_session_key_warning(self, account_id: str, reason: str) -> None:
+        now = datetime.now(timezone.utc)
+        cooldown_until = self._session_key_warning_cooldowns.get(account_id)
+        if cooldown_until and now < cooldown_until:
+            return
+
+        self._session_key_warning_cooldowns[account_id] = now + timedelta(
+            seconds=_SESSION_KEY_LOG_COOLDOWN_SECONDS,
+        )
+        logger.warning(
+            "Utilization monitor skipping account=%s due to non-executable session key: %s",
+            account_id,
+            reason,
+        )
+
+    @staticmethod
+    def _is_non_retryable_withdrawal_error(message: str) -> bool:
+        normalized = (message or "").lower()
+        return (
+            "session key" in normalized
+            or "must re-grant" in normalized
+            or "missing session private key" in normalized
+            or "no active session key" in normalized
+            or "expires within" in normalized
+        )
+
     def _load_active_positions(self) -> dict[str, list[PositionSnapshot]]:
         """Return current monitored protocol positions for active accounts only."""
         now = datetime.now(timezone.utc)
@@ -182,13 +214,51 @@ class UtilizationMonitor:
                 or []
             )
 
+            candidate_accounts = {
+                str(row.get("account_id") or "")
+                for row in alloc_rows
+                if str(row.get("protocol_id") or "") in _MONITORED_PROTOCOLS
+            }
+            executable_session_accounts: set[str] = set()
+            for account_id in candidate_accounts:
+                if not account_id or account_id not in valid_session_accounts:
+                    continue
+
+                try:
+                    session_record = get_active_session_key_record(
+                        self.db,
+                        uuid.UUID(account_id),
+                    )
+                except Exception as exc:
+                    self._throttle_session_key_warning(account_id, str(exc))
+                    continue
+
+                if not session_record:
+                    self._throttle_session_key_warning(account_id, "no active session key")
+                    continue
+
+                session_private_key = str(
+                    session_record.get("session_private_key") or ""
+                ).strip()
+                if not session_private_key:
+                    self._throttle_session_key_warning(
+                        account_id,
+                        "active session key missing private key",
+                    )
+                    continue
+
+                executable_session_accounts.add(account_id)
+
+            if not executable_session_accounts:
+                return {}
+
             positions_by_protocol: dict[str, list[PositionSnapshot]] = defaultdict(list)
             for row in alloc_rows:
                 account_id = str(row.get("account_id") or "")
                 protocol_id = str(row.get("protocol_id") or "")
                 if protocol_id not in _MONITORED_PROTOCOLS:
                     continue
-                if account_id not in valid_session_accounts:
+                if account_id not in executable_session_accounts:
                     continue
                 address = account_map.get(account_id)
                 if not address:
@@ -376,12 +446,28 @@ class UtilizationMonitor:
                     amount_usdc=float(amount_usdc),
                 )
             except Exception as exc:
-                logger.error(
-                    "Utilization-triggered withdrawal failed for account=%s protocol=%s: %s",
-                    position.account_id,
-                    protocol_id,
-                    exc,
-                )
+                error_message = str(exc)
+                if self._is_non_retryable_withdrawal_error(error_message):
+                    cooldown_seconds = max(
+                        int(self.settings.EMERGENCY_WITHDRAWAL_COOLDOWN),
+                        _NON_RETRYABLE_FAILURE_COOLDOWN_SECONDS,
+                    )
+                    self._cooldowns[cooldown_key] = now + timedelta(seconds=cooldown_seconds)
+                    logger.error(
+                        "Utilization-triggered withdrawal failed for account=%s protocol=%s "
+                        "with non-retryable error; applying %ss cooldown: %s",
+                        position.account_id,
+                        protocol_id,
+                        cooldown_seconds,
+                        error_message,
+                    )
+                else:
+                    logger.error(
+                        "Utilization-triggered withdrawal failed for account=%s protocol=%s: %s",
+                        position.account_id,
+                        protocol_id,
+                        error_message,
+                    )
                 return
 
         cooldown_seconds = max(0, int(self.settings.EMERGENCY_WITHDRAWAL_COOLDOWN))

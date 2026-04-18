@@ -1712,10 +1712,21 @@ class Rebalancer:
             # bundler timeout, paymaster) that do NOT indicate a bad session
             # key. Revoking on transient errors destroys user authorization
             # and blocks all future rebalances until the user re-activates.
+            status_code = exc.response.status_code if exc.response is not None else None
             err_msg = ""
+            err_details: list[str] = []
             if exc.response is not None:
                 try:
-                    err_msg = exc.response.json().get("error", "")
+                    payload = exc.response.json()
+                    if isinstance(payload, dict):
+                        err_msg = str(payload.get("error") or payload.get("message") or "")
+                        raw_details = payload.get("details")
+                        if isinstance(raw_details, list):
+                            err_details = [str(item) for item in raw_details if item is not None]
+                        elif raw_details:
+                            err_details = [str(raw_details)]
+                    else:
+                        err_msg = str(payload)
                 except Exception as parse_exc:
                     logger.warning(
                         "Execution error JSON parse failed for %s: %s",
@@ -1724,18 +1735,51 @@ class Rebalancer:
                     )
                     err_msg = exc.response.text
 
+            combined_error = " | ".join(
+                part for part in [err_msg, *err_details] if part
+            ) or str(exc)
+            combined_error_lower = combined_error.lower()
+            combined_error_upper = combined_error.upper()
+
             # 429 = execution service concurrency limit — transient, do NOT revoke
-            if exc.response is not None and exc.response.status_code == 429:
+            if status_code == 429:
                 logger.warning(
                     "Execution service at capacity (429) for %s — will retry next cycle",
                     smart_account_address,
                 )
                 raise
 
+            # Validation failures can be deterministic and non-retryable.
+            if (
+                status_code == 400
+                and "sessionprivatekey" in combined_error_lower
+                and "required" in combined_error_lower
+            ):
+                logger.warning(
+                    "Execution validation failed for %s: missing session private key. "
+                    "Deactivating key and requiring re-grant. details=%s",
+                    smart_account_address,
+                    combined_error[:300],
+                )
+                if account_id:
+                    db = get_supabase()
+                    revoke_session_key(db, UUID(account_id))
+                raise ValueError(
+                    f"Active session key for {smart_account_address} is missing session private key. "
+                    "User must re-grant session key."
+                ) from exc
+
+            if status_code == 400 and err_details:
+                logger.warning(
+                    "Execution service validation failed for %s: %s",
+                    smart_account_address,
+                    "; ".join(err_details)[:400],
+                )
+
             # EnableNotApproved from the ACTIVE key means the enable signature
             # is fundamentally invalid. Skip recovery loop — old keys will also
             # fail. Deactivate immediately so we stop retrying.
-            if "EnableNotApproved" in err_msg:
+            if "ENABLENOTAPPROVED" in combined_error_upper:
                 logger.warning(
                     "EnableNotApproved for %s — enable signature invalid. "
                     "Deactivating session key. User must re-grant.",
@@ -1753,7 +1797,7 @@ class Rebalancer:
             # its permission (duplicate hash from a previous grant) and can't
             # use regular mode (different permissionId). Try deactivated keys
             # whose permission may still be installed on-chain.
-            if "PERMISSION_RECOVERY_NEEDED" in err_msg:
+            if "PERMISSION_RECOVERY_NEEDED" in combined_error_upper:
                 logger.warning(
                     "PERMISSION_RECOVERY_NEEDED for %s — trying old session keys",
                     smart_account_address,
@@ -1823,7 +1867,7 @@ class Rebalancer:
             # Deactivate it so the scheduler stops retrying every cycle.
             # The user must re-grant from the dashboard (new signer → new permissionId
             # → fresh gas policy counter).
-            if "DEADLOCK" in err_msg:
+            if "DEADLOCK" in combined_error_upper:
                 logger.warning(
                     "DEADLOCK detected for %s — gas policy likely exhausted. "
                     "Deactivating session key. User must re-grant from dashboard.",
@@ -1851,16 +1895,16 @@ class Rebalancer:
             # they use different enable signatures that are equally invalid.
             # Deactivate and require re-grant.
             is_definite_session_key_error = (
-                "EnableNotApproved" in err_msg
-                or "serializedSessionKey" in err_msg
-                or "No signer" in err_msg
-                or "Session key/account mismatch" in err_msg
+                "enablenotapproved" in combined_error_lower
+                or "serializedsessionkey" in combined_error_lower
+                or "no signer" in combined_error_lower
+                or "session key/account mismatch" in combined_error_lower
             )
             if is_definite_session_key_error:
                 logger.warning(
                     "Definitive session key error for %s — revoking. Error: %s",
                     smart_account_address,
-                    err_msg[:300],
+                    combined_error[:300],
                 )
                 if account_id:
                     db = get_supabase()
@@ -1990,11 +2034,11 @@ class Rebalancer:
             bool(session_private_key),
             len(session_key) if session_key else 0,
         )
-        if not session_private_key:
-            logger.warning(
-                "No session_private_key found for account %s. "
-                "This is a legacy session key — user must re-grant from dashboard.",
-                account_id,
+        if not str(session_private_key).strip():
+            revoke_session_key(db, UUID(account_id))
+            raise ValueError(
+                f"Active session key for {smart_account_address} is missing session private key. "
+                "Session key has been deactivated; user must re-grant."
             )
 
         # Track which protocols are being fully exited (in current but not in target)
@@ -2088,6 +2132,12 @@ class Rebalancer:
 
         session_key = session_record["serialized_permission"]
         session_private_key = session_record.get("session_private_key", "")
+        if not str(session_private_key).strip():
+            revoke_session_key(db, UUID(account_id))
+            raise ValueError(
+                f"Active session key for {smart_account_address} is missing session private key. "
+                "Session key has been deactivated; user must re-grant."
+            )
 
         # Build withdrawal instruction
         entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount)}
@@ -2196,6 +2246,12 @@ class Rebalancer:
 
         session_key = session_record["serialized_permission"]
         session_private_key = session_record.get("session_private_key", "")
+        if not str(session_private_key).strip():
+            revoke_session_key(db, UUID(account_id))
+            raise ValueError(
+                f"Active session key for {smart_account_address} is missing session private key. "
+                "Session key has been deactivated; user must re-grant."
+            )
 
         # Calculate withdrawal accounting values.
         current_value = sum(current.values())

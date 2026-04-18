@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.execution.session_key import (
+    get_active_session_key_record,
     is_session_key_expiry_valid,
     store_session_key,
 )
@@ -81,6 +82,55 @@ def test_store_session_key_allows_explicit_regrant_when_key_changes() -> None:
     assert new_key_id == "new-key-id"
     assert query.update.called
     assert query.insert.called
+
+
+def test_store_session_key_requires_session_private_key() -> None:
+    now = datetime.now(timezone.utc)
+    db = MagicMock()
+
+    with pytest.raises(ValueError, match="sessionPrivateKey"):
+        store_session_key(
+            db,
+            uuid4(),
+            {
+                "serializedPermission": "perm-v3",
+                "sessionKeyAddress": "0xnewkey",
+                "expiresAt": int((now + timedelta(days=30)).timestamp()),
+            },
+            force=True,
+        )
+
+
+def test_get_active_session_key_record_deactivates_legacy_key_without_private_key() -> None:
+    db = MagicMock()
+    query = MagicMock()
+    db.table.return_value = query
+    query.update.return_value = query
+    query.eq.return_value = query
+    query.execute.return_value = MagicMock(data=[{"id": "legacy-key"}])
+
+    metadata = {
+        "id": "legacy-key",
+        "key_address": "0xabc123",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "created_at": "2026-01-01T00:00:00Z",
+        "allowed_protocols": ["benqi"],
+        "serialized_permission": "encrypted-payload",
+        "allocation_caps": None,
+        "max_amount_per_tx": "0",
+    }
+
+    with patch(
+        "app.services.execution.session_key.get_active_session_key_metadata",
+        return_value=metadata,
+    ), patch(
+        "app.services.execution.session_key.decrypt_session_key",
+        return_value="legacy-serialized-permission",
+    ):
+        with pytest.raises(ValueError, match="missing session private key"):
+            get_active_session_key_record(db, uuid4())
+
+    query.update.assert_called_with({"is_active": False})
 
 
 def test_session_key_expiry_validator_accepts_iso_and_epoch_seconds() -> None:

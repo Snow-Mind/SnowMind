@@ -205,11 +205,32 @@ export default function AppLayout({
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [addressResolutionGraceElapsed, setAddressResolutionGraceElapsed] = useState(false);
   const [addressRecoveryFailed, setAddressRecoveryFailed] = useState(false);
+  const [authBootstrapStalled, setAuthBootstrapStalled] = useState(false);
+  const [routeDecisionStalled, setRouteDecisionStalled] = useState(false);
   const recoveryInFlightRef = useRef(false);
   const appHostLoginKickoffRef = useRef(false);
   const appQueryClient = useQueryClient();
   const currentHostname = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
   const isAppHost = currentHostname === "app.snowmind.xyz";
+
+  useEffect(() => {
+    if (ready) {
+      const resetTimer = window.setTimeout(() => {
+        setAuthBootstrapStalled(false);
+      }, 0);
+      return () => {
+        window.clearTimeout(resetTimer);
+      };
+    }
+
+    const timer = window.setTimeout(() => {
+      setAuthBootstrapStalled(true);
+    }, 15_000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [ready]);
 
   const handleDeactivateAgent = async () => {
     const addr = effectiveSmartAccountAddress;
@@ -457,11 +478,90 @@ export default function AppLayout({
     }
   }, [accountDataReady, accountDetail, hasActiveSessionKey, hasFunds, pathname, router, isOnboardingInProgress, accountDetailError, portfolioError]);
 
+  const shouldShowRouteDecisionLoader =
+    !clientReady
+    || awaitingWalletResolution
+    || awaitingAddressRecovery
+    || (
+      !effectiveSmartAccountAddress
+      && !addressResolutionGraceElapsed
+      && (pathname !== "/onboarding" || storeActivated || isOnboardingInProgress)
+    )
+    || (
+      pathname === "/onboarding"
+      && storeActivated
+      && !hasAuthFault
+      && !accountDataReady
+    )
+    || (
+      !!effectiveSmartAccountAddress
+      && !hasAuthFault
+      && (
+        pathname === "/dashboard"
+        || pathname === "/onboarding"
+        || pathname === "/portfolio"
+        || pathname === "/settings"
+      )
+      && !dataReady
+    );
+
+  useEffect(() => {
+    if (!shouldShowRouteDecisionLoader) {
+      const resetTimer = window.setTimeout(() => {
+        setRouteDecisionStalled(false);
+      }, 0);
+      return () => {
+        window.clearTimeout(resetTimer);
+      };
+    }
+
+    const timer = window.setTimeout(() => {
+      setRouteDecisionStalled(true);
+    }, 12_000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [shouldShowRouteDecisionLoader]);
+
   // Don't render until auth is ready
   if (!ready) {
+    if (!authBootstrapStalled) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
+        </div>
+      );
+    }
+
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
+      <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB] px-6">
+        <div className="w-full max-w-md rounded-xl border border-[#E8E2DA] bg-white p-6 text-center shadow-sm">
+          <p className="text-sm font-semibold text-[#1A1715]">Wallet Initialization Delayed</p>
+          <p className="mt-2 text-xs text-[#5C5550]">
+            Authentication is taking longer than expected. This can happen when multiple wallet extensions inject providers.
+          </p>
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <button
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.location.reload();
+                }
+              }}
+              className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
+            >
+              Reload App
+            </button>
+            {isAppHost && (
+              <button
+                onClick={login}
+                className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+              >
+                Retry Sign-in
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
@@ -533,38 +633,56 @@ export default function AppLayout({
     return null;
   }
 
-  const shouldShowRouteDecisionLoader =
-    !clientReady
-    || awaitingWalletResolution
-    || awaitingAddressRecovery
-    || (
-      !effectiveSmartAccountAddress
-      && !addressResolutionGraceElapsed
-      && (pathname !== "/onboarding" || storeActivated || isOnboardingInProgress)
-    )
-    || (
-      pathname === "/onboarding"
-      && storeActivated
-      && !hasAuthFault
-      && !accountDataReady
-    )
-    || (
-      !!effectiveSmartAccountAddress
-      && !hasAuthFault
-      && (
-        pathname === "/dashboard"
-        || pathname === "/onboarding"
-        || pathname === "/portfolio"
-        || pathname === "/settings"
-      )
-      && !dataReady
-    );
-
   // Route-decision loading gate: show spinner while auth/account state settles.
-  if (shouldShowRouteDecisionLoader) {
+  if (shouldShowRouteDecisionLoader && !routeDecisionStalled) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E84142] border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (shouldShowRouteDecisionLoader && routeDecisionStalled) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#F5F0EB] px-6">
+        <div className="w-full max-w-md rounded-xl border border-[#E8E2DA] bg-white p-6 text-center shadow-sm">
+          <p className="text-sm font-semibold text-[#1A1715]">Syncing Account State Is Slow</p>
+          <p className="mt-2 text-xs text-[#5C5550]">
+            We are still syncing your wallet and account status. You can retry sync, continue, or reload.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <button
+              onClick={() => {
+                setRouteDecisionStalled(false);
+                if (!effectiveSmartAccountAddress) return;
+                void Promise.allSettled([
+                  appQueryClient.invalidateQueries({ queryKey: ["account-detail", effectiveSmartAccountAddress] }),
+                  appQueryClient.invalidateQueries({ queryKey: ["portfolio", effectiveSmartAccountAddress] }),
+                  appQueryClient.invalidateQueries({ queryKey: ["rebalance-status", effectiveSmartAccountAddress] }),
+                ]);
+              }}
+              className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+            >
+              Retry Sync
+            </button>
+            <button
+              onClick={() => router.replace(effectiveSmartAccountAddress ? "/dashboard" : "/onboarding")}
+              className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
+            >
+              Continue
+            </button>
+            <button
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.location.reload();
+                }
+              }}
+              className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+            >
+              Reload
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

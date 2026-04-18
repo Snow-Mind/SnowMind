@@ -373,6 +373,10 @@ def store_session_key(
         or session_key_data.get("session_private_key")
         or ""
     )
+    if not str(session_private_key).strip():
+        raise ValueError(
+            "session_key_data must contain non-empty 'sessionPrivateKey' or 'session_private_key'"
+        )
 
     # Build JSON envelope containing both approval and private key
     envelope = json.dumps({
@@ -663,6 +667,29 @@ def get_active_session_key_record(db: Client, account_id: UUID) -> ActiveSession
     except (json.JSONDecodeError, TypeError):
         # Legacy format: plain serialized permission string
         pass
+
+    if not str(session_private_key or "").strip():
+        key_id = row.get("id")
+        logger.warning(
+            "Active session key for account %s lacks session private key (key_id=%s). "
+            "Deactivating legacy key; user must re-grant.",
+            account_id,
+            key_id,
+        )
+        try:
+            if key_id:
+                db.table("session_keys").update({"is_active": False}).eq("id", key_id).execute()
+        except Exception as deact_exc:
+            logger.warning(
+                "Failed to deactivate legacy session key %s for %s: %s",
+                key_id,
+                account_id,
+                deact_exc,
+            )
+
+        raise ValueError(
+            "Active session key is missing session private key. User must re-grant session key."
+        )
 
     return {
         "key_id": str(row.get("id") or ""),

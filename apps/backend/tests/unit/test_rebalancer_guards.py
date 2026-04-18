@@ -6,6 +6,7 @@ These tests verify the fixes for the production failure where:
 3. Backend sent deposit-only rebalances with no USDC available
 """
 import asyncio
+import httpx
 import pytest
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
@@ -349,3 +350,110 @@ class TestSessionKeyExpirySafety:
         finally:
             lock.release()
             rebalancer_module._REBALANCE_EXECUTION_LOCKS.clear()
+
+
+class TestSessionKeyPrivateKeySafety:
+    """Tests for fail-fast behavior when session private key is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_call_execution_service_revokes_on_missing_private_key_validation(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+
+        request = httpx.Request("POST", "https://execution-service.example.com/execute-rebalance")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            json={
+                "error": "Validation failed",
+                "details": ["sessionPrivateKey is required"],
+            },
+        )
+        validation_error = httpx.HTTPStatusError(
+            "400 Bad Request",
+            request=request,
+            response=response,
+        )
+
+        with patch("app.services.optimizer.rebalancer.ExecutionService") as mock_exec_cls, \
+             patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+             patch("app.services.optimizer.rebalancer.revoke_session_key") as mock_revoke:
+
+            mock_exec = mock_exec_cls.return_value
+            mock_exec.execute_rebalance = AsyncMock(side_effect=validation_error)
+            mock_db_fn.return_value = MagicMock()
+
+            with pytest.raises(ValueError, match="missing session private key"):
+                await rebalancer._call_execution_service(
+                    serialized_permission="serialized",
+                    smart_account_address=smart_account,
+                    withdrawals=[{"protocol": "benqi", "amountUSDC": 1.0}],
+                    deposits=[],
+                    session_private_key="",
+                    account_id=account_id,
+                )
+
+            mock_revoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_rebalance_deactivates_key_when_private_key_missing(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expires_later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+        with patch.object(rebalancer, "_get_current_allocations", new_callable=AsyncMock) as mock_current, \
+             patch.object(rebalancer, "_get_idle_usdc_balance", new_callable=AsyncMock) as mock_idle, \
+             patch.object(rebalancer, "_call_execution_service", new_callable=AsyncMock) as mock_exec, \
+             patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as mock_sk, \
+             patch("app.services.optimizer.rebalancer.revoke_session_key") as mock_revoke:
+
+            mock_current.return_value = {}
+            mock_idle.return_value = Decimal("1.00")
+            mock_db_fn.return_value = MagicMock()
+            mock_sk.return_value = {
+                "serialized_permission": "test",
+                "session_private_key": "",
+                "allowed_protocols": ["benqi"],
+                "expires_at": expires_later,
+            }
+
+            with pytest.raises(ValueError, match="missing session private key"):
+                await rebalancer.execute_rebalance(
+                    account_id=account_id,
+                    smart_account_address=smart_account,
+                    target_allocations={"benqi": Decimal("1.00")},
+                )
+
+            mock_revoke.assert_called_once()
+            mock_exec.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_partial_withdrawal_deactivates_key_when_private_key_missing(self, rebalancer):
+        account_id = str(uuid4())
+        smart_account = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+        expires_later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as mock_db_fn, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as mock_sk, \
+             patch("app.services.optimizer.rebalancer.revoke_session_key") as mock_revoke, \
+             patch.object(rebalancer, "_call_execution_service", new_callable=AsyncMock) as mock_exec:
+
+            mock_db_fn.return_value = MagicMock()
+            mock_sk.return_value = {
+                "serialized_permission": "test",
+                "session_private_key": "",
+                "allowed_protocols": ["benqi"],
+                "expires_at": expires_later,
+            }
+
+            with pytest.raises(ValueError, match="missing session private key"):
+                await rebalancer.execute_partial_withdrawal(
+                    account_id=account_id,
+                    smart_account_address=smart_account,
+                    protocol_id="benqi",
+                    amount_usdc=1.0,
+                )
+
+            mock_revoke.assert_called_once()
+            mock_exec.assert_not_awaited()

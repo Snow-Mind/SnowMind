@@ -566,6 +566,7 @@ export default function OnboardingPage() {
   const [regrantOnlyMode, setRegrantOnlyMode] = useState(false);
   const [isReauthenticating, setIsReauthenticating] = useState(false);
   const [repairStage, setRepairStage] = useState<"idle" | "await-login">("idle");
+  const [decisionLoaderStalled, setDecisionLoaderStalled] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activateGuardRef = useRef(false);
   const repairLoginAttemptedRef = useRef(false);
@@ -1375,12 +1376,63 @@ export default function OnboardingPage() {
       || (storeActivated && !smartAccountAddress)
     );
 
-  if (showOnboardingDecisionLoader) {
+  useEffect(() => {
+    if (!showOnboardingDecisionLoader) {
+      setDecisionLoaderStalled(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setDecisionLoaderStalled(true);
+    }, 12_000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [showOnboardingDecisionLoader]);
+
+  if (showOnboardingDecisionLoader && !decisionLoaderStalled) {
     return (
       <div className="mx-auto flex min-h-[50vh] w-full max-w-lg items-center justify-center px-3 py-8 sm:px-0 sm:py-10">
         <div className="flex items-center gap-3 rounded-xl border border-[#E8E2DA] bg-white px-4 py-3">
           <Loader2 className="h-4 w-4 animate-spin text-[#E84142]" />
           <span className="text-xs text-[#5C5550]">Loading your account state...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (showOnboardingDecisionLoader && decisionLoaderStalled) {
+    return (
+      <div className="mx-auto flex min-h-[50vh] w-full max-w-lg items-center justify-center px-3 py-8 sm:px-0 sm:py-10">
+        <div className="w-full rounded-xl border border-[#E8E2DA] bg-white p-4 text-center">
+          <p className="text-sm font-semibold text-[#1A1715]">Account Sync Is Taking Longer Than Expected</p>
+          <p className="mt-2 text-xs text-[#5C5550]">
+            Your account is still syncing. You can retry state sync or continue to dashboard while background queries finish.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <button
+              onClick={() => {
+                setDecisionLoaderStalled(false);
+                void Promise.allSettled([
+                  queryClient.invalidateQueries({ queryKey: ["portfolio", smartAccountAddress] }),
+                  queryClient.invalidateQueries({ queryKey: ["account-detail", smartAccountAddress] }),
+                  queryClient.invalidateQueries({ queryKey: ["rebalance-status", smartAccountAddress] }),
+                ]);
+              }}
+              className="rounded-lg border border-[#E8E2DA] px-3 py-1.5 text-xs font-medium text-[#5C5550] hover:border-[#D4CEC7]"
+            >
+              Retry Sync
+            </button>
+            {smartAccountAddress && (
+              <button
+                onClick={() => router.replace("/dashboard")}
+                className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
+              >
+                Continue To Dashboard
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );

@@ -2,6 +2,7 @@ from collections import deque
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -129,6 +130,100 @@ async def test_execute_targeted_withdrawal_post_rebalance_failure_nonfatal(
 
     assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
     assert monitor.rebalancer.check_and_rebalance.await_count == 1
+
+
+def test_load_active_positions_filters_non_executable_session_keys(
+    monitor: UtilizationMonitor,
+) -> None:
+    executable_account = str(uuid4())
+    missing_key_account = str(uuid4())
+
+    query = MagicMock()
+    monitor.db.table.return_value = query
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.gt.return_value = query
+    query.execute.side_effect = [
+        MagicMock(
+            data=[
+                {"id": executable_account, "address": "0x1111111111111111111111111111111111111111"},
+                {"id": missing_key_account, "address": "0x2222222222222222222222222222222222222222"},
+            ]
+        ),
+        MagicMock(
+            data=[
+                {"account_id": executable_account, "expires_at": "2099-01-01T00:00:00Z"},
+                {"account_id": missing_key_account, "expires_at": "2099-01-01T00:00:00Z"},
+            ]
+        ),
+        MagicMock(
+            data=[
+                {
+                    "account_id": executable_account,
+                    "protocol_id": "silo_savusd_usdc",
+                    "amount_usdc": "10.0",
+                },
+                {
+                    "account_id": missing_key_account,
+                    "protocol_id": "silo_savusd_usdc",
+                    "amount_usdc": "10.0",
+                },
+            ]
+        ),
+    ]
+
+    def _mock_key_lookup(_db, account_uuid):
+        if str(account_uuid) == executable_account:
+            return {
+                "session_private_key": "0xabc",
+                "serialized_permission": "perm",
+            }
+        raise ValueError("Active session key is missing session private key. User must re-grant.")
+
+    with patch(
+        "app.workers.utilization_monitor.get_active_session_key_record",
+        side_effect=_mock_key_lookup,
+    ):
+        positions = monitor._load_active_positions()
+
+    assert set(positions.keys()) == {"silo_savusd_usdc"}
+    assert len(positions["silo_savusd_usdc"]) == 1
+    assert positions["silo_savusd_usdc"][0].account_id == executable_account
+
+
+@pytest.mark.asyncio
+async def test_execute_targeted_withdrawal_non_retryable_failure_sets_cooldown(
+    monitor: UtilizationMonitor,
+) -> None:
+    monitor._resolve_withdrawable_amount = AsyncMock(return_value=Decimal("50.000000"))
+    monitor._record_withdrawal_activity = MagicMock()
+    monitor.rebalancer.execute_partial_withdrawal = AsyncMock(
+        side_effect=ValueError(
+            "Active session key is missing session private key. User must re-grant session key."
+        )
+    )
+
+    position = PositionSnapshot(
+        account_id="acct-3",
+        smart_account_address="0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556",
+        amount_usdc=Decimal("50"),
+    )
+
+    await monitor._execute_targeted_withdrawal(
+        protocol_id="silo_savusd_usdc",
+        position=position,
+        trigger_reason="absolute utilization above 92%",
+    )
+
+    assert ("acct-3", "silo_savusd_usdc") in monitor._cooldowns
+
+    await monitor._execute_targeted_withdrawal(
+        protocol_id="silo_savusd_usdc",
+        position=position,
+        trigger_reason="absolute utilization above 92%",
+    )
+
+    assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
 
 
 @pytest.mark.asyncio
