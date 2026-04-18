@@ -71,6 +71,16 @@ _REBALANCE_COOLDOWN_TIERS: tuple[tuple[Decimal, Decimal], ...] = (
     (Decimal("100000"), Decimal("2")),
 )
 
+_PROTOCOL_DISPLAY_NAMES: dict[str, str] = {
+    "aave": "Aave",
+    "aave_v3": "Aave",
+    "benqi": "Benqi",
+    "spark": "Spark",
+    "euler_v2": "Euler",
+    "silo_savusd_usdc": "Silo sAVUSD/USDC",
+    "silo_susdp_usdc": "Silo sUSDP/USDC",
+}
+
 
 def _permission_blob_contains_address(serialized_permission: str, address: str) -> bool:
     """Return True if *address* is present in a serialized permission blob.
@@ -174,6 +184,59 @@ def _detect_user_cap_breaches(
             breaches.append(pid)
 
     return breaches
+
+
+def _format_skipped_markets_suffix(health_results: dict[str, HealthCheckResult]) -> str:
+    """Build compact skip details for markets excluded from new deposits."""
+    skipped: list[str] = []
+
+    for protocol_id in sorted(health_results.keys()):
+        result = health_results[protocol_id]
+        if result.is_deposit_safe:
+            continue
+
+        protocol_name = _PROTOCOL_DISPLAY_NAMES.get(protocol_id, protocol_id)
+        reason = "health checks failed"
+        if result.exclusion_reasons:
+            primary_reason = str(result.exclusion_reasons[0]).strip()
+            if primary_reason:
+                reason = primary_reason.rstrip(".")
+        skipped.append(f"{protocol_name} ({reason})")
+
+    if not skipped:
+        return ""
+
+    visible = skipped[:3]
+    details = "; ".join(visible)
+    remaining = len(skipped) - len(visible)
+    if remaining > 0:
+        details = f"{details}; +{remaining} more"
+
+    return f" Skipped markets: {details}."
+
+
+def _format_skip_gate_reason(
+    base_reason: str,
+    *,
+    gate: str,
+    observed: str | None = None,
+    threshold: str | None = None,
+    context: str | None = None,
+    skipped_markets_suffix: str = "",
+) -> str:
+    """Format skip reasons using a fixed gate/observed/threshold template."""
+    parts: list[str] = [base_reason, f"gate={gate}"]
+    if observed:
+        parts.append(f"observed={observed}")
+    if threshold:
+        parts.append(f"threshold={threshold}")
+    if context:
+        parts.append(f"context={context}")
+
+    reason = " | ".join(parts)
+    if skipped_markets_suffix:
+        reason = f"{reason}{skipped_markets_suffix}"
+    return reason
 
 
 class Rebalancer:
@@ -524,7 +587,12 @@ class Rebalancer:
                         )
                         return await self._log(
                             db, account_id, "skipped",
-                            reason=f"PERMISSION_RECOVERY cooldown ({mins_left}min left) — user must re-grant",
+                            reason=_format_skip_gate_reason(
+                                "PERMISSION_RECOVERY cooldown — user must re-grant",
+                                gate="permission_recovery_cooldown",
+                                observed=f"{mins_left}m remaining",
+                                threshold="30m",
+                            ),
                         )
         except Exception as exc:
             logger.warning(
@@ -736,9 +804,11 @@ class Rebalancer:
                 db,
                 account_id,
                 "skipped",
-                reason=(
-                    f"Total balance ${float(total_usd):.2f} below minimum "
-                    f"${float(min_balance):.2f}"
+                reason=_format_skip_gate_reason(
+                    "Total balance below minimum",
+                    gate="min_balance",
+                    observed=f"${float(total_usd):.2f}",
+                    threshold=f"${float(min_balance):.2f}",
                 ),
             )
 
@@ -901,12 +971,20 @@ class Rebalancer:
             platform_total = sum(
                 Decimal(str(r["amount_usdc"])) for r in all_allocs.data
             )
-            if platform_total + idle_usdc > cap:
+            projected_total = platform_total + idle_usdc
+            if projected_total > cap:
                 return await self._log(
                     db, account_id, "skipped",
-                    reason=f"Platform deposit cap reached (${float(cap):.0f}). "
-                           f"Current: ${float(platform_total):.0f}, "
-                           f"Deposit: ${float(idle_usdc):.0f}",
+                    reason=_format_skip_gate_reason(
+                        "Platform deposit cap reached",
+                        gate="platform_deposit_cap",
+                        observed=f"${float(projected_total):.0f}",
+                        threshold=f"${float(cap):.0f}",
+                        context=(
+                            f"current=${float(platform_total):.0f}; "
+                            f"incoming_deposit=${float(idle_usdc):.0f}"
+                        ),
+                    ),
                 )
 
             # Record the initial deposit once per principal lifecycle.
@@ -1162,6 +1240,7 @@ class Rebalancer:
                 allocation_caps if isinstance(allocation_caps, dict) else None,
             ),
         )
+        skipped_markets_suffix = _format_skipped_markets_suffix(health_results)
 
         idle_ratio = Decimal("0")
         if total_usd > Decimal("0"):
@@ -1172,10 +1251,12 @@ class Rebalancer:
                 db,
                 account_id,
                 "skipped",
-                reason=(
-                    "Liquidity-constrained cycle: too much capital would remain idle "
-                    f"({float(idle_ratio * Decimal('100')):.1f}% > "
-                    f"{float(max_idle_ratio * Decimal('100')):.1f}% threshold)."
+                reason=_format_skip_gate_reason(
+                    "Liquidity-constrained cycle: too much capital would remain idle",
+                    gate="idle_overflow",
+                    observed=f"{float(idle_ratio * Decimal('100')):.1f}%",
+                    threshold=f"{float(max_idle_ratio * Decimal('100')):.1f}%",
+                    skipped_markets_suffix=skipped_markets_suffix,
                 ),
                 proposed=allocation_result.allocations,
             )
@@ -1225,7 +1306,13 @@ class Rebalancer:
             )
             return await self._log(
                 db, account_id, "skipped",
-                reason="APY improvement below beat margin",
+                reason=_format_skip_gate_reason(
+                    "APY improvement below beat margin",
+                    gate="beat_margin",
+                    observed=f"{float(apy_improvement * 100):.4f}%",
+                    threshold=f"{float(Decimal(str(self.settings.BEAT_MARGIN)) * 100):.4f}%",
+                    skipped_markets_suffix=skipped_markets_suffix,
+                ),
                 proposed=result_allocations,
             )
 
@@ -1242,12 +1329,17 @@ class Rebalancer:
         if last.data and global_flag == RebalanceFlag.NONE and not skip_performance_gates:
             last_ts = datetime.fromisoformat(last.data[0]["created_at"])
             min_gap = self._min_rebalance_gap(total_usd)
-            if datetime.now(timezone.utc) - last_ts < min_gap:
+            elapsed_since_last = datetime.now(timezone.utc) - last_ts
+            if elapsed_since_last < min_gap:
                 return await self._log(
                     db, account_id, "skipped",
-                    reason=(
-                        "Last rebalance too recent "
-                        f"({last_ts.isoformat()}, min_gap={str(min_gap)})"
+                    reason=_format_skip_gate_reason(
+                        "Last rebalance too recent",
+                        gate="min_rebalance_gap",
+                        observed=str(elapsed_since_last),
+                        threshold=str(min_gap),
+                        context=f"last_at={last_ts.isoformat()}",
+                        skipped_markets_suffix=skipped_markets_suffix,
                     ),
                     proposed=result_allocations,
                 )
@@ -1264,7 +1356,13 @@ class Rebalancer:
                 db,
                 account_id,
                 "skipped",
-                reason="Total movement below $0.01",
+                reason=_format_skip_gate_reason(
+                    "Total movement below $0.01",
+                    gate="movement_floor",
+                    observed=f"${float(total_movement):.4f}",
+                    threshold="$0.0100",
+                    skipped_markets_suffix=skipped_markets_suffix,
+                ),
                 proposed=result_allocations,
             )
 
@@ -1281,14 +1379,18 @@ class Rebalancer:
             daily_gain = apy_improvement * total_usd / Decimal("365")
             gas_cost = Decimal(str(self.settings.GAS_COST_ESTIMATE_USD))
             breakeven_days = Decimal(str(self.settings.PROFITABILITY_BREAKEVEN_DAYS))
+            projected_window_gain = daily_gain * breakeven_days
             if daily_gain * breakeven_days < gas_cost:
                 return await self._log(
                     db,
                     account_id,
                     "skipped",
-                    reason=(
-                        "Projected short-term improvement is too small for this cycle "
-                        f"(window={int(breakeven_days)}d)."
+                    reason=_format_skip_gate_reason(
+                        "Projected short-term improvement is too small for this cycle",
+                        gate="profitability",
+                        observed=f"${float(projected_window_gain):.4f} over {int(breakeven_days)}d",
+                        threshold=f"${float(gas_cost):.4f} gas_estimate",
+                        skipped_markets_suffix=skipped_markets_suffix,
                     ),
                     proposed=result_allocations,
                 )
@@ -1339,9 +1441,15 @@ class Rebalancer:
                     # Skip only when BOTH target and current state are identical.
                     # If state drifted (e.g. funds became idle again), allow execute.
                     if proposed_str == last_str and current_str == last_str:
+                        elapsed_since_last = datetime.now(timezone.utc) - last_ts
                         return await self._log(
                             db, account_id, "skipped",
-                            reason="Idempotency: identical rebalance executed within 60 min",
+                            reason=_format_skip_gate_reason(
+                                "Idempotency: identical rebalance executed within 60 min",
+                                gate="idempotency_window",
+                                observed=str(elapsed_since_last),
+                                threshold="1:00:00",
+                            ),
                             proposed=result_allocations,
                         )
                     if proposed_str == last_str and current_str != last_str:

@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   ExternalLink,
   ArrowDownToLine,
+  ArrowUpFromLine,
   Copy,
   ChevronDown,
   LogOut,
@@ -46,6 +47,7 @@ function TopBar({
   eoaAddress,
   isAgentActive,
   onDeposit,
+  onWithdraw,
   onAgentDetails,
   onDisconnect,
 }: {
@@ -53,6 +55,7 @@ function TopBar({
   eoaAddress: string | null;
   isAgentActive: boolean;
   onDeposit: () => void;
+  onWithdraw: () => void;
   onAgentDetails: () => void;
   onDisconnect: () => void;
 }) {
@@ -81,6 +84,16 @@ function TopBar({
           >
             <ArrowDownToLine className="h-3.5 w-3.5" />
             Deposit
+          </button>
+        )}
+
+        {isAgentActive && (
+          <button
+            onClick={onWithdraw}
+            className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
+          >
+            <ArrowUpFromLine className="h-3.5 w-3.5" />
+            Withdraw
           </button>
         )}
 
@@ -187,6 +200,7 @@ export default function AppLayout({
   const setSmartAccountAddress = usePortfolioStore((s) => s.setSmartAccountAddress);
   const clearSmartAccount = usePortfolioStore((s) => s.clearSmartAccount);
   const [showDeposit, setShowDeposit] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
   const [showAgentDetails, setShowAgentDetails] = useState(false);
   const [addressResolutionGraceElapsed, setAddressResolutionGraceElapsed] = useState(false);
   const [addressRecoveryFailed, setAddressRecoveryFailed] = useState(false);
@@ -200,6 +214,7 @@ export default function AppLayout({
     const addr = effectiveSmartAccountAddress;
     smartAccount.resetAccount();
     setAgentActivated(false);
+    setShowWithdraw(false);
     setShowAgentDetails(false);
 
     // Revoke session key on the backend (non-blocking but critical)
@@ -561,6 +576,7 @@ export default function AppLayout({
           eoaAddress={eoaAddress}
           isAgentActive={isAgentActive}
           onDeposit={() => setShowDeposit(true)}
+          onWithdraw={() => setShowWithdraw(true)}
           onAgentDetails={() => setShowAgentDetails(true)}
           onDisconnect={handleDisconnect}
         />
@@ -586,6 +602,14 @@ export default function AppLayout({
         <AgentDetailsModal
           smartAccountAddress={effectiveSmartAccountAddress}
           onClose={() => setShowAgentDetails(false)}
+        />
+      )}
+
+      {/* Withdraw Modal — dashboard quick action */}
+      {showWithdraw && effectiveSmartAccountAddress && (
+        <WithdrawAgentModal
+          smartAccountAddress={effectiveSmartAccountAddress}
+          onClose={() => setShowWithdraw(false)}
           onDeactivate={handleDeactivateAgent}
         />
       )}
@@ -1120,9 +1144,9 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
   );
 }
 
-// ── Agent Details Modal (Giza-style) ────────────────────────
+// ── Withdraw Modal (Dashboard Quick Action) ─────────────────
 
-function AgentDetailsModal({
+function WithdrawAgentModal({
   smartAccountAddress,
   onClose,
   onDeactivate,
@@ -1201,8 +1225,6 @@ function AgentDetailsModal({
     };
   }, [smartAccountAddress, fallbackTotalUsdc]);
 
-  const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
-
   async function handleFullWithdraw() {
     if (!smartAccountAddress) return;
     setWithdrawStep("processing");
@@ -1279,8 +1301,64 @@ function AgentDetailsModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-md rounded-2xl border border-[#E8E2DA] bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-[#1A1715]">Withdraw Agent Balance</h2>
+          <button onClick={onClose} className="text-[#8A837C] hover:text-[#1A1715] transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="mt-3 text-xs text-[#8A837C]">
+          This action withdraws your full agent balance to your wallet and deactivates automation.
+        </p>
+
+        <div className="mt-5 rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] px-4 py-3">
+          <p className="text-xs font-medium text-[#1A1715]">You receive</p>
+          <div className="mt-1 flex items-center gap-1.5">
+            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#2775CA] text-[8px] font-bold text-white">$</span>
+            <span className="font-mono text-sm text-[#5C5550]">
+              {previewLoading
+                ? "Calculating..."
+                : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
+            </span>
+          </div>
+          {previewError && (
+            <p className="mt-1 text-[10px] text-[#DC2626]">{previewError}</p>
+          )}
+        </div>
+
+        <button
+          onClick={handleFullWithdraw}
+          disabled={
+            withdrawStep === "processing"
+            || previewLoading
+            || displayUserReceivesUsdc <= 0
+          }
+          className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2.5 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
+        >
+          {withdrawStep === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Withdraw and deactivate
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Agent Details Modal (Giza-style) ────────────────────────
+
+function AgentDetailsModal({
+  smartAccountAddress,
+  onClose,
+}: {
+  smartAccountAddress: string;
+  onClose: () => void;
+}) {
+  const truncated = `${smartAccountAddress.slice(0, 6)}...${smartAccountAddress.slice(-4)}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
       <div className="relative w-full max-w-md rounded-2xl border border-[#E8E2DA] bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
         <div className="flex items-center justify-between border-b border-[#E8E2DA] px-6 py-4">
           <h2 className="text-base font-semibold text-[#1A1715]">Agent Details</h2>
           <button onClick={onClose} className="text-[#8A837C] hover:text-[#1A1715] transition-colors">
@@ -1288,7 +1366,6 @@ function AgentDetailsModal({
           </button>
         </div>
 
-        {/* Agent address section */}
         <div className="px-6 py-5">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#059669]/10 mb-3">
             <span className="inline-block h-3 w-3 rounded-full bg-[#059669]" />
@@ -1311,38 +1388,6 @@ function AgentDetailsModal({
               <ExternalLink className="h-3 w-3" />
               Open in explorer
             </a>
-          </div>
-        </div>
-
-        {/* Withdraw section */}
-        <div className="border-t border-[#E8E2DA] px-6 py-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-[#1A1715]">Withdraw Agent Account balance</p>
-              <div className="mt-1 flex items-center gap-1.5">
-                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#2775CA] text-[8px] font-bold text-white">$</span>
-                <span className="font-mono text-sm text-[#5C5550]">
-                  {previewLoading
-                    ? "Calculating..."
-                    : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
-                </span>
-              </div>
-              {previewError && (
-                <p className="mt-1 text-[10px] text-[#DC2626]">{previewError}</p>
-              )}
-            </div>
-            <button
-              onClick={handleFullWithdraw}
-              disabled={
-                withdrawStep === "processing"
-                || previewLoading
-                || displayUserReceivesUsdc <= 0
-              }
-              className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
-            >
-              {withdrawStep === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Withdraw
-            </button>
           </div>
         </div>
       </div>

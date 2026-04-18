@@ -6,7 +6,6 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ContainerScroll } from "@/components/ui/container-scroll-animation";
 import Testimonials from "@/components/marketing/Testimonials";
-import { renderCanvas, stopCanvas } from "@/components/ui/canvas";
 import {
   Shield,
   Key,
@@ -108,11 +107,6 @@ export default function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    renderCanvas();
-    return () => stopCanvas();
-  }, []);
-
   const handleLaunchApp = () => {
     if (
       typeof window !== "undefined" &&
@@ -177,7 +171,7 @@ export default function LandingPage() {
           }
         >
           <video
-            src="/landing-demo.mp4"
+            src="/snowmind%20video1.mp4"
             autoPlay
             loop
             muted
@@ -551,12 +545,6 @@ export default function LandingPage() {
           </div>
         </div>
       </footer>
-
-      {/* ═══ CURSOR WAVE TRAIL ═══ */}
-      <canvas
-        className="pointer-events-none fixed inset-0 z-[60]"
-        id="canvas"
-      />
     </div>
   );
 }
