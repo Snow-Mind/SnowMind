@@ -17,6 +17,7 @@ import { useWallets } from "@privy-io/react-auth";
 import { CONTRACTS, AVALANCHE_RPC_URL, EXPLORER, CHAIN } from "@/lib/constants";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { createSmartAccount, BENQI_ABI } from "@/lib/zerodev";
+import { ensureWalletOnAvalancheChain, type Eip1193Provider } from "@/lib/wallet-chain";
 
 const ERC20_ABI = [
   {
@@ -80,30 +81,8 @@ export default function DepositPanel() {
     setMintTxHash(null);
 
     try {
-      const provider = await wallet.getEthereumProvider();
-
-      // Switch to correct chain if needed
-      const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
-      try {
-        await provider.request({
-          method: "wallet_switchEthereumChain",
-          params: [{ chainId: hexChainId }],
-        });
-      } catch (switchErr: unknown) {
-        const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
-        if (code === 4902 || code === -32603) {
-          await provider.request({
-            method: "wallet_addEthereumChain",
-            params: [{
-              chainId: hexChainId,
-              chainName: CHAIN.name,
-              nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-              rpcUrls: [AVALANCHE_RPC_URL],
-              blockExplorerUrls: [EXPLORER.base],
-            }],
-          });
-        }
-      }
+      const provider = await wallet.getEthereumProvider() as Eip1193Provider;
+      await ensureWalletOnAvalancheChain(provider);
 
       const walletClient = createWalletClient({
         chain: CHAIN,

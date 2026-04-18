@@ -41,6 +41,7 @@ import { useWallets } from "@privy-io/react-auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { createSmartAccount, emergencyWithdrawAll } from "@/lib/zerodev";
 import { signWithdrawalAuthorization } from "@/lib/withdrawal-auth";
+import { ensureWalletOnAvalancheChain, type Eip1193Provider } from "@/lib/wallet-chain";
 
 function TopBar({
   smartAccountAddress,
@@ -679,8 +680,8 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
     setStep("transferring");
     try {
-      const provider = await wallet.getEthereumProvider();
-      try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: `0x${CHAIN.id.toString(16)}` }] }); } catch {}
+      const provider = await wallet.getEthereumProvider() as Eip1193Provider;
+      await ensureWalletOnAvalancheChain(provider);
 
       const walletClient = createWalletClient({ chain: CHAIN, transport: custom(provider) });
       const [account] = await walletClient.getAddresses();

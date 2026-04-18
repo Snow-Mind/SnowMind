@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useWallets } from "@privy-io/react-auth";
 import { AlertCircle } from "lucide-react";
 import { CHAIN_ID } from "@/lib/constants";
+import { ensureWalletOnAvalancheChain, type Eip1193Provider } from "@/lib/wallet-chain";
 
 interface ChainGuardProps {
   children: React.ReactNode;
@@ -35,7 +36,17 @@ export function ChainGuard({ children }: ChainGuardProps) {
     try {
       await activeWallet.switchChain(CHAIN_ID);
     } catch {
-      // user rejected or chain not added — silently ignore
+      try {
+        const provider = await (
+          activeWallet as { getEthereumProvider?: () => Promise<unknown> }
+        ).getEthereumProvider?.();
+
+        if (provider && typeof provider === "object" && "request" in provider) {
+          await ensureWalletOnAvalancheChain(provider as Eip1193Provider);
+        }
+      } catch {
+        // user rejected or wallet does not support programmatic chain switching
+      }
     } finally {
       setIsSwitching(false);
     }

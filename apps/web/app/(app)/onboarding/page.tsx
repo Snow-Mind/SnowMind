@@ -39,7 +39,6 @@ import { api, APIError } from "@/lib/api-client";
 import {
   EXPLORER,
   CONTRACTS,
-  AVALANCHE_RPC_URL,
   AVALANCHE_RPC_URLS,
   PROTOCOL_CONFIG,
   RISK_SCORE_MAX,
@@ -53,6 +52,7 @@ import {
   grantAndSerializeSessionKey,
   withRetry,
 } from "@/lib/zerodev";
+import { ensureWalletOnAvalancheChain, type Eip1193Provider } from "@/lib/wallet-chain";
 import { cn, openExternalUrl } from "@/lib/utils";
 import type { DiversificationPreference, ProtocolRateResponse } from "@snowmind/shared-types";
 
@@ -160,10 +160,6 @@ const RECEIPT_POLL_INTERVAL_MS = 3_000;
 const MIN_FUNDED_BALANCE_USDC = 0.01;
 const WALLET_SIGNATURE_TIMEOUT_MS = 120_000;
 const WALLET_REQUEST_TIMEOUT_MS = 90_000;
-
-type Eip1193Provider = {
-  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
-};
 
 function portfolioHasFunds(
   portfolio:
@@ -949,44 +945,8 @@ export default function OnboardingPage() {
       }
 
       if (shortfall > 0n) {
-        const provider = await wallet.getEthereumProvider();
-
-        const hexChainId = `0x${CHAIN.id.toString(16)}` as const;
-        try {
-          await withWalletRequestTimeout(
-            provider.request({
-              method: "wallet_switchEthereumChain",
-              params: [{ chainId: hexChainId }],
-            }),
-            "Network switch",
-          );
-        } catch (switchErr: unknown) {
-          const switchMsg = switchErr instanceof Error ? switchErr.message : String(switchErr);
-          if (switchMsg.toLowerCase().includes("wallet prompt did not appear")) {
-            throw switchErr;
-          }
-
-          const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr ? (switchErr as { code: number }).code : 0;
-          if (code === 4902 || code === -32603) {
-            await withWalletRequestTimeout(
-              provider.request({
-                method: "wallet_addEthereumChain",
-                params: [{
-                  chainId: hexChainId,
-                  chainName: CHAIN.name,
-                  nativeCurrency: { name: "AVAX", symbol: "AVAX", decimals: 18 },
-                  rpcUrls: [AVALANCHE_RPC_URL],
-                  blockExplorerUrls: [EXPLORER.base],
-                }],
-              }),
-              "Add Avalanche network",
-            );
-          } else {
-            throw new Error(
-              "Failed to switch to Avalanche network. Please manually switch your wallet to Avalanche C-Chain and try again."
-            );
-          }
-        }
+        const provider = await wallet.getEthereumProvider() as Eip1193Provider;
+        await ensureWalletOnAvalancheChain(provider, withWalletRequestTimeout);
 
         const walletClient = createWalletClient({
           chain: CHAIN,
