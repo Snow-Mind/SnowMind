@@ -1028,7 +1028,7 @@ export default function OnboardingPage() {
               ).catch(() => null);
               const walletChainId = await provider
                 .request({ method: "eth_chainId" })
-                .catch(() => hexChainId) as string;
+                .catch(() => `0x${CHAIN.id.toString(16)}`) as string;
 
               const feeFields: Record<string, string> = {};
               if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
