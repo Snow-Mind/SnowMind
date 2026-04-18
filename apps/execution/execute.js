@@ -232,6 +232,20 @@ const ERC4626_ABI = [
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }],
   },
+  {
+    name: "previewRedeem",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "shares", type: "uint256" }],
+    outputs: [{ name: "assets", type: "uint256" }],
+  },
+  {
+    name: "convertToAssets",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "shares", type: "uint256" }],
+    outputs: [{ name: "assets", type: "uint256" }],
+  },
 ]
 
 const ERC20_ABI = [
@@ -284,6 +298,11 @@ const PERMIT2_ABI = [
     outputs: [],
   },
 ]
+
+const USDC_DECIMALS = 6
+const USDC_SCALE = 10n ** 6n
+const MIN_USDC_PROJECTION_BUFFER = 10_000n // 0.01 USDC
+const USDC_PROJECTION_BUFFER_BPS = 10n // 0.10%
 
 function formatExecutionError(err) {
   const message = err?.shortMessage || err?.message || "Unknown execution error"
@@ -788,6 +807,193 @@ function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAcc
   }
 }
 
+function parseUsdcUnits(amountUSDC, fieldName = "amountUSDC") {
+  const raw = String(amountUSDC ?? "").trim()
+  if (!raw) {
+    throw new Error(`${fieldName} is required`)
+  }
+  let units
+  try {
+    units = parseUnits(raw, USDC_DECIMALS)
+  } catch (err) {
+    throw new Error(`${fieldName} must be a valid USDC decimal value: ${err?.message || "invalid format"}`)
+  }
+  if (units < 0n) {
+    throw new Error(`${fieldName} cannot be negative`)
+  }
+  return units
+}
+
+function formatUsdcUnits(amountUnits) {
+  const isNegative = amountUnits < 0n
+  const abs = isNegative ? -amountUnits : amountUnits
+  const whole = abs / USDC_SCALE
+  const fraction = (abs % USDC_SCALE).toString().padStart(USDC_DECIMALS, "0").replace(/0+$/, "")
+  const sign = isNegative ? "-" : ""
+  if (!fraction) {
+    return `${sign}${whole.toString()}`
+  }
+  return `${sign}${whole.toString()}.${fraction}`
+}
+
+function computeUsdcSafetyBuffer(projectedUnits) {
+  if (projectedUnits <= 0n) {
+    return 0n
+  }
+  const bpsBuffer = (projectedUnits * USDC_PROJECTION_BUFFER_BPS) / 10_000n
+  const baseline = bpsBuffer > MIN_USDC_PROJECTION_BUFFER ? bpsBuffer : MIN_USDC_PROJECTION_BUFFER
+  return baseline > projectedUnits ? projectedUnits : baseline
+}
+
+function sumPlannedDepositUnits(deposits) {
+  let total = 0n
+  for (const deposit of deposits || []) {
+    total += parseUsdcUnits(deposit?.amountUSDC, "deposits[].amountUSDC")
+  }
+  return total
+}
+
+export function isErc20BalanceInsufficientError(err) {
+  const text = [
+    err?.shortMessage,
+    err?.message,
+    err?.details,
+    err?.cause?.message,
+    err?.cause?.details,
+    ...(Array.isArray(err?.metaMessages) ? err.metaMessages : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+
+  return (
+    text.includes("erc20: transfer amount exceeds balance")
+    || text.includes("transfer amount exceeds balance")
+    || text.includes("insufficient balance for transfer")
+  )
+}
+
+export function capDepositsToProjectedBalance(deposits, availableUnits) {
+  const available = availableUnits > 0n ? availableUnits : 0n
+  let remaining = available
+  let requestedTotal = 0n
+  let plannedTotal = 0n
+  let cappedLegCount = 0
+  const normalized = []
+
+  for (const deposit of deposits || []) {
+    const requestedUnits = parseUsdcUnits(deposit?.amountUSDC, "deposits[].amountUSDC")
+    if (requestedUnits === 0n) {
+      continue
+    }
+
+    requestedTotal += requestedUnits
+    if (remaining === 0n) {
+      cappedLegCount += 1
+      continue
+    }
+
+    const plannedUnits = requestedUnits <= remaining ? requestedUnits : remaining
+    remaining -= plannedUnits
+    plannedTotal += plannedUnits
+    if (plannedUnits < requestedUnits) {
+      cappedLegCount += 1
+    }
+
+    normalized.push({
+      ...deposit,
+      amountUSDC: formatUsdcUnits(plannedUnits),
+    })
+  }
+
+  return {
+    deposits: normalized,
+    requestedTotal,
+    plannedTotal,
+    remainingUnits: remaining,
+    cappedLegCount,
+  }
+}
+
+async function estimateErc4626WithdrawalAssets(execPublicClient, vaultAddress, shareBalance) {
+  const shares = BigInt(shareBalance)
+  if (shares <= 0n) {
+    return 0n
+  }
+
+  try {
+    const preview = await execPublicClient.readContract({
+      address: vaultAddress,
+      abi: ERC4626_ABI,
+      functionName: "previewRedeem",
+      args: [shares],
+    })
+    return preview > 0n ? preview : 0n
+  } catch {
+    // Fallback to convertToAssets for vaults that do not expose previewRedeem.
+    try {
+      const converted = await execPublicClient.readContract({
+        address: vaultAddress,
+        abi: ERC4626_ABI,
+        functionName: "convertToAssets",
+        args: [shares],
+      })
+      return converted > 0n ? converted : 0n
+    } catch {
+      return 0n
+    }
+  }
+}
+
+async function estimateProjectedWithdrawalUsdc({
+  execPublicClient,
+  smartAccountAddress,
+  withdrawals,
+  contracts,
+}) {
+  let projectedUnits = 0n
+  const erc4626VaultByProtocol = {
+    spark: contracts.SPARK_VAULT,
+    euler_v2: contracts.EULER_VAULT,
+    silo_savusd_usdc: contracts.SILO_SAVUSD_VAULT,
+    silo_susdp_usdc: contracts.SILO_SUSDP_VAULT,
+  }
+
+  for (const withdrawal of withdrawals || []) {
+    const protocol = String(withdrawal?.protocol || "")
+    const amountUSDC = withdrawal?.amountUSDC
+
+    if (amountUSDC && amountUSDC !== "MAX") {
+      projectedUnits += parseUsdcUnits(amountUSDC, `withdrawals.${protocol}.amountUSDC`)
+      continue
+    }
+
+    const vaultAddress = erc4626VaultByProtocol[protocol]
+    if (amountUSDC === "MAX" && vaultAddress && withdrawal?.shareBalance) {
+      const estimated = await estimateErc4626WithdrawalAssets(
+        execPublicClient,
+        vaultAddress,
+        withdrawal.shareBalance,
+      )
+      projectedUnits += estimated
+      continue
+    }
+
+    if (amountUSDC === "MAX") {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "projected_withdrawal_unknown_max_amount",
+        smartAccountAddress,
+        protocol,
+        detail: "Unable to pre-estimate MAX withdrawal amount for this protocol; using conservative zero estimate",
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  }
+
+  return projectedUnits
+}
+
 function resolveContractKey(protocol, contracts) {
   const map = {
     aave_v3: "AAVE_POOL",
@@ -799,6 +1005,30 @@ function resolveContractKey(protocol, contracts) {
     silo_susdp_usdc: "SILO_SUSDP_VAULT",
   }
   return contracts[map[protocol]] || null
+}
+
+function buildKernelBatchExecutionCalldata(calls) {
+  return encodeFunctionData({
+    abi: [{
+      name: "execute",
+      type: "function",
+      stateMutability: "payable",
+      inputs: [
+        { name: "execMode", type: "bytes32" },
+        { name: "executionCalldata", type: "bytes" },
+      ],
+      outputs: [],
+    }],
+    functionName: "execute",
+    args: [
+      // ExecMode: BATCH mode (0x01 at byte 0, rest 0)
+      "0x0100000000000000000000000000000000000000000000000000000000000000",
+      encodeAbiParameters(
+        parseAbiParameters("(address to, uint256 value, bytes data)[]"),
+        [calls.map(c => [c.to, c.value || 0n, c.data])],
+      ),
+    ],
+  })
 }
 
 async function resolveKernelOwner(permissionAccount) {
@@ -1070,7 +1300,92 @@ export async function executeRebalance({
     }
   }
 
+  let preflightUsdcBalance = null
+  try {
+    preflightUsdcBalance = await execPublicClient.readContract({
+      address: contracts.USDC,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [smartAccountAddress],
+    })
+  } catch (err) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "preflight_usdc_balance_failed_early",
+      smartAccountAddress,
+      error: err?.message?.slice(0, 300),
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
+  const projectedWithdrawalUnits = await estimateProjectedWithdrawalUsdc({
+    execPublicClient,
+    smartAccountAddress,
+    withdrawals,
+    contracts,
+  })
+
   const feeTransferAmount = Number(feeTransfer?.amountUSDC ?? 0)
+  const feeTransferUnits = feeTransferAmount > 0
+    ? parseUsdcUnits(feeTransfer.amountUSDC, "feeTransfer.amountUSDC")
+    : 0n
+  const userTransferUnits = userTransfer && userTransfer.amountUSDC > 0
+    ? parseUsdcUnits(userTransfer.amountUSDC, "userTransfer.amountUSDC")
+    : 0n
+
+  let normalizedDeposits = Array.isArray(deposits) ? deposits : []
+  if (preflightUsdcBalance !== null && normalizedDeposits.length > 0) {
+    const projectedGrossUnits = preflightUsdcBalance + projectedWithdrawalUnits - feeTransferUnits - userTransferUnits
+    const projectedNonNegativeUnits = projectedGrossUnits > 0n ? projectedGrossUnits : 0n
+    const safetyBufferUnits = computeUsdcSafetyBuffer(projectedNonNegativeUnits)
+    const projectedBudgetUnits = projectedNonNegativeUnits > safetyBufferUnits
+      ? projectedNonNegativeUnits - safetyBufferUnits
+      : 0n
+
+    const capped = capDepositsToProjectedBalance(normalizedDeposits, projectedBudgetUnits)
+    normalizedDeposits = capped.deposits
+
+    if (capped.plannedTotal < capped.requestedTotal) {
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "deposits_capped_for_projected_balance",
+        smartAccountAddress,
+        projectedBalance: projectedNonNegativeUnits.toString(),
+        projectedWithdrawals: projectedWithdrawalUnits.toString(),
+        reservedFeeTransfer: feeTransferUnits.toString(),
+        reservedUserTransfer: userTransferUnits.toString(),
+        safetyBuffer: safetyBufferUnits.toString(),
+        requestedDepositTotal: capped.requestedTotal.toString(),
+        plannedDepositTotal: capped.plannedTotal.toString(),
+        cappedLegCount: capped.cappedLegCount,
+        originalDepositCount: deposits.length,
+        plannedDepositCount: normalizedDeposits.length,
+        timestamp: new Date().toISOString(),
+      }))
+    } else {
+      console.log(JSON.stringify({
+        level: "info",
+        action: "deposit_projection_budget_ok",
+        smartAccountAddress,
+        projectedBalance: projectedNonNegativeUnits.toString(),
+        projectedWithdrawals: projectedWithdrawalUnits.toString(),
+        reservedFeeTransfer: feeTransferUnits.toString(),
+        reservedUserTransfer: userTransferUnits.toString(),
+        safetyBuffer: safetyBufferUnits.toString(),
+        plannedDepositTotal: capped.plannedTotal.toString(),
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  } else if (normalizedDeposits.length > 0) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "deposit_projection_budget_skipped",
+      smartAccountAddress,
+      reason: "Unable to read preflight USDC balance",
+      timestamp: new Date().toISOString(),
+    }))
+  }
+
   if (feeTransferAmount > 0) {
     const feeRecipient = String(feeTransfer?.to || "").trim()
     if (!feeRecipient || feeRecipient.toLowerCase() === zeroAddress.toLowerCase()) {
@@ -1112,133 +1427,142 @@ export async function executeRebalance({
   // The Registry can be called in a SEPARATE, non-critical transaction later
   // if on-chain audit logging is needed.
 
-  // Approve exact amounts per protocol — never use infinite approvals.
-  // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
-  const depositAmountsPerProtocol = new Map()
-  for (const { protocol, amountUSDC } of deposits) {
-    const prev = depositAmountsPerProtocol.get(protocol) || 0n
-    depositAmountsPerProtocol.set(protocol, prev + parseUnits(String(amountUSDC), 6))
-  }
-  for (const [protocol, totalAmount] of depositAmountsPerProtocol) {
-    const spender = resolveContractKey(protocol, contracts)
-    if (!spender) continue
+  const baseCallCount = calls.length
 
-    if (protocol === "euler_v2") {
-      // Euler V2 (EVK) uses Permit2 for token transfers.
-      // Flow: USDC.approve(Permit2) → Permit2.approve(USDC, euler, amt, deadline) → euler.deposit()
-      const permit2Addr = contracts.PERMIT2 || PERMIT2_ADDRESS
-      calls.push({
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [permit2Addr, 0n],
-        }),
-      })
-      calls.push({
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [permit2Addr, totalAmount],
-        }),
-      })
-      // Set Permit2 allowance for the Euler vault with 1-hour expiry
-      const permit2Deadline = BigInt(Math.floor(Date.now() / 1000) + 3600)
-      calls.push({
-        to: permit2Addr,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: PERMIT2_ABI,
-          functionName: "approve",
-          args: [contracts.USDC, spender, totalAmount, permit2Deadline],
-        }),
-      })
-    } else {
-      // Standard ERC-20 approve race-condition protection: set to 0 first, then exact amount
-      calls.push({
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [spender, 0n],
-        }),
-      })
-      calls.push({
-        to: contracts.USDC,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [spender, totalAmount],
-        }),
-      })
+  const rebuildDepositAndApprovalCalls = () => {
+    // Keep withdrawals + transfers untouched, then rebuild mutable deposit tail.
+    calls.splice(baseCallCount)
+
+    // Approve exact amounts per protocol — never use infinite approvals.
+    // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
+    const depositAmountsPerProtocol = new Map()
+    for (const { protocol, amountUSDC } of normalizedDeposits) {
+      const prev = depositAmountsPerProtocol.get(protocol) || 0n
+      depositAmountsPerProtocol.set(protocol, prev + parseUsdcUnits(amountUSDC, "deposits[].amountUSDC"))
+    }
+    for (const [protocol, totalAmount] of depositAmountsPerProtocol) {
+      const spender = resolveContractKey(protocol, contracts)
+      if (!spender) continue
+
+      if (protocol === "euler_v2") {
+        // Euler V2 (EVK) uses Permit2 for token transfers.
+        // Flow: USDC.approve(Permit2) → Permit2.approve(USDC, euler, amt, deadline) → euler.deposit()
+        const permit2Addr = contracts.PERMIT2 || PERMIT2_ADDRESS
+        calls.push({
+          to: contracts.USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "approve",
+            args: [permit2Addr, 0n],
+          }),
+        })
+        calls.push({
+          to: contracts.USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "approve",
+            args: [permit2Addr, totalAmount],
+          }),
+        })
+        // Set Permit2 allowance for the Euler vault with 1-hour expiry
+        const permit2Deadline = BigInt(Math.floor(Date.now() / 1000) + 3600)
+        calls.push({
+          to: permit2Addr,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: PERMIT2_ABI,
+            functionName: "approve",
+            args: [contracts.USDC, spender, totalAmount, permit2Deadline],
+          }),
+        })
+      } else {
+        // Standard ERC-20 approve race-condition protection: set to 0 first, then exact amount
+        calls.push({
+          to: contracts.USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "approve",
+            args: [spender, 0n],
+          }),
+        })
+        calls.push({
+          to: contracts.USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "approve",
+            args: [spender, totalAmount],
+          }),
+        })
+      }
+    }
+
+    for (const { protocol, amountUSDC } of normalizedDeposits) {
+      const amount = parseUsdcUnits(amountUSDC, "deposits[].amountUSDC")
+      if (protocol === "aave_v3" || protocol === "aave") {
+        calls.push({
+          to: contracts.AAVE_POOL,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: AAVE_ABI,
+            functionName: "supply",
+            args: [contracts.USDC, amount, smartAccountAddress, 0],
+          }),
+        })
+      } else if (protocol === "benqi") {
+        calls.push({
+          to: contracts.BENQI_POOL,
+          value: 0n,
+          data: encodeFunctionData({ abi: BENQI_ABI, functionName: "mint", args: [amount] }),
+        })
+      } else if (protocol === "spark" && contracts.SPARK_VAULT) {
+        calls.push({
+          to: contracts.SPARK_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_ABI,
+            functionName: "deposit",
+            args: [amount, smartAccountAddress],
+          }),
+        })
+      } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+        calls.push({
+          to: contracts.EULER_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_ABI,
+            functionName: "deposit",
+            args: [amount, smartAccountAddress],
+          }),
+        })
+      } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
+        calls.push({
+          to: contracts.SILO_SAVUSD_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_ABI,
+            functionName: "deposit",
+            args: [amount, smartAccountAddress],
+          }),
+        })
+      } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
+        calls.push({
+          to: contracts.SILO_SUSDP_VAULT,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: ERC4626_ABI,
+            functionName: "deposit",
+            args: [amount, smartAccountAddress],
+          }),
+        })
+      }
     }
   }
 
-  for (const { protocol, amountUSDC } of deposits) {
-    const amount = parseUnits(String(amountUSDC), 6)
-    if (protocol === "aave_v3" || protocol === "aave") {
-      calls.push({
-        to: contracts.AAVE_POOL,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: AAVE_ABI,
-          functionName: "supply",
-          args: [contracts.USDC, amount, smartAccountAddress, 0],
-        }),
-      })
-    } else if (protocol === "benqi") {
-      calls.push({
-        to: contracts.BENQI_POOL,
-        value: 0n,
-        data: encodeFunctionData({ abi: BENQI_ABI, functionName: "mint", args: [amount] }),
-      })
-    } else if (protocol === "spark" && contracts.SPARK_VAULT) {
-      calls.push({
-        to: contracts.SPARK_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI,
-          functionName: "deposit",
-          args: [amount, smartAccountAddress],
-        }),
-      })
-    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
-      calls.push({
-        to: contracts.EULER_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI,
-          functionName: "deposit",
-          args: [amount, smartAccountAddress],
-        }),
-      })
-    } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
-      calls.push({
-        to: contracts.SILO_SAVUSD_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI,
-          functionName: "deposit",
-          args: [amount, smartAccountAddress],
-        }),
-      })
-    } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
-      calls.push({
-        to: contracts.SILO_SUSDP_VAULT,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC4626_ABI,
-          functionName: "deposit",
-          args: [amount, smartAccountAddress],
-        }),
-      })
-    }
-  }
+  rebuildDepositAndApprovalCalls()
 
   if (!calls.length) {
     throw new Error("No executable calls generated for rebalance")
@@ -1246,12 +1570,14 @@ export async function executeRebalance({
 
   // ── Pre-flight balance diagnostic: check USDC + vault share balances ──
   try {
-    const usdcBalance = await execPublicClient.readContract({
-      address: contracts.USDC,
-      abi: ERC20_ABI,
-      functionName: "balanceOf",
-      args: [smartAccountAddress],
-    })
+    const usdcBalance = preflightUsdcBalance !== null
+      ? preflightUsdcBalance
+      : await execPublicClient.readContract({
+        address: contracts.USDC,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [smartAccountAddress],
+      })
     console.log(JSON.stringify({
       level: "info", action: "preflight_usdc_balance",
       smartAccountAddress,
@@ -1364,39 +1690,24 @@ export async function executeRebalance({
   // ── Simulate full batch via Kernel's execute(calls) ──
   // Encode the full batched call exactly as the Kernel will execute it.
   // This tests the complete batch atomicity (prior calls affect later calls).
-  try {
-    const batchCallData = encodeFunctionData({
-      abi: [{
-        name: "execute",
-        type: "function",
-        stateMutability: "payable",
-        inputs: [
-          { name: "execMode", type: "bytes32" },
-          { name: "executionCalldata", type: "bytes" },
-        ],
-        outputs: [],
-      }],
-      functionName: "execute",
-      args: [
-        // ExecMode: BATCH mode (0x01 at byte 0, rest 0)
-        "0x0100000000000000000000000000000000000000000000000000000000000000",
-        encodeAbiParameters(
-          parseAbiParameters("(address to, uint256 value, bytes data)[]"),
-          [calls.map(c => [c.to, c.value || 0n, c.data])],
-        ),
-      ],
-    })
+  const runBatchSimulation = async () => {
     await execPublicClient.call({
       account: smartAccountAddress,
       to: smartAccountAddress,
-      data: batchCallData,
+      data: buildKernelBatchExecutionCalldata(calls),
     })
+  }
+
+  let batchSimulationError = null
+  try {
+    await runBatchSimulation()
     console.log(JSON.stringify({
       level: "info", action: "batch_simulation_ok",
       smartAccountAddress, callCount: calls.length,
       timestamp: new Date().toISOString(),
     }))
   } catch (batchSimErr) {
+    batchSimulationError = batchSimErr
     console.error(JSON.stringify({
       level: "error", action: "batch_simulation_REVERTED",
       smartAccountAddress, callCount: calls.length,
@@ -1406,6 +1717,107 @@ export async function executeRebalance({
       causeMessage: batchSimErr?.cause?.message?.slice(0, 2000),
       timestamp: new Date().toISOString(),
     }))
+  }
+
+  // Fail safe for partial-withdrawal drift: reduce deposits, then retry batch simulation.
+  if (batchSimulationError && isErc20BalanceInsufficientError(batchSimulationError) && normalizedDeposits.length > 0) {
+    const currentPlannedDepositTotal = sumPlannedDepositUnits(normalizedDeposits)
+    const fallbackTrimUnits = currentPlannedDepositTotal > 10_000n ? 10_000n : 1n
+    const fallbackBudget = currentPlannedDepositTotal > fallbackTrimUnits
+      ? currentPlannedDepositTotal - fallbackTrimUnits
+      : 0n
+    const recapped = capDepositsToProjectedBalance(normalizedDeposits, fallbackBudget)
+
+    if (recapped.plannedTotal < currentPlannedDepositTotal) {
+      normalizedDeposits = recapped.deposits
+      rebuildDepositAndApprovalCalls()
+
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "batch_simulation_replanned_deposits",
+        smartAccountAddress,
+        previousPlannedDepositTotal: currentPlannedDepositTotal.toString(),
+        replannedDepositTotal: recapped.plannedTotal.toString(),
+        droppedUnits: (currentPlannedDepositTotal - recapped.plannedTotal).toString(),
+        remainingDepositCount: normalizedDeposits.length,
+        callCount: calls.length,
+        timestamp: new Date().toISOString(),
+      }))
+
+      try {
+        await runBatchSimulation()
+        batchSimulationError = null
+        console.log(JSON.stringify({
+          level: "info",
+          action: "batch_simulation_ok_after_replan",
+          smartAccountAddress,
+          callCount: calls.length,
+          timestamp: new Date().toISOString(),
+        }))
+      } catch (retryBatchSimErr) {
+        batchSimulationError = retryBatchSimErr
+        console.error(JSON.stringify({
+          level: "error",
+          action: "batch_simulation_REVERTED_after_replan",
+          smartAccountAddress,
+          callCount: calls.length,
+          error: retryBatchSimErr?.message?.slice(0, 3000),
+          shortMessage: retryBatchSimErr?.shortMessage?.slice(0, 1000),
+          details: retryBatchSimErr?.details?.slice(0, 2000),
+          causeMessage: retryBatchSimErr?.cause?.message?.slice(0, 2000),
+          timestamp: new Date().toISOString(),
+        }))
+      }
+    }
+  }
+
+  // Last-resort fail-safe: execute withdrawals only if deposits still overdraw.
+  if (batchSimulationError && isErc20BalanceInsufficientError(batchSimulationError) && normalizedDeposits.length > 0) {
+    const droppedDepositCount = normalizedDeposits.length
+    normalizedDeposits = []
+    rebuildDepositAndApprovalCalls()
+
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "batch_simulation_dropped_all_deposits",
+      smartAccountAddress,
+      droppedDepositCount,
+      callCount: calls.length,
+      timestamp: new Date().toISOString(),
+    }))
+
+    try {
+      await runBatchSimulation()
+      batchSimulationError = null
+      console.log(JSON.stringify({
+        level: "info",
+        action: "batch_simulation_ok_without_deposits",
+        smartAccountAddress,
+        callCount: calls.length,
+        timestamp: new Date().toISOString(),
+      }))
+    } catch (finalBatchSimErr) {
+      batchSimulationError = finalBatchSimErr
+      console.error(JSON.stringify({
+        level: "error",
+        action: "batch_simulation_REVERTED_without_deposits",
+        smartAccountAddress,
+        callCount: calls.length,
+        error: finalBatchSimErr?.message?.slice(0, 3000),
+        shortMessage: finalBatchSimErr?.shortMessage?.slice(0, 1000),
+        details: finalBatchSimErr?.details?.slice(0, 2000),
+        causeMessage: finalBatchSimErr?.cause?.message?.slice(0, 2000),
+        timestamp: new Date().toISOString(),
+      }))
+    }
+  }
+
+  if (!calls.length) {
+    throw new Error("No executable calls remain after rebalance safety adjustments")
+  }
+
+  if (batchSimulationError && isErc20BalanceInsufficientError(batchSimulationError)) {
+    throw new Error(formatExecutionError(batchSimulationError))
   }
 
   // ── Deep enable-signature verification ──
