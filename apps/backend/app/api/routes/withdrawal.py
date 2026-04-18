@@ -9,6 +9,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from eth_account import Account
@@ -185,6 +186,62 @@ class WithdrawalExecuteResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class FolksRecoveryMessageRequest(BaseModel):
+    """One failed Folks message that should be retried/reversed."""
+    tx_hash: str = Field(..., alias="txHash")
+    message_id: str = Field(..., alias="messageId")
+    action: Literal["reverse", "retry"] = Field("reverse", alias="action")
+    model_config = {"populate_by_name": True}
+
+    @field_validator("tx_hash")
+    @classmethod
+    def validate_tx_hash(cls, v: str) -> str:
+        value = str(v or "").strip().lower()
+        if not (value.startswith("0x") and len(value) == 66):
+            raise ValueError("tx_hash must be a 32-byte hex string")
+        return value
+
+    @field_validator("message_id")
+    @classmethod
+    def validate_message_id(cls, v: str) -> str:
+        value = str(v or "").strip().lower()
+        if not (value.startswith("0x") and len(value) == 66):
+            raise ValueError("message_id must be a 32-byte hex string")
+        return value
+
+
+class FolksRecoveryExecuteRequest(BaseModel):
+    """Request body to recover failed Folks bridge messages."""
+    smart_account_address: str = Field(..., alias="smartAccountAddress")
+    recoveries: list[FolksRecoveryMessageRequest] = Field(..., alias="recoveries")
+    owner_signature: str | None = Field(None, alias="ownerSignature")
+    signature_message: str | None = Field(None, alias="signatureMessage")
+    signature_timestamp: int | None = Field(None, alias="signatureTimestamp")
+    model_config = {"populate_by_name": True}
+
+    @field_validator("recoveries")
+    @classmethod
+    def validate_recoveries(cls, v: list[FolksRecoveryMessageRequest]) -> list[FolksRecoveryMessageRequest]:
+        if not v:
+            raise ValueError("recoveries must include at least one failed message")
+        if len(v) > 4:
+            raise ValueError("recoveries supports at most 4 messages per request")
+        dedup = {(item.tx_hash, item.message_id, item.action) for item in v}
+        if len(dedup) != len(v):
+            raise ValueError("recoveries contains duplicate entries")
+        return v
+
+
+class FolksRecoveryExecuteResponse(BaseModel):
+    """Response after Folks recovery transaction is submitted."""
+    status: str
+    tx_hash: str | None = Field(None, alias="txHash")
+    recovered_message_ids: list[str] = Field(default_factory=list, alias="recoveredMessageIds")
+    recovered_count: int = Field(0, alias="recoveredCount")
+    message: str
+    model_config = {"populate_by_name": True}
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 async def _get_account(db: Client, address: str) -> dict:
@@ -201,7 +258,41 @@ async def _get_account(db: Client, address: str) -> dict:
     return result.data[0]
 
 
-async def _get_on_chain_balance(smart_account: str) -> Decimal:
+def _canonical_protocol_id(raw_protocol_id: object) -> str:
+    pid = str(raw_protocol_id or "").strip().lower()
+    if pid == "aave":
+        return "aave_v3"
+    if pid in {"folks_finance_xchain", "folks_finance"}:
+        return "folks"
+    return pid
+
+
+def _load_expected_active_protocols(db: Client, account_id: str) -> set[str]:
+    """Return protocol ids that currently have material allocation for account."""
+    try:
+        rows = (
+            db.table("allocations")
+            .select("protocol_id, amount_usdc")
+            .eq("account_id", account_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("Failed to load allocations for %s: %s", account_id, exc)
+        return set()
+
+    expected: set[str] = set()
+    for row in rows.data or []:
+        try:
+            amount = Decimal(str(row.get("amount_usdc") or "0"))
+        except Exception:
+            continue
+        if amount <= Decimal("0.01"):
+            continue
+        expected.add(_canonical_protocol_id(row.get("protocol_id")))
+    return expected
+
+
+async def _get_on_chain_balance(db: Client, account_id: str, smart_account: str) -> Decimal:
     """
     Read total on-chain balance across all protocols.
 
@@ -212,29 +303,29 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
 
     total_raw = 0
     failed_protocols: list[str] = []
+    expected_protocols = _load_expected_active_protocols(db, account_id)
+    settings = get_settings()
+    timeout_seconds = max(0.5, float(settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
 
     for pid, adapter in ACTIVE_ADAPTERS.items():
         try:
-            if pid in _WITHDRAWABLE_ERC4626_PROTOCOLS:
-                shares = int(await adapter.get_shares(smart_account))
-                if shares <= 0:
-                    balance = 0
-                else:
-                    vault_address = _erc4626_vault_address(pid, settings)
-                    if not vault_address:
-                        raise RuntimeError(f"Missing vault address for {pid}")
-                    balance = await _read_erc4626_withdrawable_raw(
-                        w3,
-                        vault_address=vault_address,
-                        owner_address=smart_account,
-                        shares=shares,
-                        protocol_id=pid,
-                    )
-            else:
-                balance = await adapter.get_balance(smart_account)
+            balance = await asyncio.wait_for(
+                adapter.get_balance(smart_account),
+                timeout=timeout_seconds,
+            )
             total_raw += int(balance)
+        except asyncio.TimeoutError:
+            if pid in expected_protocols:
+                failed_protocols.append(pid)
+            logger.warning(
+                "Timed out reading %s balance for %s after %.1fs",
+                pid,
+                smart_account,
+                timeout_seconds,
+            )
         except Exception as exc:
-            failed_protocols.append(pid)
+            if pid in expected_protocols:
+                failed_protocols.append(pid)
             logger.warning(
                 "Failed to read %s balance for %s: %s",
                 pid,
@@ -245,6 +336,7 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
     # Include idle USDC held directly in the smart account so full-withdrawal
     # previews/executions represent the actual amount user can receive.
     try:
+        w3 = get_shared_async_web3()
         usdc = w3.eth.contract(
             address=w3.to_checksum_address(settings.USDC_ADDRESS),
             abi=_ERC20_BALANCE_OF_ABI,
@@ -613,6 +705,76 @@ def _verify_withdrawal_authorization(req: WithdrawalExecuteRequest, account: dic
         )
 
 
+def _build_folks_recovery_authorization_message(
+    *,
+    smart_account_address: str,
+    owner_address: str,
+    recoveries: list[FolksRecoveryMessageRequest],
+    signature_timestamp: int,
+) -> str:
+    recovery_lines = [
+        f"{entry.action}|{entry.tx_hash.lower()}|{entry.message_id.lower()}"
+        for entry in recoveries
+    ]
+    return "\n".join([
+        "SnowMind Folks Recovery Authorization",
+        f"Smart Account: {smart_account_address.lower()}",
+        f"Owner: {owner_address.lower()}",
+        "Recoveries:",
+        *recovery_lines,
+        "Chain ID: 43114",
+        f"Timestamp: {signature_timestamp}",
+    ])
+
+
+def _verify_folks_recovery_authorization(req: FolksRecoveryExecuteRequest, account: dict) -> None:
+    """Require a fresh owner signature before recovering failed Folks messages."""
+    owner_address_raw = str(account.get("owner_address") or "").strip()
+    if not owner_address_raw:
+        raise HTTPException(status_code=400, detail="Account owner address missing")
+
+    owner_signature = (req.owner_signature or "").strip()
+    signature_message = (req.signature_message or "").strip()
+    signature_timestamp = req.signature_timestamp
+
+    if not owner_signature or not signature_message or signature_timestamp is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Folks recovery authorization signature is required",
+        )
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if abs(now_ts - int(signature_timestamp)) > _WITHDRAW_SIGNATURE_TTL_SECONDS:
+        raise HTTPException(
+            status_code=401,
+            detail="Folks recovery authorization expired. Please sign again.",
+        )
+
+    expected_message = _build_folks_recovery_authorization_message(
+        smart_account_address=req.smart_account_address,
+        owner_address=owner_address_raw,
+        recoveries=req.recoveries,
+        signature_timestamp=int(signature_timestamp),
+    )
+    if signature_message != expected_message:
+        raise HTTPException(status_code=400, detail="Folks recovery authorization payload mismatch")
+
+    try:
+        recovered = Account.recover_message(
+            encode_defunct(text=expected_message),
+            signature=owner_signature,
+        )
+    except Exception as exc:
+        logger.warning("Invalid Folks recovery signature for %s: %s", req.smart_account_address, exc)
+        raise HTTPException(status_code=400, detail="Invalid Folks recovery signature")
+
+    if recovered.lower() != owner_address_raw.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Folks recovery signature does not match account owner",
+        )
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/preview", response_model=WithdrawalPreviewResponse)
@@ -633,7 +795,7 @@ async def preview_withdrawal(
     verify_account_ownership(_auth, account, db=db)
 
     # Read on-chain balance
-    current_balance = await _get_on_chain_balance(address)
+    current_balance = await _get_on_chain_balance(db, str(account["id"]), address)
     if current_balance <= Decimal("0"):
         raise HTTPException(
             status_code=400,
@@ -721,7 +883,7 @@ async def execute_withdrawal(
             ) from exc
 
     # Read on-chain balance
-    current_balance = await _get_on_chain_balance(address)
+    current_balance = await _get_on_chain_balance(db, str(account["id"]), address)
     if current_balance <= Decimal("0"):
         raise HTTPException(status_code=400, detail="No balance to withdraw")
 
@@ -896,6 +1058,8 @@ async def execute_withdrawal(
 
         silo_savusd_share_balance = 0
         silo_susdp_share_balance = 0
+        silo_gami_share_balance = 0
+        folks_share_balance = 0
         try:
             silo_savusd_adapter = get_adapter("silo_savusd_usdc")
             silo_savusd_share_balance = int(await silo_savusd_adapter.get_shares(address))
@@ -922,6 +1086,16 @@ async def execute_withdrawal(
                 )
         except Exception as exc:
             logger.warning("Failed to read Silo sUSDp share balance for %s: %s", address, exc)
+        try:
+            silo_gami_adapter = get_adapter("silo_gami_usdc")
+            silo_gami_share_balance = int(await silo_gami_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Silo Gami share balance for %s: %s", address, exc)
+        try:
+            folks_adapter = get_adapter("folks")
+            folks_share_balance = int(await folks_adapter.get_shares(address))
+        except Exception as exc:
+            logger.warning("Failed to read Folks share balance for %s: %s", address, exc)
 
         agent_fee_raw = _to_raw_usdc(fee_calc.agent_fee) if settings.AGENT_FEE_ENABLED else 0
         # Always use quantized fee-calculator output to avoid micro truncation drift.
@@ -949,6 +1123,21 @@ async def execute_withdrawal(
                 "EULER_VAULT": settings.EULER_VAULT,
                 "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
                 "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
+                "SILO_GAMI_USDC_VAULT": settings.SILO_GAMI_USDC_VAULT,
+                "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
+                "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+                "FOLKS_HUB": settings.FOLKS_HUB,
+                "FOLKS_MESSAGE_MANAGER": settings.FOLKS_MESSAGE_MANAGER,
+                "FOLKS_ACCOUNT_MANAGER": settings.FOLKS_ACCOUNT_MANAGER,
+                "FOLKS_LOAN_MANAGER": settings.FOLKS_LOAN_MANAGER,
+                "FOLKS_USDC_HUB_POOL": settings.FOLKS_USDC_HUB_POOL,
+                "FOLKS_HUB_CHAIN_ID": settings.FOLKS_HUB_CHAIN_ID,
+                "FOLKS_USDC_POOL_ID": settings.FOLKS_USDC_POOL_ID,
+                "FOLKS_USDC_LOAN_TYPE_ID": settings.FOLKS_USDC_LOAN_TYPE_ID,
+                "FOLKS_ACCOUNT_NONCE": settings.FOLKS_ACCOUNT_NONCE,
+                "FOLKS_LOAN_NONCE": settings.FOLKS_LOAN_NONCE,
+                "FOLKS_ACCOUNT_NONCE_SCAN_MAX": settings.FOLKS_ACCOUNT_NONCE_SCAN_MAX,
+                "FOLKS_LOAN_NONCE_SCAN_MAX": settings.FOLKS_LOAN_NONCE_SCAN_MAX,
                 "USDC": settings.USDC_ADDRESS,
                 "TREASURY": treasury_for_payload,
             },
@@ -959,6 +1148,8 @@ async def execute_withdrawal(
                 "eulerShareBalance": str(euler_share_balance),
                 "siloSavusdShareBalance": str(silo_savusd_share_balance),
                 "siloSusdpShareBalance": str(silo_susdp_share_balance),
+                "siloGamiShareBalance": str(silo_gami_share_balance),
+                "folksShareBalance": str(folks_share_balance),
             },
         }
 
@@ -1088,3 +1279,111 @@ async def execute_withdrawal(
             status_code=500,
             detail="An error occurred during withdrawal. Your funds are safe.",
         )
+
+
+@router.post("/folks/recover", response_model=FolksRecoveryExecuteResponse)
+async def recover_failed_folks_messages(
+    request: Request,
+    req: FolksRecoveryExecuteRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Recover failed Folks bridge messages via strict on-chain verified reverse/retry."""
+    address = validate_eth_address(req.smart_account_address)
+    account = await _get_account(db, address)
+    verify_account_ownership(_auth, account, db=db)
+    _verify_folks_recovery_authorization(req, account)
+
+    session_info = get_active_session_key_record(db, UUID(account["id"]))
+    if not session_info:
+        raise HTTPException(
+            status_code=400,
+            detail="No active session key found. Re-grant session key first",
+        )
+
+    serialized_permission = session_info.get("serialized_permission") or ""
+    session_private_key = session_info.get("session_private_key") or ""
+    if not serialized_permission:
+        raise HTTPException(status_code=400, detail="Active session key is missing serialized permission")
+
+    allowed_protocols = [str(item).lower() for item in (session_info.get("allowed_protocols") or [])]
+    if allowed_protocols and "folks" not in allowed_protocols:
+        raise HTTPException(
+            status_code=403,
+            detail="Active session key is not permitted for Folks operations. Re-grant session key.",
+        )
+
+    settings = get_settings()
+    payload = {
+        "serializedPermission": serialized_permission,
+        "sessionPrivateKey": session_private_key,
+        "smartAccountAddress": address,
+        "recoveries": [
+            {
+                "txHash": item.tx_hash,
+                "messageId": item.message_id,
+                "action": item.action,
+            }
+            for item in req.recoveries
+        ],
+        "contracts": {
+            "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
+            "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+            "FOLKS_HUB": settings.FOLKS_HUB,
+            "FOLKS_HUB_CHAIN_ID": settings.FOLKS_HUB_CHAIN_ID,
+            "FOLKS_MESSAGE_MANAGER": settings.FOLKS_MESSAGE_MANAGER,
+            "USDC": settings.USDC_ADDRESS,
+        },
+    }
+
+    execution = ExecutionService()
+    try:
+        result = await execution.execute_folks_recovery(payload)
+    except Exception as exc:
+        err_msg = str(exc)
+        err_lc = err_msg.lower()
+        if (
+            "serializedsessionkey" in err_lc
+            or "no signer" in err_lc
+            or "session key/account mismatch" in err_lc
+        ):
+            revoke_session_key(db, UUID(account["id"]))
+            raise HTTPException(
+                status_code=400,
+                detail="Session key invalid and has been revoked. Please re-authorize.",
+            )
+        if "call policy" in err_lc or "permission" in err_lc:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Session key does not have Folks recovery permissions. "
+                    "Re-grant session key and retry recovery."
+                ),
+            )
+        logger.error("Execution service returned an error for Folks recovery: %s", err_msg)
+        raise HTTPException(
+            status_code=502,
+            detail="Folks recovery execution failed — please try again",
+        )
+
+    tx_hash = result.get("txHash")
+    recovered_message_ids = [str(item).lower() for item in (result.get("recoveredMessageIds") or [])]
+
+    db.table("rebalance_logs").insert({
+        "account_id": account["id"],
+        "status": "executed",
+        "skip_reason": None,
+        "from_protocol": "folks_recovery",
+        "to_protocol": "smart_account",
+        "amount_moved": "0",
+        "tx_hash": tx_hash,
+        "apr_improvement": None,
+    }).execute()
+
+    return FolksRecoveryExecuteResponse(
+        status="executed",
+        txHash=tx_hash,
+        recoveredMessageIds=recovered_message_ids,
+        recoveredCount=int(result.get("recoveredCount") or len(recovered_message_ids)),
+        message="Folks failed-message recovery submitted.",
+    )

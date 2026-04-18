@@ -33,6 +33,8 @@ _NAMES = {
     "spark": "Spark Savings",
     "silo_savusd_usdc": "Silo savUSD/USDC",
     "silo_susdp_usdc": "Silo sUSDp/USDC",
+    "silo_gami_usdc": "Silo V3 Gami USDC",
+    "folks": "Folks Finance xChain",
 }
 
 # ERC-20 balanceOf ABI
@@ -76,6 +78,8 @@ _principal_reconcile_no_improve_until: dict[str, tuple[float, str]] = {}
 def _canonical_protocol_id(protocol_id: str) -> str:
     if protocol_id == "aave":
         return "aave_v3"
+    if protocol_id in {"folks_finance_xchain", "folks_finance"}:
+        return "folks"
     return protocol_id
 
 
@@ -227,21 +231,13 @@ def _portfolio_cache_put(cache_key: str, response: PortfolioResponse, ttl_second
     )
 
 
-def _principal_reconcile_key(account_id: str, smart_address: str, owner_address: str) -> str:
-    return f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
-
-
-def _read_no_improve_reconcile_source(cooldown_key: str) -> str | None:
-    marker = _principal_reconcile_no_improve_until.get(cooldown_key)
-    if marker is None:
+def _portfolio_cache_peek(cache_key: str) -> PortfolioResponse | None:
+    """Return cached payload regardless of expiry for failure fallback."""
+    cached = _portfolio_cache.get(cache_key)
+    if not cached:
         return None
-
-    until_mono, source = marker
-    if time.monotonic() >= until_mono:
-        _principal_reconcile_no_improve_until.pop(cooldown_key, None)
-        return None
-
-    return source
+    _expires_at, payload = cached
+    return PortfolioResponse.model_validate(payload)
 
 
 def _topic_to_address(topic_hex: str) -> str:
@@ -859,7 +855,7 @@ async def _reconcile_principal_tracking_from_chain(
         return None
 
 
-async def _get_idle_usdc(address: str) -> Decimal:
+async def _get_idle_usdc(address: str) -> Decimal | None:
     """Read the on-chain USDC balance sitting idle in the smart account.
 
     Retries on both 429 (rate-limit) and -32603 (RPC internal error).
@@ -887,22 +883,39 @@ async def _get_idle_usdc(address: str) -> Decimal:
                 elif "-32603" in err_str or "Internal error" in err_str:
                     await asyncio.sleep(0.5 * (2 ** attempt))
                 else:
-                    logger.warning("Failed to read idle USDC for %s: %s", address, exc)
-                    return Decimal("0")
+                    logger.warning(
+                        "Idle USDC read attempt %d/3 failed for %s: %s",
+                        attempt + 1,
+                        address,
+                        exc,
+                    )
+                    await asyncio.sleep(0.25 * (2 ** attempt))
                 continue
             logger.warning("Failed to read idle USDC for %s after %d attempts: %s", address, attempt + 1, exc)
-            return Decimal("0")
-    return Decimal("0")
+            return None
+    return None
 
 
 async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | None:
     """Read on-chain underlying balance for a protocol."""
+    settings = get_settings()
+    timeout_seconds = max(0.5, float(settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
     for attempt in range(2):
         try:
-            settings = get_settings()
             adapter = get_adapter(protocol_id)
-            balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
+            balance_wei = await asyncio.wait_for(
+                adapter.get_user_balance(address, settings.USDC_ADDRESS),
+                timeout=timeout_seconds,
+            )
             return Decimal(str(balance_wei)) / Decimal("1000000")
+        except asyncio.TimeoutError:
+            logger.warning(
+                "On-chain balance read timed out for %s/%s after %.1fs",
+                protocol_id,
+                address,
+                timeout_seconds,
+            )
+            return None
         except Exception as exc:
             err_str = str(exc)
             if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
@@ -927,7 +940,11 @@ async def _get_live_apys() -> dict[str, Decimal]:
     from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
     try:
         fetcher = RateFetcher()
-        rates = await fetcher.fetch_display_rates()
+        timeout_seconds = max(0.5, float(get_settings().RATE_FETCH_TIMEOUT_SECONDS))
+        rates = await asyncio.wait_for(
+            fetcher.fetch_display_rates(),
+            timeout=timeout_seconds,
+        )
         apys: dict[str, Decimal] = {}
 
         for pid in ACTIVE_ADAPTERS.keys():
@@ -941,6 +958,13 @@ async def _get_live_apys() -> dict[str, Decimal]:
                 apys[pid] = cached.effective_apy
 
         return apys
+    except asyncio.TimeoutError:
+        logger.warning("Rate fetcher timed out in portfolio; using cached TWAP fallbacks")
+        return {
+            pid: snap.effective_apy
+            for pid in ACTIVE_ADAPTERS.keys()
+            if (snap := twap_buffer.get_latest(pid)) is not None
+        }
     except Exception as exc:
         logger.warning("Rate fetcher failed in portfolio: %s", exc)
         return {}
@@ -969,19 +993,20 @@ async def get_portfolio(
     )
     if not acct.data:
         idle_usdc = await _get_idle_usdc(address)
+        effective_idle_usdc = idle_usdc if idle_usdc is not None else Decimal("0")
         allocations: list[AllocationResponse] = []
-        if idle_usdc > Decimal("0.01"):
+        if effective_idle_usdc > Decimal("0.01"):
             allocations.append(
                 AllocationResponse(
                     protocol_id="idle",
                     name="Idle USDC (Wallet)",
-                    amount_usdc=idle_usdc,
+                    amount_usdc=effective_idle_usdc,
                     allocation_pct=Decimal("1"),
                     current_apy=Decimal("0"),
                 )
             )
         return PortfolioResponse(
-            total_deposited_usd=idle_usdc,
+            total_deposited_usd=effective_idle_usdc,
             total_yield_usd=Decimal("0"),
             allocations=allocations,
             last_rebalance_at=None,
@@ -993,6 +1018,7 @@ async def get_portfolio(
 
     cache_ttl = max(0, int(get_settings().PORTFOLIO_CACHE_TTL_SECONDS))
     cache_key = f"{str(account_id)}:{address.lower()}"
+    stale_cached_response = _portfolio_cache_peek(cache_key)
     cached_response = _portfolio_cache_get(cache_key)
     if cached_response is not None:
         return cached_response
@@ -1034,6 +1060,7 @@ async def get_portfolio(
     allocations: list[AllocationResponse] = []
     total_current_value = Decimal(0)
     db_protocol_ids: set[str] = set()
+    db_idle_amount = Decimal("0")
     for row in allocs.data or []:
         raw_protocol_id = str(row.get("protocol_id") or "")
         if not raw_protocol_id:
@@ -1042,6 +1069,10 @@ async def get_portfolio(
         protocol_id = _canonical_protocol_id(raw_protocol_id)
         amt = Decimal(str(row.get("amount_usdc") or 0))
         if amt <= Decimal("0"):
+            continue
+
+        if protocol_id == "idle":
+            db_idle_amount += amt
             continue
 
         total_current_value += amt
@@ -1087,6 +1118,37 @@ async def get_portfolio(
     idle_usdc = balance_results[len(protocol_ids)]
     live_apys = balance_results[len(protocol_ids) + 1]
 
+    if idle_usdc is None and all(onchain_balances.get(pid) is None for pid in protocol_ids):
+        if stale_cached_response is not None:
+            logger.warning(
+                "Portfolio reads failed for %s — serving stale cached snapshot",
+                address,
+            )
+            return stale_cached_response
+
+    effective_idle_usdc = idle_usdc
+    if effective_idle_usdc is None:
+        if db_idle_amount > _PROTOCOL_BALANCE_DUST_USDC:
+            effective_idle_usdc = db_idle_amount
+            logger.warning(
+                "Idle USDC read failed for %s — using DB fallback amount %s",
+                address,
+                db_idle_amount,
+            )
+        else:
+            cached_idle = Decimal("0")
+            if stale_cached_response is not None:
+                for alloc in stale_cached_response.allocations:
+                    if alloc.protocol_id == "idle":
+                        cached_idle = Decimal(str(alloc.amount_usdc))
+                        break
+            effective_idle_usdc = cached_idle
+            logger.warning(
+                "Idle USDC read failed for %s — using cached fallback amount %s",
+                address,
+                cached_idle,
+            )
+
     # Reconcile DB allocations against on-chain reality:
     #   - If on-chain > 0 and DB differs significantly → use on-chain
     #   - If on-chain > 0 and not in DB → add as discovered allocation
@@ -1131,13 +1193,13 @@ async def get_portfolio(
             alloc.current_apy = apy
 
     # Add idle USDC if present
-    if idle_usdc > Decimal("0.01"):
-        total_current_value += idle_usdc
+    if effective_idle_usdc > Decimal("0.01"):
+        total_current_value += effective_idle_usdc
         allocations.append(
             AllocationResponse(
                 protocol_id="idle",
                 name="Idle USDC (Wallet)",
-                amount_usdc=idle_usdc,
+                amount_usdc=effective_idle_usdc,
                 allocation_pct=Decimal("0"),
                 current_apy=Decimal("0"),
             )
@@ -1228,17 +1290,8 @@ async def get_portfolio(
             ):
                 tracked_net_principal = reconciled_principal
             else:
-                reconcile_skipped_no_improvement = True
-                _principal_reconcile_cooldowns[reconcile_key] = (
-                    time.monotonic() + _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS
-                )
-                if reconcile_source in {"receipt_logs", "activity_logs"}:
-                    _principal_reconcile_no_improve_until[reconcile_key] = (
-                        time.monotonic() + _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS,
-                        reconcile_source,
-                    )
-                logger.warning(
-                    "Skipping reconciled principal for %s: before_drift=%s after_drift=%s",
+                logger.info(
+                    "Principal reconciliation kept tracked value for %s: before_drift=%s after_drift=%s",
                     address,
                     before_drift,
                     after_drift,

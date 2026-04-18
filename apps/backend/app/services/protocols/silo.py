@@ -1,12 +1,17 @@
 """Silo V2 adapter — ERC-4626 vault interface on Avalanche.
 
-Supports two isolated lending markets:
+Supports isolated lending vaults:
   - savUSD/USDC  vault = 0x606fe9a70338e798a292CA22C1F28C829F24048E (bUSDC-142)
   - sUSDp/USDC   vault = 0x8ad697a333569ca6f04c8c063e9807747ef169c1 (bUSDC-162)
+    - Gami USDC    vault = 0x1F0570a081FeE0e4dF6eAC470f9d2D53CDEDa1c5 (Silo V3 curator vault)
 
-Both vaults implement the standard ERC-4626 interface:
+These vaults implement the standard ERC-4626 interface:
   deposit(assets, receiver) / redeem(shares, receiver, owner)
   convertToAssets(shares) / totalAssets()
+
+The Gami Silo V3 vault is ERC-4626-compatible but does not expose Silo V2
+helpers like utilizationData()/siloConfig(). The dedicated adapter below
+intentionally avoids those calls and reports utilization as unavailable.
 
 Note: Silo V2 USDC vaults have a non-1:1 share-to-asset ratio.
 Shares have 6 decimals (same as USDC) but each share is worth ~0.001 USDC.
@@ -71,6 +76,13 @@ SILO_VAULT_ABI = [
         "type": "function",
         "inputs": [{"name": "account", "type": "address"}],
         "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "maxWithdraw",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "maxAssets", "type": "uint256"}],
         "stateMutability": "view",
     },
     {
@@ -236,6 +248,7 @@ class SiloAdapter(BaseProtocolAdapter):
             utilization_raw = await vault.functions.utilizationData().call()
             collateral_assets = Decimal(str(utilization_raw[0]))
             debt_assets = Decimal(str(utilization_raw[1]))
+            interest_rate_timestamp = int(utilization_raw[2]) if len(utilization_raw) > 2 else 0
             utilization = (
                 debt_assets / collateral_assets
                 if collateral_assets > Decimal("0")
@@ -265,8 +278,9 @@ class SiloAdapter(BaseProtocolAdapter):
                 address=w3.to_checksum_address(irm_address),
                 abi=_INTEREST_RATE_MODEL_ABI,
             )
-            latest_block = await w3.eth.get_block("latest")
-            block_timestamp = int(latest_block["timestamp"])
+            # Use timestamp emitted by utilizationData() to avoid RPC block
+            # decoding edge cases while staying anchored to on-chain state.
+            block_timestamp = interest_rate_timestamp if interest_rate_timestamp > 0 else int(time.time())
             borrow_apr_raw = await irm_contract.functions.getCurrentInterestRate(
                 w3.to_checksum_address(self.vault_address),
                 block_timestamp,
@@ -355,6 +369,19 @@ class SiloAdapter(BaseProtocolAdapter):
                 utilization_rate = max(Decimal("0"), min(utilization_rate, Decimal("1")))
             except Exception as exc:
                 logger.warning("Silo utilization calculation failed for %s: %s", self.protocol_id, exc)
+
+        # For Silo V2 markets, prefer last known live IRM APR over share-price
+        # fallback when live reads fail transiently. This keeps dashboard APR
+        # aligned with protocol UI instead of drifting during RPC hiccups.
+        if self.protocol_id != "silo_gami_usdc" and self._cached_apy > Decimal("0"):
+            return ProtocolRate(
+                protocol_id=self.protocol_id,
+                apy=self._cached_apy,
+                effective_apy=self._cached_apy,
+                tvl_usd=tvl,
+                utilization_rate=utilization_rate,
+                fetched_at=now,
+            )
 
         today_value = Decimal(str(current_assets))  # raw 1e18-scale value
 
@@ -568,12 +595,27 @@ class SiloAdapter(BaseProtocolAdapter):
         if not vault:
             return 0
         w3 = self._get_w3()
-        shares = await vault.functions.balanceOf(
-            w3.to_checksum_address(user_address)
-        ).call()
+        user_checksum = w3.to_checksum_address(user_address)
+        shares = await vault.functions.balanceOf(user_checksum).call()
         if shares == 0:
             return 0
-        return await vault.functions.convertToAssets(shares).call()
+        assets = await vault.functions.convertToAssets(shares).call()
+
+        # Prefer withdrawable assets when vault limits are active, but keep
+        # visibility of positions even if maxWithdraw reports 0 unexpectedly.
+        try:
+            max_withdraw = await vault.functions.maxWithdraw(user_checksum).call()
+            if max_withdraw > 0 and max_withdraw < assets:
+                return max_withdraw
+        except Exception as exc:
+            logger.debug(
+                "Silo %s maxWithdraw read failed for %s: %s",
+                self.protocol_id,
+                user_address,
+                exc,
+            )
+
+        return assets
 
     async def get_shares(self, user_address: str) -> int:
         """Returns the raw ERC-4626 share balance for redemption paths."""
@@ -608,3 +650,83 @@ class SiloSUSDpAdapter(SiloAdapter):
     def __init__(self) -> None:
         settings = get_settings()
         super().__init__(vault_address=settings.SILO_SUSDP_VAULT)
+
+
+class SiloGamiUSDCAdapter(SiloAdapter):
+    """Silo V3 Gami USDC curator vault on Avalanche."""
+
+    protocol_id = "silo_gami_usdc"
+    name = "Silo V3 (Gami USDC)"
+    is_active = True
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        super().__init__(vault_address=settings.SILO_GAMI_USDC_VAULT)
+
+    async def _read_live_depositor_apr(self, vault) -> tuple[Decimal | None, Decimal | None]:
+        """Gami vault doesn't expose Silo V2 IRM helpers; use share-price APY path."""
+        del vault
+        return None, None
+
+    async def get_utilization(self) -> Decimal | None:
+        """Utilization is not exposed by the Gami vault interface."""
+        return None
+
+    async def get_health(self) -> ProtocolHealth:
+        """Health check for ERC-4626 compatibility and non-zero vault state."""
+        vault = self._get_vault()
+        if not vault:
+            return ProtocolHealth(
+                protocol_id=self.protocol_id,
+                status=ProtocolStatus.EXCLUDED,
+                is_deposit_safe=False,
+                is_withdrawal_safe=False,
+                utilization=None,
+                details={"reason": "Vault not configured"},
+            )
+
+        try:
+            total_assets = await vault.functions.totalAssets().call()
+            if total_assets == 0:
+                return ProtocolHealth(
+                    protocol_id=self.protocol_id,
+                    status=ProtocolStatus.EMERGENCY,
+                    is_deposit_safe=False,
+                    is_withdrawal_safe=True,
+                    utilization=None,
+                    details={"reason": "totalAssets is zero — vault may be drained"},
+                )
+
+            test_assets = await vault.functions.convertToAssets(
+                SHARE_PRICE_QUERY_AMOUNT
+            ).call()
+            if test_assets <= 0:
+                return ProtocolHealth(
+                    protocol_id=self.protocol_id,
+                    status=ProtocolStatus.DEPOSITS_DISABLED,
+                    is_deposit_safe=False,
+                    is_withdrawal_safe=True,
+                    utilization=None,
+                    details={
+                        "reason": "Share price is zero — possible loss event",
+                        "convertToAssets": str(test_assets),
+                    },
+                )
+        except Exception as exc:
+            return ProtocolHealth(
+                protocol_id=self.protocol_id,
+                status=ProtocolStatus.EMERGENCY,
+                is_deposit_safe=False,
+                is_withdrawal_safe=False,
+                utilization=None,
+                details={"reason": f"Health check RPC failed: {exc}"},
+            )
+
+        return ProtocolHealth(
+            protocol_id=self.protocol_id,
+            status=ProtocolStatus.HEALTHY,
+            is_deposit_safe=True,
+            is_withdrawal_safe=True,
+            utilization=None,
+            details={"note": "Utilization unavailable for Silo V3 Gami vault interface"},
+        )

@@ -27,6 +27,11 @@ from app.services.protocols.base import ProtocolRate
 logger = logging.getLogger("snowmind.rate_fetcher")
 _CB_STATE_TABLE = "protocol_circuit_breaker_state"
 
+_MIN_REASONABLE_APY = Decimal("0")
+_MAX_REASONABLE_APY = Decimal("2.0")
+_MIN_REASONABLE_FETCHED_AT = 1577836800.0  # 2020-01-01
+_MAX_REASONABLE_FETCHED_AT = 4102444800.0  # 2100-01-01
+
 # ── Response-level cache for rate fetches ────────────────────────────────────
 # Prevents Infura 429 storms when /rates is polled rapidly by the frontend.
 _rate_cache: dict[str, ProtocolRate] = {}
@@ -41,7 +46,13 @@ _DISPLAY_RATE_CACHE_TTL_SECONDS: float = 20.0
 _display_rate_fetch_lock = asyncio.Lock()
 
 # ERC-4626 vault adapters that use 24h convertToAssets snapshots for stable APY
-_VAULT_SNAPSHOT_PROTOCOLS = {"spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"}
+_VAULT_SNAPSHOT_PROTOCOLS = {
+    "spark",
+    "euler_v2",
+    "silo_savusd_usdc",
+    "silo_susdp_usdc",
+    "silo_gami_usdc",
+}
 
 
 # ── Circuit breaker ──────────────────────────────────────────────────────────
@@ -249,44 +260,101 @@ class TWAPBuffer:
     def sample_count(self, protocol_id: str) -> int:
         return len(self._samples.get(protocol_id, []))
 
+    @staticmethod
+    def _is_snapshot_sane(snapshot: TWAPSnapshot) -> bool:
+        """Validate persisted snapshot values before restoring them into memory."""
+        if (
+            not snapshot.apy.is_finite()
+            or not snapshot.effective_apy.is_finite()
+            or not snapshot.tvl_usd.is_finite()
+        ):
+            return False
+        if snapshot.apy < _MIN_REASONABLE_APY or snapshot.apy > _MAX_REASONABLE_APY:
+            return False
+        if (
+            snapshot.effective_apy < _MIN_REASONABLE_APY
+            or snapshot.effective_apy > _MAX_REASONABLE_APY
+        ):
+            return False
+        if snapshot.tvl_usd < Decimal("0"):
+            return False
+        if (
+            snapshot.fetched_at < _MIN_REASONABLE_FETCHED_AT
+            or snapshot.fetched_at > _MAX_REASONABLE_FETCHED_AT
+        ):
+            return False
+        return True
+
     def load_from_db(self) -> None:
         """Load persisted TWAP snapshots from DB on startup."""
         if self._loaded_from_db:
             return
         try:
             db = get_supabase()
-            for pid in ALL_ADAPTERS:
+        except Exception as exc:
+            logger.warning("Failed to initialize TWAP snapshot DB client: %s", exc)
+            self._loaded_from_db = True
+            return
+
+        for pid in ALL_ADAPTERS:
+            try:
                 result = (
                     db.table("twap_snapshots")
                     .select("*")
                     .eq("protocol_id", pid)
+                    # Exclude pathological historical rows at query-time so JSON
+                    # parsing never sees giant numeric payloads.
+                    .gte("apy", str(_MIN_REASONABLE_APY))
+                    .lte("apy", str(_MAX_REASONABLE_APY))
+                    .gte("effective_apy", str(_MIN_REASONABLE_APY))
+                    .lte("effective_apy", str(_MAX_REASONABLE_APY))
+                    .gte("fetched_at", _MIN_REASONABLE_FETCHED_AT)
+                    .lte("fetched_at", _MAX_REASONABLE_FETCHED_AT)
                     .order("fetched_at", desc=True)
                     .limit(self.max_snapshots)
                     .execute()
                 )
-                if result.data:
-                    # Reverse to chronological order
-                    for row in reversed(result.data):
-                        self._samples[pid].append(TWAPSnapshot(
-                            protocol_id=row["protocol_id"],
-                            apy=Decimal(str(row["apy"])),
-                            effective_apy=Decimal(str(row["effective_apy"])),
-                            tvl_usd=Decimal(str(row["tvl_usd"])),
-                            utilization_rate=(
-                                Decimal(str(row["utilization_rate"]))
-                                if row.get("utilization_rate") is not None
-                                else None
-                            ),
-                            fetched_at=float(row["fetched_at"]),
-                        ))
-                    logger.info(
-                        "Loaded %d TWAP snapshots for %s from DB",
-                        len(result.data),
-                        pid,
+            except Exception as exc:
+                logger.warning("Failed to load TWAP snapshots for %s from DB: %s", pid, exc)
+                continue
+
+            loaded_count = 0
+            dropped_count = 0
+            for row in reversed(result.data or []):
+                try:
+                    snapshot = TWAPSnapshot(
+                        protocol_id=row["protocol_id"],
+                        apy=Decimal(str(row["apy"])),
+                        effective_apy=Decimal(str(row["effective_apy"])),
+                        tvl_usd=Decimal(str(row["tvl_usd"])),
+                        utilization_rate=(
+                            Decimal(str(row["utilization_rate"]))
+                            if row.get("utilization_rate") is not None
+                            else None
+                        ),
+                        fetched_at=float(row["fetched_at"]),
                     )
-            self._loaded_from_db = True
-        except Exception as exc:
-            logger.warning("Failed to load TWAP snapshots from DB: %s", exc)
+                except Exception:
+                    dropped_count += 1
+                    continue
+
+                if not self._is_snapshot_sane(snapshot):
+                    dropped_count += 1
+                    continue
+
+                self._samples[pid].append(snapshot)
+                loaded_count += 1
+
+            if loaded_count > 0:
+                logger.info("Loaded %d TWAP snapshots for %s from DB", loaded_count, pid)
+            if dropped_count > 0:
+                logger.warning(
+                    "Dropped %d invalid TWAP snapshots for %s during startup restore",
+                    dropped_count,
+                    pid,
+                )
+
+        self._loaded_from_db = True
 
     def _persist_snapshot(self, snapshot: TWAPSnapshot) -> None:
         """Persist a snapshot to DB."""
@@ -335,7 +403,13 @@ class RateFetcher:
         buffer to populate _cached_apy so the first get_rate() call after restart
         returns a reasonable APY immediately.
         """
-        share_price_protocols = ["euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "spark"]
+        share_price_protocols = [
+            "euler_v2",
+            "silo_savusd_usdc",
+            "silo_susdp_usdc",
+            "silo_gami_usdc",
+            "spark",
+        ]
         for pid in share_price_protocols:
             adapter = ALL_ADAPTERS.get(pid)
             if adapter is None:
@@ -388,6 +462,7 @@ class RateFetcher:
 
             settings = self.settings
             semaphore = asyncio.Semaphore(settings.RPC_CONCURRENCY_LIMIT)
+            rate_fetch_timeout = max(0.5, float(settings.RATE_FETCH_TIMEOUT_SECONDS))
 
             async def _do_fetch(pid: str) -> ProtocolRate:
                 """Execute a single adapter's get_rate() call."""
@@ -397,14 +472,23 @@ class RateFetcher:
                     snapshot_data = self._get_vault_yesterday_snapshot(pid)
                     if snapshot_data is not None:
                         yesterday_value, snapshot_at = snapshot_data
-                        return await adapter.get_rate(
-                            yesterday_snapshot=yesterday_value,
-                            snapshot_at=snapshot_at,
+                        return await asyncio.wait_for(
+                            adapter.get_rate(
+                                yesterday_snapshot=yesterday_value,
+                                snapshot_at=snapshot_at,
+                            ),
+                            timeout=rate_fetch_timeout,
                         )
                     else:
-                        return await adapter.get_rate(yesterday_snapshot=None)
+                        return await asyncio.wait_for(
+                            adapter.get_rate(yesterday_snapshot=None),
+                            timeout=rate_fetch_timeout,
+                        )
                 else:
-                    return await adapter.get_rate()
+                    return await asyncio.wait_for(
+                        adapter.get_rate(),
+                        timeout=rate_fetch_timeout,
+                    )
 
             async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
                 """Run a single adapter fetch under the concurrency semaphore.
@@ -446,7 +530,11 @@ class RateFetcher:
             results: dict[str, ProtocolRate] = {}
             for pid, result in raw_results:
                 if isinstance(result, Exception):
-                    logger.warning("Rate fetch failed for %s: %s", pid, result)
+                    detail = str(result) or type(result).__name__
+                    logger.warning("Rate fetch failed for %s: %s", pid, detail)
+                    circuit_breaker.record_failure(pid)
+                elif not self.validate_rate(result):
+                    logger.warning("Rate fetch rejected for %s due to validation failure", pid)
                     circuit_breaker.record_failure(pid)
                 else:
                     results[pid] = result
@@ -484,12 +572,16 @@ class RateFetcher:
                 return dict(_display_rate_cache)
 
             semaphore = asyncio.Semaphore(self.settings.RPC_CONCURRENCY_LIMIT)
+            rate_fetch_timeout = max(0.5, float(self.settings.RATE_FETCH_TIMEOUT_SECONDS))
 
             async def _throttled_fetch(pid: str) -> tuple[str, ProtocolRate | Exception]:
                 async with semaphore:
                     adapter = ALL_ADAPTERS[pid]
                     try:
-                        result = await adapter.get_rate()
+                        result = await asyncio.wait_for(
+                            adapter.get_rate(),
+                            timeout=rate_fetch_timeout,
+                        )
                         return pid, result
                     except Exception as exc:
                         err_str = str(exc)
@@ -497,7 +589,10 @@ class RateFetcher:
                             from app.core.rpc import get_rpc_manager
                             get_rpc_manager().report_rate_limit()
                             try:
-                                result = await adapter.get_rate()
+                                result = await asyncio.wait_for(
+                                    adapter.get_rate(),
+                                    timeout=rate_fetch_timeout,
+                                )
                                 return pid, result
                             except Exception as retry_exc:
                                 return pid, retry_exc
@@ -518,7 +613,11 @@ class RateFetcher:
             results: dict[str, ProtocolRate] = {}
             for pid, result in raw_results:
                 if isinstance(result, Exception):
-                    logger.warning("Display-rate fetch failed for %s: %s", pid, result)
+                    detail = str(result) or type(result).__name__
+                    logger.warning("Display-rate fetch failed for %s: %s", pid, detail)
+                    circuit_breaker.record_failure(pid)
+                elif not self.validate_rate(result):
+                    logger.warning("Display-rate fetch rejected for %s due to validation failure", pid)
                     circuit_breaker.record_failure(pid)
                 else:
                     results[pid] = result
@@ -563,10 +662,28 @@ class RateFetcher:
         Rejects negative APY, absurdly high APY (>200%), and negative TVL.
         Allows 0% APY (e.g. Spark base layer when no snapshot delta is available).
         """
-        if rate.apy < Decimal("0"):
+        if not rate.apy.is_finite() or not rate.effective_apy.is_finite() or not rate.tvl_usd.is_finite():
+            logger.warning(
+                "Rate for %s rejected: non-finite value(s) apy=%s effective_apy=%s tvl=%s",
+                rate.protocol_id,
+                rate.apy,
+                rate.effective_apy,
+                rate.tvl_usd,
+            )
             return False
-        if rate.apy > Decimal("2.0"):  # 200% — likely a data error
+        if rate.apy < _MIN_REASONABLE_APY:
+            return False
+        if rate.effective_apy < _MIN_REASONABLE_APY:
+            return False
+        if rate.apy > _MAX_REASONABLE_APY:  # 200% — likely a data error
             logger.warning("Rate for %s rejected: APY=%s exceeds 200%%", rate.protocol_id, rate.apy)
+            return False
+        if rate.effective_apy > _MAX_REASONABLE_APY:  # 200% — likely a data error
+            logger.warning(
+                "Rate for %s rejected: effective APY=%s exceeds 200%%",
+                rate.protocol_id,
+                rate.effective_apy,
+            )
             return False
         if rate.tvl_usd < Decimal("0"):
             return False

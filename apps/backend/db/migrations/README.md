@@ -57,6 +57,9 @@ Expected tables (after all migrations):
 | 017 | `017_add_assistant_chat_messages.sql` | Add assistant chat message persistence for authenticated session history |
 | 018 | `018_add_assistant_message_feedback.sql` | Add assistant thumbs up/down feedback persistence for response quality tuning |
 | 019 | `019_add_assistant_chat_sessions.sql` | Add persistent assistant session metadata for rename/delete-backed conversation management |
+| 020 | `020_add_silo_gami_protocol.sql` | Seed `silo_gami_usdc` in `protocol_health` for monitoring and risk pipelines |
+| 021 | `021_add_folks_protocol.sql` | Seed `folks` in `protocol_health` for monitoring and risk pipelines |
+| 022 | `022_seed_all_supported_protocols.sql` | Ensure all currently supported protocols exist in `protocol_health` for monitoring/risk/rebalance pipelines |
 
 ## Creating a new migration
 

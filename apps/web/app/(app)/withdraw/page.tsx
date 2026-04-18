@@ -96,8 +96,15 @@ export default function WithdrawPage() {
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
   const { data: livePortfolio } = usePortfolio(smartAccountAddress || undefined)
   const fallbackBalance = parseFloat(totalDepositedUsd || '0') + parseFloat(totalYieldUsd || '0')
+  const liveAllocationTotal = livePortfolio?.allocations?.reduce(
+    (sum, allocation) => sum + Number(allocation.amountUsdc),
+    0,
+  ) ?? 0
+  const livePortfolioTotal = livePortfolio
+    ? Number(livePortfolio.totalDepositedUsd) + Number(livePortfolio.totalYieldUsd)
+    : 0
   const balance = livePortfolio
-    ? Math.max(Number(livePortfolio.totalDepositedUsd) + Number(livePortfolio.totalYieldUsd), 0)
+    ? Math.max(liveAllocationTotal, livePortfolioTotal, 0)
     : Math.max(fallbackBalance, 0)
 
   const handlePreview = useCallback(async () => {

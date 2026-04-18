@@ -53,8 +53,14 @@ pnpm dev        # starts on http://localhost:3000
 See `apps/web/.env.example` for required variables:
 - `NEXT_PUBLIC_PRIVY_APP_ID` — Privy application ID
 - `NEXT_PUBLIC_ZERODEV_PROJECT_ID` — ZeroDev project ID
-- `NEXT_PUBLIC_API_URL` — Backend API URL
+- `BACKEND_URL` — Server-side rewrite target for `/api/*` (primary production backend URL)
+- `NEXT_PUBLIC_BACKEND_URL` — Optional fallback backend origin (not required for browser requests)
+- `NEXT_PUBLIC_BACKEND_FALLBACK_URLS` — Optional comma-separated fallback API origins
 - `NEXT_PUBLIC_PIMLICO_API_KEY` — Pimlico bundler key
+
+Important:
+- Do not set `BACKEND_URL` to `https://app.snowmind.xyz`. That causes `/api/*` rewrite loops and `508 Loop Detected`.
+- `BACKEND_URL` must point to the backend service origin (for example Railway backend URL).
 
 ## Deployment
 

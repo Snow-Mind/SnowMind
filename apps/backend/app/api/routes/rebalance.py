@@ -7,6 +7,7 @@ frontend can use the address it already has from ZeroDev.
 import logging
 import asyncio
 import json
+import time
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,6 +21,7 @@ from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.models.rebalance_log import RebalanceLogResponse, RebalanceHistoryResponse
+from app.services.protocols.base import get_shared_async_web3
 from app.services.execution.session_key import get_active_session_key
 from app.services.optimizer.rebalancer import Rebalancer
 
@@ -28,6 +30,25 @@ logger = logging.getLogger("snowmind")
 router = APIRouter()  # Auth applied per-endpoint
 
 _VALID_REBALANCE_STATUSES = {"executed", "skipped", "failed", "halted", "pending"}
+_IDLE_BALANCE_DIAGNOSTIC_CACHE: dict[str, tuple[float, Decimal]] = {}
+_IDLE_BALANCE_DIAGNOSTIC_TTL_SECONDS = 20.0
+
+
+async def _tx_receipt_succeeded(tx_hash: str | None) -> bool | None:
+    """Return True/False for confirmed tx success, or None when unavailable."""
+    if not tx_hash:
+        return None
+
+    try:
+        w3 = get_shared_async_web3()
+        receipt = await w3.eth.get_transaction_receipt(tx_hash)
+        status = receipt.get("status") if isinstance(receipt, dict) else getattr(receipt, "status", None)
+        if status is None:
+            return None
+        return int(status) == 1
+    except Exception as exc:
+        logger.debug("Unable to resolve tx receipt for %s: %s", tx_hash, exc)
+        return None
 
 
 def _parse_alloc_amount(value: object) -> Decimal | None:
@@ -291,12 +312,20 @@ async def get_rebalance_status(
     has_session_key = bool(get_active_session_key(db, account_id))
 
     idle_usdc = Decimal("0")
-    if is_active and has_session_key:
+    idle_cache_key = f"{account_id}:{addr.lower()}"
+    cached_idle = _IDLE_BALANCE_DIAGNOSTIC_CACHE.get(idle_cache_key)
+    if cached_idle and cached_idle[0] > time.monotonic():
+        idle_usdc = cached_idle[1]
+    elif is_active and has_session_key:
         try:
             rebalancer = Rebalancer()
             idle_usdc = await asyncio.wait_for(
                 rebalancer._get_idle_usdc_balance(addr),
-                timeout=3.0,
+                timeout=1.5,
+            )
+            _IDLE_BALANCE_DIAGNOSTIC_CACHE[idle_cache_key] = (
+                time.monotonic() + _IDLE_BALANCE_DIAGNOSTIC_TTL_SECONDS,
+                idle_usdc,
             )
         except TimeoutError:
             logger.info("Idle balance diagnostic timed out for %s", addr)
@@ -330,17 +359,31 @@ async def get_rebalance_status(
         }
 
     row = last.data[0]
+    effective_status = str(row.get("status") or "")
+    effective_skip_reason = row.get("skip_reason")
+    if effective_status == "executed" and row.get("tx_hash"):
+        tx_success = await _tx_receipt_succeeded(str(row.get("tx_hash")))
+        if tx_success is False:
+            effective_status = "failed"
+            effective_skip_reason = (
+                effective_skip_reason
+                or "On-chain transaction reverted after submission"
+            )
+            row = dict(row)
+            row["status"] = effective_status
+            row["skip_reason"] = effective_skip_reason
+
     reason_code, reason_detail = _classify_reason(
         is_active=is_active,
         has_session_key=has_session_key,
         idle_usdc=idle_usdc,
-        last_status=row.get("status"),
-        last_skip_reason=row.get("skip_reason"),
+        last_status=effective_status,
+        last_skip_reason=effective_skip_reason,
     )
     return {
         "smartAccountAddress": addr,
         "lastRebalance": row.get("created_at"),
-        "status": row.get("status"),
+        "status": effective_status,
         "lastLog": row,
         "reasonCode": reason_code,
         "reasonDetail": reason_detail,
@@ -414,6 +457,20 @@ async def get_rebalance_history(
                 normalized["skip_reason"] = (
                     f"Legacy rebalance status '{raw_status or 'unknown'}'"
                 )
+            raw_status = "failed"
+
+        if raw_status == "executed" and normalized.get("tx_hash"):
+            tx_success = await _tx_receipt_succeeded(str(normalized.get("tx_hash")))
+            if tx_success is False:
+                normalized["status"] = "failed"
+                normalized["skip_reason"] = (
+                    normalized.get("skip_reason")
+                    or "On-chain transaction reverted after submission"
+                )
+                raw_status = "failed"
+
+        if transactions_only and raw_status != "executed":
+            continue
 
         amount_moved = normalized.get("amount_moved")
         if amount_moved is not None and not isinstance(amount_moved, str):
@@ -432,7 +489,7 @@ async def get_rebalance_history(
 
         proposed_allocations = _normalize_alloc_map(normalized.get("proposed_allocations"))
         executed_allocations = _normalize_alloc_map(normalized.get("executed_allocations"))
-        if not executed_allocations and proposed_allocations:
+        if raw_status == "executed" and not executed_allocations and proposed_allocations:
             executed_allocations = dict(proposed_allocations)
 
         if proposed_allocations:

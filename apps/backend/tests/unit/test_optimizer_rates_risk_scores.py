@@ -69,7 +69,7 @@ class _FakeFetcher:
 
 
 @pytest.mark.asyncio
-async def test_get_all_rates_uses_persisted_risk_breakdown(monkeypatch) -> None:
+async def test_get_all_rates_prefers_live_computed_risk_over_persisted(monkeypatch) -> None:
     rates = {
         "aave_v3": ProtocolRate(
             protocol_id="aave_v3",
@@ -98,24 +98,29 @@ async def test_get_all_rates_uses_persisted_risk_breakdown(monkeypatch) -> None:
         lambda _db: {"aave_v3": _score("aave_v3", "7", 2, 2, 1, 1, 1)},
     )
 
-    async def _never_called(_db, _rates):
-        return {}
+    observed_inputs: list[dict[str, ProtocolRate]] = []
+
+    async def _computed(_db, input_rates):
+        observed_inputs.append(input_rates)
+        return {"aave_v3": _score("aave_v3", "5", 2, 0, 1, 1, 1)}
 
     monkeypatch.setattr(
         optimizer_routes._risk_scorer,
         "compute_scores_from_rates",
-        _never_called,
+        _computed,
     )
 
     optimizer_routes._rates_cache = None
     out = await optimizer_routes.get_all_rates(_make_request(), SimpleNamespace())
 
+    assert len(observed_inputs) == 1
+    assert "aave_v3" in observed_inputs[0]
     assert len(out) == 1
-    assert out[0].risk_score == Decimal("7")
+    assert out[0].risk_score == Decimal("5")
     assert out[0].risk_score_max == 9
     assert out[0].risk_breakdown is not None
     assert out[0].risk_breakdown.oracle == 2
-    assert out[0].risk_breakdown.liquidity == 2
+    assert out[0].risk_breakdown.liquidity == 0
 
 
 @pytest.mark.asyncio
@@ -268,10 +273,14 @@ async def test_get_all_rates_uses_live_display_apy_not_twap(monkeypatch) -> None
         "get_latest_persisted_scores",
         lambda _db: {"aave_v3": _score("aave_v3", "7", 2, 2, 1, 1, 1)},
     )
+
+    async def _empty_compute(_db, _rates):
+        return {}
+
     monkeypatch.setattr(
         optimizer_routes._risk_scorer,
         "compute_scores_from_rates",
-        lambda _db, _rates: {},
+        _empty_compute,
     )
 
     # Route should ignore TWAP for display when live rate exists.

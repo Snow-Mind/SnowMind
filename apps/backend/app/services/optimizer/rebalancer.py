@@ -197,6 +197,10 @@ class Rebalancer:
             self._protocol_addresses["silo_savusd_usdc"] = self.settings.SILO_SAVUSD_VAULT
         if self.settings.SILO_SUSDP_VAULT:
             self._protocol_addresses["silo_susdp_usdc"] = self.settings.SILO_SUSDP_VAULT
+        if self.settings.SILO_GAMI_USDC_VAULT:
+            self._protocol_addresses["silo_gami_usdc"] = self.settings.SILO_GAMI_USDC_VAULT
+        if self.settings.FOLKS_SPOKE_USDC:
+            self._protocol_addresses["folks"] = self.settings.FOLKS_SPOKE_USDC
 
     def _min_rebalance_gap(self, total_usd: Decimal) -> timedelta:
         """Return minimum time between successful rebalances for this balance size.
@@ -347,16 +351,38 @@ class Rebalancer:
         discovered: dict[str, Decimal] = {}
         for pid in protocol_ids:
             try:
-                adapter = get_adapter(pid)
-                if adapter is None:
-                    continue
-                balance_wei = await adapter.get_balance(smart_account_address)
-                balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                balance_usd = await self._read_protocol_balance_usd(
+                    smart_account_address,
+                    pid,
+                )
                 if balance_usd > Decimal("0.50"):
                     discovered[pid] = balance_usd
             except Exception as exc:
                 logger.debug("On-chain balance check for %s/%s failed: %s", smart_account_address, pid, exc)
         return discovered
+
+    async def _read_protocol_balance_usd(
+        self,
+        smart_account_address: str,
+        protocol_id: str,
+    ) -> Decimal:
+        """Read one protocol balance with a bounded timeout."""
+        adapter = get_adapter(protocol_id)
+        if adapter is None:
+            raise RuntimeError(f"Adapter not found for protocol {protocol_id}")
+
+        timeout_seconds = max(0.5, float(self.settings.PROTOCOL_BALANCE_READ_TIMEOUT_SECONDS))
+        try:
+            balance_wei = await asyncio.wait_for(
+                adapter.get_balance(smart_account_address),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"On-chain read timed out after {timeout_seconds:.1f}s"
+            ) from exc
+
+        return Decimal(str(balance_wei)) / Decimal("1000000")
 
     async def _execute_rebalance_once(
         self,
@@ -642,9 +668,10 @@ class Rebalancer:
             pid = row["protocol_id"]
             # Verify each DB allocation against on-chain balance
             try:
-                adapter = get_adapter(pid)
-                balance_wei = await adapter.get_balance(smart_account_address)
-                onchain_usd = Decimal(str(balance_wei)) / Decimal("1000000")
+                onchain_usd = await self._read_protocol_balance_usd(
+                    smart_account_address,
+                    pid,
+                )
                 if abs(onchain_usd - db_amt) > Decimal("0.10"):
                     logger.warning(
                         "Allocation mismatch %s/%s: DB=$%.2f, on-chain=$%.2f — using on-chain",
@@ -1526,7 +1553,7 @@ class Rebalancer:
                 balance_wei = await adapter.get_balance(smart_account_address)
                 # Convert to USD (USDC = 6 decimals)
                 balance_usd = Decimal(str(balance_wei)) / Decimal("1000000")
-                if abs(balance_usd - current[pid]) > Decimal("1"):
+                if abs(balance_usd - current[pid]) > Decimal("0.000001"):
                     logger.warning(
                         "Balance mismatch for %s/%s: DB=%s, on-chain=%s â€” using on-chain",
                         smart_account_address, pid, current[pid], balance_usd,
@@ -1859,7 +1886,9 @@ class Rebalancer:
         )
 
         # Build withdrawal/deposit instructions for the Node.js execution service
-        _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
+        _ERC4626_PROTOCOLS = frozenset(
+            ("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "silo_gami_usdc")
+        )
         exec_withdrawals = []
         for protocol_id, amount_usd in withdrawals:
             entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount_usd)}
@@ -1887,12 +1916,19 @@ class Rebalancer:
                         "Failed to read share balance for %s/%s: %s — falling back to withdraw(assets)",
                         smart_account_address, protocol_id, exc,
                     )
+            elif protocol_id == "folks" and protocol_id in full_exit_protocols:
+                # Folks full exits are safer with explicit full-withdraw mode,
+                # avoiding stale amount rounding from prior balance snapshots.
+                entry["amountUSDC"] = "MAX"
+                entry["fallbackAmountUSDC"] = float(amount_usd)
             exec_withdrawals.append(entry)
 
-        exec_deposits = [
-            {"protocol": pid, "amountUSDC": float(amt)}
-            for pid, amt in deposits
-        ]
+        exec_deposits: list[dict] = []
+        for pid, amt in deposits:
+            entry: dict = {"protocol": pid, "amountUSDC": float(amt)}
+            if pid == "folks":
+                entry["folksMode"] = "auto"
+            exec_deposits.append(entry)
 
         tx_hash = await self._call_execution_service(
             serialized_permission=session_key,
@@ -1927,9 +1963,22 @@ class Rebalancer:
         db = get_supabase()
         amount = Decimal(str(amount_usdc))
 
-        session_key = get_active_session_key(db, UUID(account_id))
-        if not session_key:
+        session_key_record = get_active_session_key_record(db, UUID(account_id))
+        if not session_key_record:
             raise ValueError(f"No active session key for account {account_id}")
+
+        serialized_permission = session_key_record["serialized_permission"]
+        session_private_key = session_key_record.get("session_private_key", "")
+        if not session_private_key:
+            raise ValueError(
+                f"Active session key for {account_id} is missing private key material"
+            )
+
+        allowed_protocols = set(session_key_record.get("allowed_protocols") or [])
+        if allowed_protocols and protocol_id not in allowed_protocols:
+            raise ValueError(
+                f"Session key for {account_id} does not allow protocol {protocol_id}"
+            )
 
         # Build withdrawal instruction
         entry: dict = {"protocol": protocol_id, "amountUSDC": float(amount)}
@@ -1940,10 +1989,11 @@ class Rebalancer:
             entry["qiTokenAmount"] = str(qi_amount)
 
         tx_hash = await self._call_execution_service(
-            serialized_permission=session_key,
+            serialized_permission=serialized_permission,
             smart_account_address=smart_account_address,
             withdrawals=[entry],
             deposits=[],
+            session_private_key=session_private_key,
             account_id=account_id,
         )
 
@@ -1988,7 +2038,9 @@ class Rebalancer:
         current = await self._get_current_allocations(account_id, smart_account_address)
 
         exec_withdrawals = []
-        _ERC4626_PROTOCOLS = frozenset(("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"))
+        _ERC4626_PROTOCOLS = frozenset(
+            ("spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc", "silo_gami_usdc")
+        )
         for protocol_id, amount_usd in current.items():
             if amount_usd < Decimal("0.01"):
                 continue

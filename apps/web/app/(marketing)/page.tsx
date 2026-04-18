@@ -4,94 +4,133 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ContainerScroll } from "@/components/ui/container-scroll-animation";
-import Testimonials from "@/components/marketing/Testimonials";
-import { renderCanvas, stopCanvas } from "@/components/ui/canvas";
+import { GLSLHills } from "@/components/ui/glsl-hills";
+import ApyGrowthChart from "@/components/marketing/ApyGrowthChart";
 import {
   Shield,
-  Key,
-  Activity,
+  TrendingUp,
+  Eye,
   Lock,
-  Twitter,
-  Linkedin,
-  ChevronDown,
+  ShieldCheck,
+  Snowflake,
 } from "lucide-react";
 
 const steps = [
   {
     num: "01",
-    title: "Create an Account",
+    title: "Deposit",
     description:
-      "We create a smart account powered by ZeroDev, the most trusted smart account infrastructure, just for you.",
+      "Connect your wallet and deposit USDC. Your funds stay in your own smart account. We never hold your money.",
     icon: Shield,
   },
   {
     num: "02",
-    title: "Activate Your Agent",
+    title: "Optimize",
     description:
-      "Select your protocols, customize your strategy, and deposit your funds.",
-    icon: Key,
+      "Our agent monitors lending rates across Avalanche and moves your capital to where it earns the most, within safe boundaries.",
+    icon: TrendingUp,
   },
   {
     num: "03",
-    title: "Watch Your Money Grow",
+    title: "Earn",
     description:
-      "Your agent optimizes yield across protocols within strict safety rules. No unauthorized transfers, no risky calls, no surprises. Just steady, transparent growth.",
-    icon: Activity,
+      "Watch your yield grow. Check your dashboard anytime to see exactly where your funds are and why the agent made each decision.",
+    icon: Eye,
   },
 ];
 
-const faqs = [
+const features = [
   {
-    q: "Is SnowMind custodial?",
-    a: "No. Your funds are held in your own ZeroDev smart account. SnowMind's backend can only execute the specific operations you've authorized via session keys (supply/withdraw on approved protocols). You can withdraw your full balance at any time.",
+    title: "Your wallet. Your funds.",
+    description:
+      "Your capital stays in your own smart account at all times. We can never access, move, or withdraw your funds. You hold the keys.",
+    icon: Lock,
   },
   {
-    q: "What happens if SnowMind goes down?",
-    a: "Your funds continue earning yield in whichever protocol they're currently deposited in. You retain full ownership.",
+    title: "See every decision.",
+    description:
+      "Every allocation, every rebalance, every move comes with an explanation. You always know where your money is and why it\u2019s there.",
+    icon: Eye,
   },
   {
-    q: "How does the optimizer decide where to put my funds?",
-    a: "SnowMind's optimizer ranks protocols by TWAP-smoothed APY and allocates capital starting from the highest-yielding protocol. Each protocol is capped at 7.5% of its TVL to prevent market impact. You can set your own allocation limits per protocol, and your diversification preference (Max Yield, Balanced, or Diversified) controls how funds are spread.",
+    title: "Safety over yield. Always.",
+    description:
+      "Protocol concentration limits, risk-adjusted allocation, and conservative defaults. We\u2019d rather miss 1% upside than expose you to unnecessary risk.",
+    icon: ShieldCheck,
   },
   {
-    q: "What are session keys?",
-    a: "Session keys are scoped permissions that allow our backend to execute specific operations on your behalf. They're encrypted (AES-256-GCM) at rest, limited to approved contracts and functions, and rate-limited.",
+    title: "Built for Avalanche.",
+    description:
+      "Not a multi-chain afterthought. SnowMind is purpose-built for Avalanche's lending ecosystem: Aave V3, Benqi, Spark, Euler V2, Silo, and Folks Finance.",
+    icon: Snowflake,
   },
-  {
-    q: "Which protocols does SnowMind support?",
-    a: "SnowMind supports a curated set of lending and yield protocols on Avalanche mainnet. The active set evolves over time as integrations are added or removed. Each integration must pass hard filters (audit, exploit history, source verification), and then receives a 9-point informational risk score.",
-  },
-  {
-    q: "How often does SnowMind rebalance?",
-    a: "SnowMind checks rates continuously and rebalances when safety checks pass and the new allocation is meaningfully better. Cadence depends on deposit size: <=$3,000 (12h), <=$10,000 (4h), <=$100,000 (2h), >$100,000 (1h).",
-  },
-  {
-    q: "How are protocol risk scores calculated?",
-    a: "Each protocol is scored out of 9 across five categories: Oracle Quality (2), Liquidity (3), Collateral Quality (2), Yield Profile (1), and Architecture (1). Liquidity and Yield Profile are dynamic and update daily from on-chain data. Scores are informational and do not control rebalancing execution.",
-  },
-];
-
-const protocols = [
-  { name: "Aave", logo: "/protocols/aave-official.svg" },
-  { name: "Benqi", logo: "/protocols/benqi-official.svg" },
-  { name: "Spark", logo: "/protocols/spark-official.svg" },
-  { name: "Euler", logo: "/protocols/euler-official.svg" },
-  { name: "Silo", logo: "/protocols/silo-official.svg" },
 ];
 
 export default function LandingPage() {
+  const [menuOpen, setMenuOpen] = useState(false);
   const [cardsVisible, setCardsVisible] = useState(false);
+  const [featuresVisible, setFeaturesVisible] = useState(false);
   const router = useRouter();
 
-  const dashboardTarget =
-    typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1")
-      ? "/dashboard"
-      : "https://app.snowmind.xyz/dashboard";
+  const dashboardTarget = (
+    typeof window !== "undefined"
+    && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  )
+    ? "/dashboard"
+    : "https://app.snowmind.xyz/dashboard";
 
+  const scrollProgressRef = useRef(0);
+  const heroRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const scrollIndicatorRef = useRef<HTMLDivElement>(null);
   const cardsRef = useRef<HTMLDivElement>(null);
+  const featuresRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let rafId: number;
+    let progress = 0;
+
+    const handleScroll = () => {
+      progress = Math.min(1, Math.max(0, window.scrollY / window.innerHeight));
+
+      if (window.innerWidth >= 768) {
+        scrollProgressRef.current = progress;
+      } else {
+        scrollProgressRef.current = 0;
+      }
+    };
+
+    const updateVisuals = () => {
+      if (heroRef.current) {
+        const heroOpacity = Math.max(0, 1 - progress / 0.3);
+        const heroScale = 1 - Math.min(progress / 0.3, 1) * 0.03;
+        heroRef.current.style.opacity = String(heroOpacity);
+        heroRef.current.style.transform = `scale(${heroScale})`;
+      }
+
+      if (overlayRef.current) {
+        overlayRef.current.style.opacity = String(
+          Math.max(0, (progress - 0.8) / 0.2),
+        );
+      }
+
+      if (scrollIndicatorRef.current) {
+        scrollIndicatorRef.current.style.opacity = String(
+          Math.max(0, 1 - progress / 0.15),
+        );
+      }
+
+      rafId = requestAnimationFrame(updateVisuals);
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    rafId = requestAnimationFrame(updateVisuals);
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      cancelAnimationFrame(rafId);
+    };
+  }, []);
 
   useEffect(() => {
     if (!cardsRef.current) return;
@@ -109,15 +148,24 @@ export default function LandingPage() {
   }, []);
 
   useEffect(() => {
-    renderCanvas();
-    return () => stopCanvas();
+    if (!featuresRef.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setFeaturesVisible(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.2 },
+    );
+    observer.observe(featuresRef.current);
+    return () => observer.disconnect();
   }, []);
 
   const handleLaunchApp = () => {
     if (
-      typeof window !== "undefined" &&
-      (window.location.hostname === "localhost" ||
-        window.location.hostname === "127.0.0.1")
+      typeof window !== "undefined"
+      && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
     ) {
       router.push(dashboardTarget);
       return;
@@ -131,7 +179,7 @@ export default function LandingPage() {
   return (
     <div>
       {/* Fixed header */}
-      <header className="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-5 py-4 md:px-10 md:py-5 bg-[#F5F0EB]/90 backdrop-blur-md">
+      <header className="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-5 py-4 md:px-10 md:py-5">
         <Link href="/" className="flex items-center gap-2.5">
           <Image
             src="/snowmind-logo.png"
@@ -146,36 +194,135 @@ export default function LandingPage() {
           </span>
         </Link>
 
+        <nav className="hidden md:flex items-center gap-8">
+          <Link
+            href="#how-it-works"
+            className="font-sans font-medium text-sm text-[#1A1715] hover:opacity-70 transition-opacity duration-200"
+          >
+            How It Works
+          </Link>
+          <button
+            onClick={handleLaunchApp}
+            className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
+          >
+            Launch App
+          </button>
+        </nav>
+
         <button
-          onClick={handleLaunchApp}
-          className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-sm px-6 py-2.5 rounded-lg hover:bg-[#D63031] transition-colors duration-200"
+          className="md:hidden flex flex-col gap-[5px] p-1 z-30"
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-label="Toggle menu"
+          aria-expanded={menuOpen}
         >
-          Launch App
+          <span
+            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm origin-center transition-all duration-300"
+            style={
+              menuOpen
+                ? { transform: "translateY(7px) rotate(45deg)" }
+                : undefined
+            }
+          />
+          <span
+            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm transition-all duration-300"
+            style={menuOpen ? { opacity: 0 } : undefined}
+          />
+          <span
+            className="block w-[22px] h-[2px] bg-[#1A1715] rounded-sm origin-center transition-all duration-300"
+            style={
+              menuOpen
+                ? { transform: "translateY(-7px) rotate(-45deg)" }
+                : undefined
+            }
+          />
         </button>
       </header>
 
-      {/* ═══ HERO — ContainerScroll with video ═══ */}
-      <div className="bg-[#F5F0EB] overflow-hidden pt-16 md:pt-20">
-        <ContainerScroll
-          titleComponent={
-            <>
-              <h1 className="hero-fadein-1 font-sans font-bold text-[40px] md:text-[64px] text-[#1A1715] tracking-[-0.02em] leading-[1.1]">
-                Earn more. Risk less.
-              </h1>
-              <p className="hero-fadein-2 font-sans font-normal text-[15px] md:text-[18px] text-[#5C5550] max-w-[520px] mx-auto leading-[1.6] mt-5">
-                Your autonomous agent that finds the best yield on Avalanche.
-                Safely and automatically.
-              </p>
-              <button
-                className="hero-fadein-3 bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base px-10 py-4 rounded-[10px] mt-8 hover:bg-[#D63031] hover:scale-[1.02] transition-all duration-200 cursor-pointer"
-                style={{ boxShadow: "0 4px 24px rgba(232, 65, 66, 0.3)" }}
-                onClick={handleLaunchApp}
-              >
-                Create Agent
-              </button>
-            </>
-          }
+      {/* Mobile dropdown menu */}
+      <div
+        className="fixed top-[68px] left-4 right-4 z-50 md:hidden bg-white/95 backdrop-blur-xl rounded-xl flex flex-col items-center gap-1 border border-[#E8E2DA] shadow-lg overflow-hidden transition-all duration-300"
+        style={{
+          maxHeight: menuOpen ? 250 : 0,
+          opacity: menuOpen ? 1 : 0,
+          padding: menuOpen ? "16px" : "0 16px",
+        }}
+      >
+        <Link
+          href="#how-it-works"
+          onClick={() => setMenuOpen(false)}
+          className="w-full text-center py-3 text-[#1A1715] font-sans font-medium text-base rounded-lg hover:bg-[#F5F0EB] transition-colors"
         >
+          How It Works
+        </Link>
+        <button
+          onClick={() => {
+            setMenuOpen(false);
+            handleLaunchApp();
+          }}
+          className="w-full text-center py-3 mt-1 bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base rounded-lg hover:bg-[#D63031] transition-colors"
+        >
+          Launch App
+        </button>
+      </div>
+
+      {/* ═══ HERO SCROLL ZONE (200vh for scroll-lock transition) ═══ */}
+      <div style={{ height: "200vh" }}>
+        <div className="sticky top-0 h-screen w-full overflow-hidden">
+          {/* GLSL Hills — full-screen background */}
+          <GLSLHills scrollProgressRef={scrollProgressRef} />
+
+          {/* Hero content — fades out with scroll */}
+          <div
+            ref={heroRef}
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center text-center pointer-events-none px-6"
+          >
+            <h1 className="hero-fadein-1 font-sans font-bold text-[40px] md:text-[64px] text-[#1A1715] tracking-[-0.02em] leading-[1.1]">
+              Earn more. Risk less.
+            </h1>
+
+            <p className="hero-fadein-2 font-sans font-normal text-[15px] md:text-[18px] text-[#5C5550] max-w-[520px] leading-[1.6] mt-5">
+          Your agent that finds the best yield on Avalanche. Safely and
+          automatically.
+            </p>
+
+            <button
+              className="hero-fadein-3 pointer-events-auto bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base px-10 py-4 rounded-[10px] mt-8 hover:bg-[#D63031] hover:scale-[1.02] transition-all duration-200 cursor-pointer"
+              style={{ boxShadow: "0 4px 24px rgba(232, 65, 66, 0.3)" }}
+              onClick={handleLaunchApp}
+            >
+              Create Agent
+            </button>
+
+            <a
+              href="#how-it-works"
+              className="hero-fadein-4 pointer-events-auto text-[#5C5550] font-sans font-medium text-sm mt-4 hover:underline hover:underline-offset-[3px] transition-all duration-200 cursor-pointer"
+            >
+              Learn how it works &rarr;
+            </a>
+          </div>
+
+          {/* Cream transition overlay — fades in at end of scroll */}
+          <div
+            ref={overlayRef}
+            className="absolute inset-0 z-15 pointer-events-none bg-[#F5F0EB]"
+            style={{ opacity: 0 }}
+          />
+
+          {/* Scroll indicator — mouse icon */}
+          <div
+            ref={scrollIndicatorRef}
+            className="absolute bottom-10 left-0 right-0 z-10 flex flex-col items-center justify-center pointer-events-none scroll-indicator"
+          >
+            <div className="flex h-9 w-6 items-start justify-center rounded-full border-2 border-[#8A837C] pt-1.5">
+              <div className="h-2 w-1 rounded-full bg-[#8A837C] animate-scroll-dot" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ LANDING VIDEO ═══ */}
+      <section className="bg-[#F5F0EB] px-6 pb-6 md:pb-10">
+        <div className="mx-auto max-w-[1100px] overflow-hidden rounded-2xl border border-[#E8E2DA] bg-black">
           <video
             src="/landing-demo.mp4"
             autoPlay
@@ -184,40 +331,13 @@ export default function LandingPage() {
             playsInline
             preload="auto"
             controls={false}
-            className="block h-full w-full object-fill rounded-2xl"
+            className="block h-auto w-full"
           />
-        </ContainerScroll>
-      </div>
-
-      {/* ═══ TRUST STRIP — Protocol logos ═══ */}
-      <section className="bg-[#F5F0EB] py-6 md:py-10 px-6">
-        <div className="max-w-[900px] mx-auto text-center">
-          {/* Protocol logos */}
-          <p className="font-sans font-medium text-[13px] text-[#8A837C] tracking-[0.06em] uppercase mb-6">
-            Built on
-          </p>
-          <div className="flex items-center justify-center gap-8 md:gap-12 flex-wrap">
-            {protocols.map((p) => (
-              <div
-                key={p.name}
-                className="flex items-center gap-2 opacity-70 hover:opacity-100 transition-opacity duration-200"
-              >
-                <Image
-                  src={p.logo}
-                  alt={p.name}
-                  width={28}
-                  height={28}
-                  className="h-7 w-7"
-                />
-                <span className="font-sans font-semibold text-[15px] text-[#3A3530]">
-                  {p.name}
-                </span>
-              </div>
-            ))}
-          </div>
-
         </div>
       </section>
+
+      {/* ═══ APY GROWTH CHART ═══ */}
+      <ApyGrowthChart />
 
       {/* ═══ HOW IT WORKS ═══ */}
       <section
@@ -275,288 +395,102 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ═══ YOUR FUNDS. YOUR RULES. ═══ */}
+      {/* ═══ WHY SNOW MIND ═══ */}
       <section className="bg-[#FAFAF8] py-12 md:py-20 px-6">
-        <div className="max-w-[900px] mx-auto text-center">
+        <div className="max-w-[1100px] mx-auto text-center">
           <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
-            SECURITY
+            WHY SNOWMIND
           </p>
           <h2 className="font-sans font-bold text-[28px] md:text-[36px] text-[#1A1715] mt-3">
-            Your funds. Your rules.
+            Smart yield. Uncompromising security.
           </h2>
-          <p className="font-sans font-normal text-[15px] md:text-[17px] text-[#5C5550] leading-[1.6] mt-4 max-w-[600px] mx-auto">
-            Every safeguard is enforced on-chain.
-          </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-12">
-            <div className="bg-[#F5F0EB] rounded-2xl p-7 text-left">
-              <div className="flex items-center gap-3 mb-3">
-                <Shield className="w-5 h-5 text-[#E84142]" />
-                <h3 className="font-sans font-bold text-[17px] text-[#1A1715]">
-                  Non-custodial
-                </h3>
-              </div>
-              <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.6]">
-                Your funds stay in your own smart account at all times. We never hold, access, or control your money.
-              </p>
-            </div>
-
-            <div className="bg-[#F5F0EB] rounded-2xl p-7 text-left">
-              <div className="flex items-center gap-3 mb-3">
-                <Key className="w-5 h-5 text-[#E84142]" />
-                <h3 className="font-sans font-bold text-[17px] text-[#1A1715]">
-                  Scoped permissions
-                </h3>
-              </div>
-              <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.6]">
-                The agent can only supply and withdraw from lending markets. It cannot transfer, approve, or access anything else. Ever.
-              </p>
-            </div>
-
-            <div className="bg-[#F5F0EB] rounded-2xl p-7 text-left">
-              <div className="flex items-center gap-3 mb-3">
-                <Activity className="w-5 h-5 text-[#E84142]" />
-                <h3 className="font-sans font-bold text-[17px] text-[#1A1715]">
-                  Real-time risk monitoring
-                </h3>
-              </div>
-              <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.6]">
-                Automated risk checks run in real-time, faster than any human could react.
-              </p>
-            </div>
-
-            <div className="bg-[#F5F0EB] rounded-2xl p-7 text-left">
-              <div className="flex items-center gap-3 mb-3">
-                <Lock className="w-5 h-5 text-[#E84142]" />
-                <h3 className="font-sans font-bold text-[17px] text-[#1A1715]">
-                  Withdraw anytime
-                </h3>
-              </div>
-              <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.6]">
-                One click. No lockups, no waiting periods, no penalties. Your funds are always yours to take back.
-              </p>
-            </div>
-          </div>
-
-          {/* ZeroDev */}
-          <div className="mt-10 pt-6 border-t border-[#E8E2DA]">
-            <p className="font-sans font-medium text-[13px] text-[#8A837C] tracking-[0.06em] uppercase mb-4">
-              Smart account powered by
-            </p>
-            <div className="flex items-center justify-center opacity-70">
-              <Image
-                src="/protocols/zerodev.svg"
-                alt="ZeroDev"
-                width={140}
-                height={40}
-                className="h-10 w-auto"
-              />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ═══ TESTIMONIALS ═══ */}
-      <Testimonials />
-
-      {/* ═══ FAQ ═══ */}
-      <section className="bg-[#F5F0EB] py-12 md:py-20 px-6">
-        <div className="max-w-[800px] mx-auto">
-          <div className="text-center">
-            <p className="font-sans font-semibold text-[13px] text-[#E84142] tracking-[0.08em] uppercase">
-              FAQ
-            </p>
-            <h2 className="font-sans font-bold text-[28px] md:text-[36px] text-[#1A1715] mt-3">
-              Frequently Asked Questions
-            </h2>
-          </div>
-
-          <div className="mt-12 space-y-3">
-            {faqs.map((faq, i) => (
-              <details
-                key={i}
-                className="group bg-[#FAFAF8] border border-[#E8E2DA] rounded-xl overflow-hidden"
-              >
-                <summary className="flex items-center justify-between cursor-pointer px-6 py-5 font-sans font-semibold text-[16px] text-[#1A1715] list-none [&::-webkit-details-marker]:hidden">
-                  {faq.q}
-                  <ChevronDown className="w-5 h-5 text-[#8A837C] transition-transform duration-200 group-open:rotate-180 shrink-0 ml-4" />
-                </summary>
-                <div className="px-6 pb-5">
-                  <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.7]">
-                    {faq.a}
-                  </p>
-                </div>
-              </details>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ═══ FINAL CTA ═══ */}
-      <section className="bg-[#F5F0EB] py-16 md:py-24 px-6">
-        <div className="max-w-[600px] mx-auto text-center">
-          <h2 className="font-sans font-bold text-[28px] md:text-[40px] text-[#1A1715] tracking-[-0.02em] leading-[1.15]">
-            Start earning smarter yield today.
-          </h2>
-          <p className="font-sans font-normal text-[15px] md:text-[17px] text-[#5C5550] leading-[1.6] mt-4">
-            Non-custodial. Transparent. Built for Avalanche.
-          </p>
-          <button
-            onClick={handleLaunchApp}
-            className="bg-[#E84142] text-[#FAFAF8] font-sans font-semibold text-base px-10 py-4 rounded-[10px] mt-8 hover:bg-[#D63031] hover:scale-[1.02] transition-all duration-200 cursor-pointer"
-            style={{ boxShadow: "0 4px 24px rgba(232, 65, 66, 0.3)" }}
+          <div
+            ref={featuresRef}
+            className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-14"
           >
-            Create Agent
-          </button>
+            {features.map((feature, i) => {
+              const Icon = feature.icon;
+              return (
+                <div
+                  key={feature.title}
+                  className={
+                    featuresVisible ? "card-visible" : "card-hidden"
+                  }
+                  style={{
+                    animationDelay: featuresVisible
+                      ? `${i * 100}ms`
+                      : undefined,
+                  }}
+                >
+                  <div className="bg-[#F5F0EB] rounded-2xl p-7 text-left transition-all duration-200 hover:-translate-y-1">
+                    <Icon className="w-7 h-7 text-[#E84142] mb-4" />
+                    <h3 className="font-sans font-bold text-[18px] text-[#1A1715]">
+                      {feature.title}
+                    </h3>
+                    <p className="font-sans font-normal text-[14px] text-[#5C5550] leading-[1.6] mt-2">
+                      {feature.description}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
       {/* ═══ FOOTER ═══ */}
-      <footer className="bg-[#1A1715] py-12 md:py-16 px-6">
+      <footer className="bg-[#1A1715] py-8 md:py-12 px-6">
         <div className="max-w-[1100px] mx-auto">
-          <div className="flex w-full flex-col justify-between gap-10 lg:flex-row lg:items-start">
-            {/* Left column: logo, description, socials */}
-            <div className="flex w-full flex-col gap-5 lg:max-w-[340px]">
-              <div className="flex items-center gap-2.5">
-                <Image
-                  src="/snowmind-logo.png"
-                  alt="Snow Mind"
-                  width={100}
-                  height={30}
-                  className="h-[30px] w-auto"
-                />
-                <span className="font-sans font-bold text-lg text-[#FAFAF8]">
-                  SnowMind
-                </span>
-              </div>
-              <p className="font-sans font-normal text-[14px] text-[#8A837C] leading-[1.6]">
-                A customizable yield optimization agent on Avalanche.
-              </p>
-              <div className="flex items-center gap-5">
-                <a
-                  href="https://x.com/snowmind_xyz"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                  aria-label="Twitter"
-                >
-                  <Twitter className="w-5 h-5" />
-                </a>
-                <a
-                  href="https://www.linkedin.com/company/snowmindxyz"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                  aria-label="LinkedIn"
-                >
-                  <Linkedin className="w-5 h-5" />
-                </a>
-                <a
-                  href="https://discord.com/invite/xDkwdfX4W8"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                  aria-label="Discord"
-                >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.947 2.418-2.157 2.418z"/></svg>
-                </a>
-                <a
-                  href="https://t.me/snowmind_xyz"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                  aria-label="Telegram"
-                >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.479.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
-                </a>
-              </div>
-            </div>
-
-            {/* Right columns: links */}
-            <div className="grid w-full grid-cols-2 gap-8 lg:max-w-[400px] lg:gap-16">
-              <div>
-                <h3 className="font-sans font-bold text-[14px] text-[#FAFAF8] mb-4">
-                  Resources
-                </h3>
-                <ul className="space-y-3">
-                  <li>
-                    <a
-                      href="https://docs.snowmind.xyz"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-sans font-medium text-[14px] text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                    >
-                      Docs
-                    </a>
-                  </li>
-                  <li>
-                    <a
-                      href="https://docs.snowmind.xyz/overview/teams"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-sans font-medium text-[14px] text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                    >
-                      Team
-                    </a>
-                  </li>
-                  <li>
-                    <a
-                      href="mailto:contact@snowmind.xyz"
-                      className="font-sans font-medium text-[14px] text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                    >
-                      Contact
-                    </a>
-                  </li>
-                </ul>
-              </div>
-
-              <div>
-                <h3 className="font-sans font-bold text-[14px] text-[#FAFAF8] mb-4">
-                  Legal
-                </h3>
-                <ul className="space-y-3">
-                  <li>
-                    <a
-                      href="https://docs.snowmind.xyz/other/privacy"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-sans font-medium text-[14px] text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                    >
-                      Privacy Policy
-                    </a>
-                  </li>
-                  <li>
-                    <a
-                      href="https://docs.snowmind.xyz/other/terms"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-sans font-medium text-[14px] text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
-                    >
-                      Terms of Service
-                    </a>
-                  </li>
-                </ul>
-              </div>
-            </div>
+          {/* Top row */}
+          <div className="flex flex-col md:flex-row items-center md:items-center justify-between gap-6">
+            <Image
+              src="/snowmind-logo.png"
+              alt="Snow Mind"
+              width={100}
+              height={30}
+              className="h-[30px] w-auto"
+            />
+            <nav className="flex items-center gap-8">
+              <a
+                href="#how-it-works"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                How It Works
+              </a>
+              <a
+                href="https://docs.snowmind.xyz"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                Docs
+              </a>
+              <a
+                href="https://x.com/mark_nakatani"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-sans font-medium text-sm text-[#8A837C] hover:text-[#FAFAF8] transition-colors duration-200"
+              >
+                Twitter
+              </a>
+            </nav>
           </div>
 
-          {/* Bottom bar */}
+          {/* Divider + bottom row */}
           <div
-            className="mt-10 pt-6 flex flex-col md:flex-row items-center justify-between gap-4"
+            className="mt-8 pt-6 flex flex-col md:flex-row items-center justify-between gap-4"
             style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}
           >
-            <span className="font-sans font-normal text-[13px] text-[#5C5550]">
+            <span className="font-sans font-normal text-[13px] text-[#8A837C]">
               &copy; 2026 SnowMind. All rights reserved.
+            </span>
+            <span className="font-sans font-medium text-[13px] text-[#5C5550] italic">
+              Earn more. Risk less.
             </span>
           </div>
         </div>
       </footer>
-
-      {/* ═══ CURSOR WAVE TRAIL ═══ */}
-      <canvas
-        className="pointer-events-none fixed inset-0 z-[60]"
-        id="canvas"
-      />
     </div>
   );
 }

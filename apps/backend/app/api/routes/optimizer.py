@@ -17,12 +17,14 @@ from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
 from app.models.base import CamelModel
 from app.services.protocols import ALL_ADAPTERS, ACTIVE_ADAPTERS
+from app.services.protocols.base import ProtocolRate
+from app.services.optimizer.allocator import UserPreference, compute_allocation
+from app.services.optimizer.health_checker import HealthCheckResult
 from app.services.optimizer.rate_fetcher import RateFetcher, twap_buffer
 from app.services.optimizer.milp_solver import (
-    OptimizerInput,
-    ProtocolInput,
+    compute_delta,
+    is_rebalance_worth_it,
 )
-from app.services.optimizer.waterfall_allocator import waterfall_allocate
 from app.services.optimizer.risk_report_explainer import RiskReportExplainer
 from app.services.optimizer.risk_scorer import RiskScorer, RiskScoreResult
 
@@ -35,6 +37,8 @@ _risk_scorer = RiskScorer()
 _risk_report_explainer = RiskReportExplainer()
 _rates_cache: tuple[float, list[dict]] | None = None
 _timeseries_cache: tuple[float, list[dict]] | None = None
+_rates_cache_lock = asyncio.Lock()
+_timeseries_cache_lock = asyncio.Lock()
 
 
 # ── Response schemas ─────────────────────────────────────────────────────────
@@ -149,7 +153,10 @@ def _resolve_rate_risk(
     persisted_scores: dict[str, RiskScoreResult],
     computed_scores: dict[str, RiskScoreResult],
 ) -> tuple[Decimal, RiskBreakdownResponse | None]:
-    score = persisted_scores.get(protocol_id) or computed_scores.get(protocol_id)
+    # Prefer live-computed scores when available so rate responses reflect
+    # current on-chain liquidity/yield conditions instead of potentially stale
+    # daily snapshots.
+    score = computed_scores.get(protocol_id) or persisted_scores.get(protocol_id)
     if score is not None:
         return score.score, _risk_breakdown_response(score)
     return _risk_scorer.compute_risk_score(protocol_id), None
@@ -162,7 +169,7 @@ def _build_risk_explanation_notes(protocol_id: str, score: RiskScoreResult | Non
 
     if protocol_id == "spark":
         notes.append(
-            "Liquidity for Spark uses vault instant buffer plus PSM USDC liquidity (not supplied-minus-borrowed)."
+            "Liquidity for Spark uses vault instant buffer plus PSM USDC liquidity (capped by vault TVL, not supplied-minus-borrowed)."
         )
     else:
         notes.append(
@@ -225,6 +232,105 @@ def _filter_fresh_persisted_scores(
     return fresh, stale_protocols
 
 
+def _compute_weighted_apy_over_total(
+    allocations: dict[str, Decimal],
+    total_amount_usd: Decimal,
+    apy_by_protocol: dict[str, Decimal],
+) -> Decimal:
+    if total_amount_usd <= Decimal("0"):
+        return Decimal("0")
+
+    weighted = Decimal("0")
+    for pid, amount in allocations.items():
+        if amount <= Decimal("0"):
+            continue
+        weighted += (amount / total_amount_usd) * apy_by_protocol.get(pid, Decimal("0"))
+    return weighted
+
+
+def _run_no_base_allocator(
+    *,
+    total_amount_usd: Decimal,
+    valid_rates: dict[str, ProtocolRate],
+    risk_by_protocol: dict[str, Decimal],
+    current_allocations: dict[str, Decimal],
+    gas_cost_estimate_usd: Decimal,
+    max_exposure_pct: Decimal,
+) -> tuple[dict[str, Decimal], Decimal, Decimal, Decimal, bool, float, Decimal]:
+    """Route helper: run no-base-layer allocation and compute preview metadata."""
+    apy_by_protocol = {pid: rate.apy for pid, rate in valid_rates.items()}
+    protocol_tvls = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
+    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
+
+    health_results = {
+        pid: HealthCheckResult(
+            protocol_id=pid,
+            is_healthy=True,
+            is_deposit_safe=True,
+            is_withdrawal_safe=True,
+        )
+        for pid in valid_rates
+    }
+
+    user_preferences = {
+        pid: UserPreference(protocol_id=pid, enabled=True, max_pct=max_exposure_pct)
+        for pid in valid_rates
+    }
+
+    started = time.monotonic()
+    allocation_result = compute_allocation(
+        health_results=health_results,
+        twap_apys=apy_by_protocol,
+        protocol_tvls=protocol_tvls,
+        total_balance=total_amount_usd,
+        protocol_utilizations=protocol_utilizations,
+        user_preferences=user_preferences,
+    )
+    solve_time_ms = (time.monotonic() - started) * 1000
+
+    current_apy = _compute_weighted_apy_over_total(
+        current_allocations,
+        total_amount_usd,
+        apy_by_protocol,
+    )
+
+    proposed_for_delta = dict(allocation_result.allocations)
+    if allocation_result.idle_amount > Decimal("0"):
+        proposed_for_delta["idle"] = allocation_result.idle_amount
+
+    current_for_delta = dict(current_allocations)
+    current_idle = total_amount_usd - sum(current_allocations.values(), Decimal("0"))
+    if current_idle > Decimal("0"):
+        current_for_delta["idle"] = current_idle
+
+    delta = compute_delta(proposed_for_delta, current_for_delta)
+    rebalance_needed, _ = is_rebalance_worth_it(
+        delta=delta,
+        total=total_amount_usd,
+        gas_cost_usd=gas_cost_estimate_usd,
+        proposed_apy=allocation_result.weighted_apy,
+        current_apy=current_apy,
+    )
+
+    deployed_total = sum(allocation_result.allocations.values(), Decimal("0"))
+    weighted_risk = Decimal("0")
+    if deployed_total > Decimal("0"):
+        weighted_risk = sum(
+            (amount / deployed_total) * risk_by_protocol.get(pid, Decimal("0"))
+            for pid, amount in allocation_result.allocations.items()
+        )
+
+    return (
+        allocation_result.allocations,
+        allocation_result.weighted_apy,
+        current_apy,
+        weighted_risk,
+        rebalance_needed,
+        solve_time_ms,
+        allocation_result.idle_amount,
+    )
+
+
 # ── POST /simulate — zero-cost dry-run (no auth, no execution, no DB) ────────
 
 @router.post("/simulate", response_model=SimulateResponse)
@@ -276,8 +382,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
     if not valid_rates:
         raise HTTPException(status_code=503, detail="All rates failed validation")
 
-    # Build protocol inputs
-    protocol_inputs: list[ProtocolInput] = []
+    # Build risk map used in response and weighted risk output
     risk_by_protocol: dict[str, Decimal] = {}
     for pid, rate in valid_rates.items():
         risk = _risk_scorer.compute_risk_score(
@@ -290,30 +395,26 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
             protocol_apy=rate.apy,
         )
         risk_by_protocol[pid] = risk
-        protocol_inputs.append(
-            ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
-        )
         reasoning.append(
             f"{pid}: APY={rate.apy:.4%}, TVL=${rate.tvl_usd:,.0f}, risk={risk:.1f}"
         )
 
-    # Run waterfall allocator (no current allocations = fresh deployment)
-    inp = OptimizerInput(
+    # Run no-base-layer APY-ranked allocator (same core path as live rebalancer).
+    (
+        result_allocations,
+        expected_apy,
+        _current_apy,
+        weighted_risk,
+        rebalance_needed,
+        solve_time_ms,
+        idle_amount,
+    ) = _run_no_base_allocator(
         total_amount_usd=req.total_usdc,
-        protocols=protocol_inputs,
+        valid_rates=valid_rates,
+        risk_by_protocol=risk_by_protocol,
         current_allocations={},
         gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
-    )
-    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
-    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
-    result = waterfall_allocate(
-        inp=inp,
-        tvl_by_protocol=tvl_by_protocol,
-        protocol_utilizations=protocol_utilizations,
-        tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
-        base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
-        base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
     )
 
     # Build protocol rate response
@@ -336,7 +437,7 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 
     # Build allocation response
     proposed: list[AllocationItem] = []
-    for pid, amount_usd in result.allocations.items():
+    for pid, amount_usd in result_allocations.items():
         rate = valid_rates.get(pid)
         pct = amount_usd / req.total_usdc if req.total_usdc else Decimal("0")
         proposed.append(
@@ -352,10 +453,16 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
             f"Allocate ${amount_usd:,.2f} ({pct:.1%}) → {pid}"
         )
 
-    reasoning.append(f"Expected blended APY: {result.expected_apy:.4%}")
+    if idle_amount > Decimal("0.01"):
+        idle_pct = idle_amount / req.total_usdc if req.total_usdc else Decimal("0")
+        reasoning.append(
+            f"Hold idle ${idle_amount:,.2f} ({idle_pct:.1%}) due to TVL/utilization caps"
+        )
+
+    reasoning.append(f"Expected blended APY: {expected_apy:.4%}")
     reasoning.append(
-        f"Rebalance needed: {result.is_rebalance_needed} "
-        f"(solve time: {result.solve_time_ms:.1f}ms)"
+        f"Rebalance needed: {rebalance_needed} "
+        f"(solve time: {solve_time_ms:.1f}ms)"
     )
 
     return SimulateResponse(
@@ -363,10 +470,10 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
         total_usdc=req.total_usdc,
         risk_tolerance=req.risk_tolerance,
         proposed_allocations=proposed,
-        expected_apy=result.expected_apy,
-        risk_score=result.risk_score,
-        rebalance_needed=result.is_rebalance_needed,
-        solve_time_ms=result.solve_time_ms,
+        expected_apy=expected_apy,
+        risk_score=weighted_risk,
+        rebalance_needed=rebalance_needed,
+        solve_time_ms=solve_time_ms,
         protocol_rates=rate_responses,
         reasoning=reasoning,
     )
@@ -374,25 +481,8 @@ async def simulate_optimization(request: Request, req: SimulateRequest):
 
 # ── GET /rates — live rates for all protocols (including coming-soon) ────────
 
-@router.get("/rates", response_model=list[ProtocolRateResponse])
-@limiter.limit("60/minute")
-async def get_all_rates(request: Request, db: Client = Depends(get_db)):
-    """Fetch user-facing live on-chain rates from every known protocol adapter.
-
-    Display policy:
-      1. Prefer live/spot APY from adapters (for dashboard transparency).
-      2. If live fetch fails, fall back to last-known-good TWAP snapshot.
-      3. Apply the same safety cap for UI display.
-
-    Rebalancer policy remains unchanged: optimization and execution continue
-    to use TWAP validation/smoothing in the rebalancer pipeline.
-    """
-    global _rates_cache
-    cache_ttl = max(0, int(get_settings().OPTIMIZER_RATES_CACHE_TTL_SECONDS))
-    now_mono = time.monotonic()
-    if cache_ttl > 0 and _rates_cache and _rates_cache[0] > now_mono:
-        return [ProtocolRateResponse.model_validate(item) for item in _rates_cache[1]]
-
+async def _build_all_rates_response(db: Client) -> list[ProtocolRateResponse]:
+    """Build the protocol rate response payload without route-level caching."""
     rates = await _rate_fetcher.fetch_display_rates()
 
     persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
@@ -403,14 +493,9 @@ async def get_all_rates(request: Request, db: Client = Depends(get_db)):
             len(stale_protocols),
             ",".join(sorted(stale_protocols)),
         )
-    missing_score_inputs = {
-        pid: rate
-        for pid, rate in rates.items()
-        if pid not in persisted_scores
-    }
     computed_scores = (
-        await _risk_scorer.compute_scores_from_rates(db, missing_score_inputs)
-        if missing_score_inputs
+        await _risk_scorer.compute_scores_from_rates(db, rates)
+        if rates
         else {}
     )
 
@@ -461,12 +546,41 @@ async def get_all_rates(request: Request, db: Client = Depends(get_db)):
                 last_updated=rate.fetched_at if rate else time.time(),
             )
         )
-    if cache_ttl > 0:
+    return out
+
+@router.get("/rates", response_model=list[ProtocolRateResponse])
+@limiter.limit("60/minute")
+async def get_all_rates(request: Request, db: Client = Depends(get_db)):
+    """Fetch user-facing live on-chain rates from every known protocol adapter.
+
+    Display policy:
+      1. Prefer live/spot APY from adapters (for dashboard transparency).
+      2. If live fetch fails, fall back to last-known-good TWAP snapshot.
+      3. Apply the same safety cap for UI display.
+
+    Rebalancer policy remains unchanged: optimization and execution continue
+    to use TWAP validation/smoothing in the rebalancer pipeline.
+    """
+    global _rates_cache
+    cache_ttl = max(0, int(get_settings().OPTIMIZER_RATES_CACHE_TTL_SECONDS))
+    now_mono = time.monotonic()
+    if cache_ttl > 0 and _rates_cache and _rates_cache[0] > now_mono:
+        return [ProtocolRateResponse.model_validate(item) for item in _rates_cache[1]]
+
+    if cache_ttl <= 0:
+        return await _build_all_rates_response(db)
+
+    async with _rates_cache_lock:
+        now_mono = time.monotonic()
+        if _rates_cache and _rates_cache[0] > now_mono:
+            return [ProtocolRateResponse.model_validate(item) for item in _rates_cache[1]]
+
+        out = await _build_all_rates_response(db)
         _rates_cache = (
             time.monotonic() + cache_ttl,
             [item.model_dump() for item in out],
         )
-    return out
+        return out
 
 
 @router.get("/risk/explanations/{protocol_id}", response_model=RiskExplanationResponse)
@@ -686,6 +800,245 @@ async def options_apy_timeseries_trailing_slash() -> Response:
     return Response(status_code=200)
 
 
+async def _build_apy_timeseries_response(db: Client) -> list[ApyTimeseriesPoint]:
+    """Build APY timeseries payload without route-level caching."""
+    from datetime import datetime, timedelta, timezone
+
+    settings = get_settings()
+    health_timeout_seconds = max(0.5, float(settings.RATE_FETCH_TIMEOUT_SECONDS))
+    live_rate_timeout_seconds = max(
+        0.5,
+        float(settings.TIMESERIES_LIVE_RATE_TIMEOUT_SECONDS),
+    )
+    thirty_days_ago = (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    ).date().isoformat()
+
+    snapshots = (
+        db.table("daily_apy_snapshots")
+        .select("protocol_id, apy, tvl_usd, date")
+        .gte("date", thirty_days_ago)
+        .order("date")
+        .execute()
+        .data
+    )
+
+    if not snapshots:
+        return []
+
+    max_sanity_apy = Decimal(str(settings.MAX_APY_SANITY_BOUND))
+    liquidity_floor = Decimal("0.85")
+    liquidity_span = Decimal("0.15")
+    liquidity_full_tvl = Decimal("50000000")
+    risk_score_max = Decimal("9")
+    min_deployable_risk = Decimal("6")
+    risk_weight_floor = Decimal("0.60")
+
+    # Determine protocols that are currently deployable.
+    # Fail-safe: protocols with unreadable health are excluded.
+    active_protocols = [
+        (pid, adapter)
+        for pid, adapter in ACTIVE_ADAPTERS.items()
+        if adapter is not None
+    ]
+
+    async def _check_protocol_health(
+        protocol_id: str,
+        adapter,
+    ) -> tuple[str, bool, Exception | None]:
+        try:
+            health = await asyncio.wait_for(
+                adapter.get_health(),
+                timeout=health_timeout_seconds,
+            )
+            return protocol_id, health.is_deposit_safe, None
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            return protocol_id, False, exc
+
+    deployable_pids: set[str] = set()
+    health_results = await asyncio.gather(
+        *[_check_protocol_health(pid, adapter) for pid, adapter in active_protocols]
+    )
+    for pid, is_deposit_safe, exc in health_results:
+        if exc is not None:
+            logger.warning(
+                "Timeseries health check failed for %s: %s — excluding from SnowMind chart",
+                pid,
+                exc,
+            )
+            continue
+        if is_deposit_safe:
+            deployable_pids.add(pid)
+
+    if not deployable_pids:
+        logger.warning(
+            "No deployable protocols available for SnowMind timeseries — returning empty chart data"
+        )
+        return []
+
+    live_rates = {}
+    try:
+        live_rates = await asyncio.wait_for(
+            _rate_fetcher.fetch_display_rates(),
+            timeout=live_rate_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Timeseries live-rate fetch timed out after %.1fs; using snapshot-only chart",
+            live_rate_timeout_seconds,
+        )
+    except Exception as exc:
+        logger.warning("Timeseries live-rate fetch failed; using snapshot-only chart: %s", exc)
+
+    risk_by_protocol: dict[str, Decimal] = {}
+    if live_rates:
+        try:
+            persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
+            fresh_scores, _stale_protocols = _filter_fresh_persisted_scores(persisted_scores)
+            missing_score_inputs = {
+                pid: rate
+                for pid, rate in live_rates.items()
+                if pid not in fresh_scores
+            }
+            computed_scores = (
+                await _risk_scorer.compute_scores_from_rates(db, missing_score_inputs)
+                if missing_score_inputs
+                else {}
+            )
+
+            for pid in deployable_pids:
+                score = fresh_scores.get(pid) or computed_scores.get(pid)
+                if score is not None:
+                    risk_by_protocol[pid] = score.score
+        except Exception as exc:
+            logger.warning("Timeseries risk scoring fallback triggered: %s", exc)
+
+    # Group by date and protocol with APY + TVL metadata.
+    by_date: dict[str, dict[str, tuple[Decimal, Decimal | None]]] = {}
+    for snap in snapshots:
+        d = snap["date"]
+        pid = snap["protocol_id"]
+        try:
+            apy = Decimal(str(snap["apy"]))
+            tvl_usd = (
+                Decimal(str(snap.get("tvl_usd")))
+                if snap.get("tvl_usd") is not None
+                else None
+            )
+        except Exception as exc:
+            logger.debug(
+                "Skipping malformed APY snapshot in timeseries (date=%s, protocol=%s, apy=%s, tvl=%s): %s",
+                d,
+                pid,
+                snap.get("apy"),
+                snap.get("tvl_usd"),
+                exc,
+            )
+            continue
+        if d not in by_date:
+            by_date[d] = {}
+        by_date[d][pid] = (apy, tvl_usd)
+
+    # Build timeseries:
+    # - SnowMind = best deployable APY after conservative liquidity + risk adjustment
+    # - Aave = raw aave_v3 benchmark APY
+    def _best_snowmind_apy(day_rates: dict[str, tuple[Decimal, Decimal | None]], date_str: str) -> Decimal:
+        best_apy = Decimal("0")
+        for pid in deployable_pids:
+            if pid not in day_rates:
+                continue
+
+            apy, tvl_usd = day_rates[pid]
+            if apy <= Decimal("0"):
+                continue
+            if apy > max_sanity_apy:
+                logger.debug(
+                    "Timeseries excluded APY outlier for %s on %s: %s > %s",
+                    pid,
+                    date_str,
+                    apy,
+                    max_sanity_apy,
+                )
+                continue
+
+            if tvl_usd is None:
+                liquidity_factor = liquidity_floor
+            else:
+                tvl_clamped = max(tvl_usd, Decimal("0"))
+                tvl_ratio = min(tvl_clamped / liquidity_full_tvl, Decimal("1"))
+                liquidity_factor = liquidity_floor + (tvl_ratio * liquidity_span)
+
+            risk_score = risk_by_protocol.get(pid)
+            if risk_score is not None and risk_score < min_deployable_risk:
+                logger.debug(
+                    "Timeseries excluded risk-weak protocol %s on %s: score=%s < %s",
+                    pid,
+                    date_str,
+                    risk_score,
+                    min_deployable_risk,
+                )
+                continue
+            if risk_score is None:
+                risk_factor = Decimal("1")
+            else:
+                risk_factor = max(
+                    risk_weight_floor,
+                    min(risk_score / risk_score_max, Decimal("1")),
+                )
+
+            adjusted_apy = apy * liquidity_factor * risk_factor
+            if adjusted_apy > best_apy:
+                best_apy = adjusted_apy
+
+        return best_apy
+
+    out: list[ApyTimeseriesPoint] = []
+    for date_str in sorted(by_date.keys()):
+        day_rates = by_date[date_str]
+        aave_apy = day_rates.get("aave_v3", (Decimal("0"), None))[0]
+
+        # SnowMind picks the best deployable protocol on each day
+        # after conservative liquidity and risk adjustment.
+        best_apy = _best_snowmind_apy(day_rates, date_str)
+
+        out.append(
+            ApyTimeseriesPoint(
+                date=date_str,
+                snowmind_apy=best_apy,
+                aave_apy=aave_apy,
+            )
+        )
+
+    # Override (or append) today's datapoint with live rates so LP headline
+    # reflects current on-chain conditions rather than last daily snapshot.
+    if live_rates:
+        today = datetime.now(timezone.utc).date().isoformat()
+        live_day_rates: dict[str, tuple[Decimal, Decimal | None]] = {}
+        for pid, rate in live_rates.items():
+            if pid not in deployable_pids and pid != "aave_v3":
+                continue
+            live_day_rates[pid] = (rate.apy, rate.tvl_usd)
+
+        if live_day_rates:
+            live_point = ApyTimeseriesPoint(
+                date=today,
+                snowmind_apy=_best_snowmind_apy(live_day_rates, today),
+                aave_apy=live_day_rates.get("aave_v3", (Decimal("0"), None))[0],
+            )
+
+            replaced = False
+            for idx, point in enumerate(out):
+                if point.date == today:
+                    out[idx] = live_point
+                    replaced = True
+                    break
+            if not replaced:
+                out.append(live_point)
+                out = sorted(out, key=lambda point: point.date)[-30:]
+
+    return out
+
+
 @router.get("/rates/timeseries", response_model=list[ApyTimeseriesPoint])
 @limiter.limit("60/minute")
 async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
@@ -701,222 +1054,21 @@ async def get_apy_timeseries(request: Request, db: Client = Depends(get_db)):
     if cache_ttl > 0 and _timeseries_cache and _timeseries_cache[0] > now_mono:
         return [ApyTimeseriesPoint.model_validate(item) for item in _timeseries_cache[1]]
 
-    from datetime import datetime, timedelta, timezone
-
     try:
-        settings = get_settings()
-        thirty_days_ago = (
-            datetime.now(timezone.utc) - timedelta(days=30)
-        ).date().isoformat()
+        if cache_ttl <= 0:
+            return await _build_apy_timeseries_response(db)
 
-        snapshots = (
-            db.table("daily_apy_snapshots")
-            .select("protocol_id, apy, tvl_usd, date")
-            .gte("date", thirty_days_ago)
-            .order("date")
-            .execute()
-            .data
-        )
+        async with _timeseries_cache_lock:
+            now_mono = time.monotonic()
+            if _timeseries_cache and _timeseries_cache[0] > now_mono:
+                return [ApyTimeseriesPoint.model_validate(item) for item in _timeseries_cache[1]]
 
-        if not snapshots:
-            return []
-
-        max_sanity_apy = Decimal(str(settings.MAX_APY_SANITY_BOUND))
-        liquidity_floor = Decimal("0.85")
-        liquidity_span = Decimal("0.15")
-        liquidity_full_tvl = Decimal("50000000")
-        risk_score_max = Decimal("9")
-        min_deployable_risk = Decimal("6")
-        risk_weight_floor = Decimal("0.60")
-
-        # Determine protocols that are currently deployable.
-        # Fail-safe: protocols with unreadable health are excluded.
-        active_pids = set(ACTIVE_ADAPTERS.keys())
-
-        async def _health_status(pid: str) -> tuple[str, bool]:
-            adapter = ACTIVE_ADAPTERS.get(pid)
-            if adapter is None:
-                return pid, False
-            try:
-                health = await adapter.get_health()
-            except Exception as exc:
-                logger.warning(
-                    "Timeseries health check failed for %s: %s — excluding from SnowMind chart",
-                    pid,
-                    exc,
-                )
-                return pid, False
-            return pid, bool(health.is_deposit_safe)
-
-        deployable_results = await asyncio.gather(*[_health_status(pid) for pid in active_pids])
-        deployable_pids: set[str] = {
-            pid for pid, is_deposit_safe in deployable_results if is_deposit_safe
-        }
-
-        if not deployable_pids:
-            logger.warning(
-                "No deployable protocols available for SnowMind timeseries — returning empty chart data"
-            )
-            return []
-
-        live_rates = {}
-        try:
-            live_rates = await _rate_fetcher.fetch_display_rates()
-        except Exception as exc:
-            logger.warning("Timeseries live-rate fetch failed; using snapshot-only chart: %s", exc)
-
-        risk_by_protocol: dict[str, Decimal] = {}
-        if live_rates:
-            try:
-                persisted_scores = _risk_scorer.get_latest_persisted_scores(db)
-                fresh_scores, _stale_protocols = _filter_fresh_persisted_scores(persisted_scores)
-                missing_score_inputs = {
-                    pid: rate
-                    for pid, rate in live_rates.items()
-                    if pid not in fresh_scores
-                }
-                computed_scores = (
-                    await _risk_scorer.compute_scores_from_rates(db, missing_score_inputs)
-                    if missing_score_inputs
-                    else {}
-                )
-
-                for pid in deployable_pids:
-                    score = fresh_scores.get(pid) or computed_scores.get(pid)
-                    if score is not None:
-                        risk_by_protocol[pid] = score.score
-            except Exception as exc:
-                logger.warning("Timeseries risk scoring fallback triggered: %s", exc)
-
-        # Group by date and protocol with APY + TVL metadata.
-        by_date: dict[str, dict[str, tuple[Decimal, Decimal | None]]] = {}
-        for snap in snapshots:
-            d = snap["date"]
-            pid = snap["protocol_id"]
-            try:
-                apy = Decimal(str(snap["apy"]))
-                tvl_usd = (
-                    Decimal(str(snap.get("tvl_usd")))
-                    if snap.get("tvl_usd") is not None
-                    else None
-                )
-            except Exception as exc:
-                logger.debug(
-                    "Skipping malformed APY snapshot in timeseries (date=%s, protocol=%s, apy=%s, tvl=%s): %s",
-                    d,
-                    pid,
-                    snap.get("apy"),
-                    snap.get("tvl_usd"),
-                    exc,
-                )
-                continue
-            if d not in by_date:
-                by_date[d] = {}
-            by_date[d][pid] = (apy, tvl_usd)
-
-        # Build timeseries:
-        # - SnowMind = best deployable APY after conservative liquidity + risk adjustment
-        # - Aave = raw aave_v3 benchmark APY
-        def _best_snowmind_apy(day_rates: dict[str, tuple[Decimal, Decimal | None]], date_str: str) -> Decimal:
-            best_apy = Decimal("0")
-            for pid in deployable_pids:
-                if pid not in day_rates:
-                    continue
-
-                apy, tvl_usd = day_rates[pid]
-                if apy <= Decimal("0"):
-                    continue
-                if apy > max_sanity_apy:
-                    logger.debug(
-                        "Timeseries excluded APY outlier for %s on %s: %s > %s",
-                        pid,
-                        date_str,
-                        apy,
-                        max_sanity_apy,
-                    )
-                    continue
-
-                if tvl_usd is None:
-                    liquidity_factor = liquidity_floor
-                else:
-                    tvl_clamped = max(tvl_usd, Decimal("0"))
-                    tvl_ratio = min(tvl_clamped / liquidity_full_tvl, Decimal("1"))
-                    liquidity_factor = liquidity_floor + (tvl_ratio * liquidity_span)
-
-                risk_score = risk_by_protocol.get(pid)
-                if risk_score is not None and risk_score < min_deployable_risk:
-                    logger.debug(
-                        "Timeseries excluded risk-weak protocol %s on %s: score=%s < %s",
-                        pid,
-                        date_str,
-                        risk_score,
-                        min_deployable_risk,
-                    )
-                    continue
-                if risk_score is None:
-                    risk_factor = Decimal("1")
-                else:
-                    risk_factor = max(
-                        risk_weight_floor,
-                        min(risk_score / risk_score_max, Decimal("1")),
-                    )
-
-                adjusted_apy = apy * liquidity_factor * risk_factor
-                if adjusted_apy > best_apy:
-                    best_apy = adjusted_apy
-
-            return best_apy
-
-        out: list[ApyTimeseriesPoint] = []
-        for date_str in sorted(by_date.keys()):
-            day_rates = by_date[date_str]
-            aave_apy = day_rates.get("aave_v3", (Decimal("0"), None))[0]
-
-            # SnowMind picks the best deployable protocol on each day
-            # after conservative liquidity and risk adjustment.
-            best_apy = _best_snowmind_apy(day_rates, date_str)
-
-            out.append(
-                ApyTimeseriesPoint(
-                    date=date_str,
-                    snowmind_apy=best_apy,
-                    aave_apy=aave_apy,
-                )
-            )
-
-        # Override (or append) today's datapoint with live rates so LP headline
-        # reflects current on-chain conditions rather than last daily snapshot.
-        if live_rates:
-            today = datetime.now(timezone.utc).date().isoformat()
-            live_day_rates: dict[str, tuple[Decimal, Decimal | None]] = {}
-            for pid, rate in live_rates.items():
-                if pid not in deployable_pids and pid != "aave_v3":
-                    continue
-                live_day_rates[pid] = (rate.apy, rate.tvl_usd)
-
-            if live_day_rates:
-                live_point = ApyTimeseriesPoint(
-                    date=today,
-                    snowmind_apy=_best_snowmind_apy(live_day_rates, today),
-                    aave_apy=live_day_rates.get("aave_v3", (Decimal("0"), None))[0],
-                )
-
-                replaced = False
-                for idx, point in enumerate(out):
-                    if point.date == today:
-                        out[idx] = live_point
-                        replaced = True
-                        break
-                if not replaced:
-                    out.append(live_point)
-                    out = sorted(out, key=lambda point: point.date)[-30:]
-
-        if cache_ttl > 0:
+            out = await _build_apy_timeseries_response(db)
             _timeseries_cache = (
                 time.monotonic() + cache_ttl,
                 [item.model_dump() for item in out],
             )
-        return out
+            return out
     except Exception as e:
         logger.error("Failed to build APY timeseries: %s", e)
         raise HTTPException(status_code=500, detail="Failed to build timeseries")
@@ -983,8 +1135,8 @@ async def run_optimizer_preview(
     if total_usd <= 0:
         raise HTTPException(status_code=400, detail="No deposited balance")
 
-    # Build protocol inputs with risk scores
-    protocol_inputs: list[ProtocolInput] = []
+    # Build risk map used in preview response and weighted risk output
+    risk_by_protocol: dict[str, Decimal] = {}
     for pid, rate in valid_rates.items():
         risk = _risk_scorer.compute_risk_score(
             pid,
@@ -995,32 +1147,28 @@ async def run_optimizer_preview(
             ),
             protocol_apy=rate.apy,
         )
-        protocol_inputs.append(
-            ProtocolInput(protocol_id=pid, apy=rate.apy, risk_score=risk)
-        )
+        risk_by_protocol[pid] = risk
 
-    # Run waterfall allocator
-    inp = OptimizerInput(
+    (
+        result_allocations,
+        expected_apy,
+        current_apy,
+        weighted_risk,
+        rebalance_needed,
+        solve_time_ms,
+        _idle_amount,
+    ) = _run_no_base_allocator(
         total_amount_usd=total_usd,
-        protocols=protocol_inputs,
+        valid_rates=valid_rates,
+        risk_by_protocol=risk_by_protocol,
         current_allocations=current,
         gas_cost_estimate_usd=Decimal(str(settings.GAS_COST_ESTIMATE_USD)),
-    )
-    tvl_by_protocol = {pid: rate.tvl_usd for pid, rate in valid_rates.items()}
-    protocol_utilizations = {pid: rate.utilization_rate for pid, rate in valid_rates.items()}
-    result = waterfall_allocate(
-        inp=inp,
-        tvl_by_protocol=tvl_by_protocol,
-        protocol_utilizations=protocol_utilizations,
-        tvl_cap_pct=Decimal(str(settings.TVL_CAP_PCT)),
         max_exposure_pct=max_exposure,
-        base_beat_margin=Decimal(str(settings.BEAT_MARGIN)),
-        base_layer_protocol_id=settings.BASE_LAYER_PROTOCOL_ID,
     )
 
     # Build response items
     proposed: list[AllocationItem] = []
-    for pid, amount_usd in result.allocations.items():
+    for pid, amount_usd in result_allocations.items():
         rate = valid_rates.get(pid)
         proposed.append(
             AllocationItem(
@@ -1032,22 +1180,14 @@ async def run_optimizer_preview(
             )
         )
 
-    # Current APY
-    current_apy = Decimal("0")
-    if total_usd:
-        for pid, amt in current.items():
-            rate = valid_rates.get(pid)
-            if rate:
-                current_apy += rate.apy * (amt / total_usd)
-
     return OptimizerPreviewOutput(
         smart_account_address=address,
         proposed_allocations=proposed,
-        expected_apy=result.expected_apy,
+        expected_apy=expected_apy,
         current_apy=current_apy,
-        rebalance_needed=result.is_rebalance_needed,
-        risk_score=result.risk_score,
-        solve_time_ms=result.solve_time_ms,
+        rebalance_needed=rebalance_needed,
+        risk_score=weighted_risk,
+        solve_time_ms=solve_time_ms,
     )
 
 

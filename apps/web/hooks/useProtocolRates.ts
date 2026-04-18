@@ -10,7 +10,9 @@ function toFiniteNumber(value: unknown, fallback = 0): number {
 
 function canonicalProtocolId(value: unknown): string {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return normalized === "aave" ? "aave_v3" : normalized;
+    if (normalized === "aave") return "aave_v3";
+    if (normalized === "folks_finance_xchain" || normalized === "folks_finance") return "folks";
+    return normalized;
 }
 
 export function useProtocolRates() {

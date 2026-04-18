@@ -14,77 +14,75 @@ def test_should_refresh_amount_tracks_small_yield_deltas() -> None:
     assert not portfolio._should_refresh_amount(Decimal("50.000000"), Decimal("50.0000004"))
 
 
-def test_should_normalize_idle_only_principal_before_first_execution() -> None:
-    assert portfolio._should_normalize_idle_only_principal(
-        has_non_idle_positions=False,
-        has_executed_rebalance=False,
-        tracked_net_principal=Decimal("49.99"),
-        total_current_value=Decimal("1.00"),
-    )
+class _IdleReadCall:
+    def __init__(self, value=None, error: Exception | None = None):
+        self._value = value
+        self._error = error
+
+    async def call(self):
+        if self._error is not None:
+            raise self._error
+        return self._value
 
 
-def test_should_normalize_idle_only_principal_on_overcount_after_execution() -> None:
-    assert portfolio._should_normalize_idle_only_principal(
-        has_non_idle_positions=False,
-        has_executed_rebalance=True,
-        tracked_net_principal=Decimal("49.99"),
-        total_current_value=Decimal("1.00"),
-    )
+class _IdleReadFunctions:
+    def __init__(self, value=None, error: Exception | None = None):
+        self._value = value
+        self._error = error
+
+    def balanceOf(self, _address):
+        return _IdleReadCall(value=self._value, error=self._error)
 
 
-def test_should_not_normalize_principal_when_positions_are_deployed() -> None:
-    assert not portfolio._should_normalize_idle_only_principal(
-        has_non_idle_positions=True,
-        has_executed_rebalance=True,
-        tracked_net_principal=Decimal("49.99"),
-        total_current_value=Decimal("1.00"),
-    )
+class _IdleReadContract:
+    def __init__(self, value=None, error: Exception | None = None):
+        self.functions = _IdleReadFunctions(value=value, error=error)
 
 
-def test_should_not_normalize_idle_only_principal_when_not_overcounted() -> None:
-    assert not portfolio._should_normalize_idle_only_principal(
-        has_non_idle_positions=False,
-        has_executed_rebalance=True,
-        tracked_net_principal=Decimal("1.00"),
-        total_current_value=Decimal("1.00"),
-    )
+class _IdleReadEth:
+    def __init__(self, value=None, error: Exception | None = None):
+        self._value = value
+        self._error = error
+
+    def contract(self, **_kwargs):
+        return _IdleReadContract(value=self._value, error=self._error)
 
 
-def test_normalize_yield_dust_suppresses_micro_negative() -> None:
-    assert portfolio._normalize_yield_dust(Decimal("-0.000002")) == Decimal("0")
+class _IdleReadW3:
+    def __init__(self, value=None, error: Exception | None = None):
+        self.eth = _IdleReadEth(value=value, error=error)
+
+    @staticmethod
+    def to_checksum_address(address: str) -> str:
+        return address
 
 
-def test_normalize_yield_dust_keeps_real_values() -> None:
-    assert portfolio._normalize_yield_dust(Decimal("-0.0002")) == Decimal("-0.0002")
+@pytest.mark.asyncio
+async def test_get_idle_usdc_returns_none_after_retries() -> None:
+    settings = MagicMock()
+    settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio.get_shared_async_web3",
+        return_value=_IdleReadW3(error=RuntimeError("rpc unavailable")),
+    ):
+        result = await portfolio._get_idle_usdc("0xabc")
+
+    assert result is None
 
 
-def test_payload_has_unsupported_protocol_detects_legacy_protocol() -> None:
-    assert portfolio._payload_has_unsupported_protocol({"folks": "1"})
+@pytest.mark.asyncio
+async def test_get_idle_usdc_reads_onchain_balance_when_available() -> None:
+    settings = MagicMock()
+    settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
 
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio.get_shared_async_web3",
+        return_value=_IdleReadW3(value=1_500_000),
+    ):
+        result = await portfolio._get_idle_usdc("0xabc")
 
-def test_payload_has_unsupported_protocol_ignores_supported_protocols() -> None:
-    assert not portfolio._payload_has_unsupported_protocol({"aave_v3": "1", "benqi": "2"})
-
-
-def test_has_unsupported_protocol_history_detects_recent_legacy_rows() -> None:
-    query = MagicMock()
-    query.select.return_value = query
-    query.eq.return_value = query
-    query.order.return_value = query
-    query.limit.return_value = query
-    query.execute.return_value = MagicMock(
-        data=[
-            {
-                "proposed_allocations": {"folks": "1"},
-                "executed_allocations": None,
-            }
-        ]
-    )
-
-    db = MagicMock()
-    db.table.return_value = query
-
-    assert portfolio._has_unsupported_protocol_history(db, "acct-1")
+    assert result == Decimal("1.5")
 
 
 @pytest.mark.asyncio

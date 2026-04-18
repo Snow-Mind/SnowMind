@@ -118,6 +118,8 @@ const MARKET_PROTOCOL_IDS: ProtocolId[] = [
   "silo_savusd_usdc",
   "euler_v2",
   "silo_susdp_usdc",
+  "silo_gami_usdc",
+  "folks",
 ];
 
 const MARKET_PROTOCOLS = MARKET_PROTOCOL_IDS
@@ -138,7 +140,12 @@ function normalizeIncomingAllocationCaps(
 
   for (const [rawPid, rawValue] of Object.entries(rawCaps)) {
     const maybe = rawPid.toLowerCase().trim();
-    const canonical = maybe === "aave" ? "aave_v3" : maybe;
+    const canonical =
+      maybe === "aave"
+        ? "aave_v3"
+        : maybe === "folks_finance_xchain" || maybe === "folks_finance"
+          ? "folks"
+          : maybe;
     if (!MARKET_PROTOCOL_IDS.includes(canonical as ProtocolId)) continue;
 
     const parsed = Number(rawValue);
@@ -151,7 +158,12 @@ function normalizeIncomingAllocationCaps(
 
 function canonicalRateProtocolId(rawProtocolId: string): ProtocolId {
   const normalized = (rawProtocolId || "").trim().toLowerCase();
-  const canonical = normalized === "aave" ? "aave_v3" : normalized;
+  const canonical =
+    normalized === "aave"
+      ? "aave_v3"
+      : normalized === "folks_finance_xchain" || normalized === "folks_finance"
+        ? "folks"
+        : normalized;
   return canonical as ProtocolId;
 }
 
@@ -1191,31 +1203,36 @@ export default function OnboardingPage() {
       // Phase 2: Grant session key
       setActivationPhase("granting-session-key");
       const sessionKeyResult = await withRetry(
-        () => withTimeout(
-          grantAndSerializeSessionKey(
-            kernelAccount,
-            kernelClient,
-            {
-              AAVE_POOL: CONTRACTS.AAVE_POOL,
-              BENQI_POOL: CONTRACTS.BENQI_POOL,
-              SPARK_VAULT: CONTRACTS.SPARK_VAULT,
-              EULER_VAULT: CONTRACTS.EULER_VAULT,
-              SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
-              SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
-              USDC: CONTRACTS.USDC,
-              TREASURY: CONTRACTS.TREASURY,
-              PERMIT2: CONTRACTS.PERMIT2,
-              REGISTRY: CONTRACTS.REGISTRY,
-            },
-            {
-              maxAmountUSDC: Math.max(effectiveDepositAmount * 2, 50_000),
-              durationDays: 30,
-              maxOpsPerDay: 20,
-              userEOA: wallet.address as `0x${string}`,
-            },
-          ),
-          WALLET_SIGNATURE_TIMEOUT_MS,
-          "Wallet signature timed out. Open your wallet app, approve any pending request, then retry activation.",
+        () => grantAndSerializeSessionKey(
+          kernelAccount,
+          kernelClient,
+          {
+            AAVE_POOL: CONTRACTS.AAVE_POOL,
+            BENQI_POOL: CONTRACTS.BENQI_POOL,
+            SPARK_VAULT: CONTRACTS.SPARK_VAULT,
+            EULER_VAULT: CONTRACTS.EULER_VAULT,
+            SILO_SAVUSD_VAULT: CONTRACTS.SILO_SAVUSD_VAULT,
+            SILO_SUSDP_VAULT: CONTRACTS.SILO_SUSDP_VAULT,
+            SILO_GAMI_USDC_VAULT: CONTRACTS.SILO_GAMI_USDC_VAULT,
+            FOLKS_SPOKE_COMMON: CONTRACTS.FOLKS_SPOKE_COMMON,
+            FOLKS_SPOKE_USDC: CONTRACTS.FOLKS_SPOKE_USDC,
+            FOLKS_USDC_HUB_POOL: CONTRACTS.FOLKS_USDC_HUB_POOL,
+            FOLKS_HUB_CHAIN_ID: CONTRACTS.FOLKS_HUB_CHAIN_ID,
+            FOLKS_USDC_POOL_ID: CONTRACTS.FOLKS_USDC_POOL_ID,
+            FOLKS_USDC_LOAN_TYPE_ID: CONTRACTS.FOLKS_USDC_LOAN_TYPE_ID,
+            FOLKS_ACCOUNT_NONCE: CONTRACTS.FOLKS_ACCOUNT_NONCE,
+            FOLKS_LOAN_NONCE: CONTRACTS.FOLKS_LOAN_NONCE,
+            USDC: CONTRACTS.USDC,
+            TREASURY: CONTRACTS.TREASURY,
+            PERMIT2: CONTRACTS.PERMIT2,
+            REGISTRY: CONTRACTS.REGISTRY,
+          },
+          {
+            maxAmountUSDC: Math.max(effectiveDepositAmount * 2, 50_000),
+            durationDays: 30,
+            maxOpsPerDay: 20,
+            userEOA: wallet.address as `0x${string}`,
+          },
         ),
         { maxRetries: 2, label: "grantAndSerializeSessionKey" },
       );

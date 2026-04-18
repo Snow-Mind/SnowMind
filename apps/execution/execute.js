@@ -8,6 +8,7 @@ import {
 import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants"
 import {
   createPublicClient,
+  decodeEventLog,
   decodeErrorResult,
   decodeFunctionResult,
   fallback,
@@ -18,6 +19,7 @@ import {
   keccak256,
   concat,
   pad,
+  toHex,
   encodeAbiParameters,
   parseAbiParameters,
   hashTypedData,
@@ -233,18 +235,11 @@ const ERC4626_ABI = [
     outputs: [{ name: "", type: "uint256" }],
   },
   {
-    name: "previewRedeem",
+    name: "maxWithdraw",
     type: "function",
     stateMutability: "view",
-    inputs: [{ name: "shares", type: "uint256" }],
-    outputs: [{ name: "assets", type: "uint256" }],
-  },
-  {
-    name: "convertToAssets",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "shares", type: "uint256" }],
-    outputs: [{ name: "assets", type: "uint256" }],
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "maxAssets", type: "uint256" }],
   },
 ]
 
@@ -278,6 +273,274 @@ const ERC20_ABI = [
   },
 ]
 
+const FOLKS_MESSAGE_PARAMS_COMPONENTS = [
+  { name: "adapterId", type: "uint16" },
+  { name: "returnAdapterId", type: "uint16" },
+  { name: "receiverValue", type: "uint256" },
+  { name: "gasLimit", type: "uint256" },
+  { name: "returnGasLimit", type: "uint256" },
+]
+
+const FOLKS_MESSAGE_RECEIVED_COMPONENTS = [
+  { name: "messageId", type: "bytes32" },
+  { name: "sourceChainId", type: "uint16" },
+  { name: "sourceAddress", type: "bytes32" },
+  { name: "handler", type: "bytes32" },
+  { name: "payload", type: "bytes" },
+  { name: "returnAdapterId", type: "uint16" },
+  { name: "returnGasLimit", type: "uint256" },
+]
+
+const FOLKS_SPOKE_COMMON_ABI = [
+  {
+    name: "createAccount",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "nonce", type: "bytes4" },
+      { name: "refAccountId", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "withdraw",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "loanId", type: "bytes32" },
+      { name: "poolId", type: "uint8" },
+      { name: "chainId", type: "uint16" },
+      { name: "amount", type: "uint256" },
+      { name: "isFAmount", type: "bool" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "retryMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reverseMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+]
+
+const FOLKS_SPOKE_USDC_ABI = [
+  {
+    name: "createLoanAndDeposit",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "nonce", type: "bytes4" },
+      { name: "amount", type: "uint256" },
+      { name: "loanTypeId", type: "uint16" },
+      { name: "loanName", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "deposit",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "params", type: "tuple", components: FOLKS_MESSAGE_PARAMS_COMPONENTS },
+      { name: "accountId", type: "bytes32" },
+      { name: "loanId", type: "bytes32" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "retryMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reverseMessage",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+      { name: "message", type: "tuple", components: FOLKS_MESSAGE_RECEIVED_COMPONENTS },
+      { name: "extraArgs", type: "bytes" },
+    ],
+    outputs: [],
+  },
+]
+
+const FOLKS_HUB_POOL_READ_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "totalSupply",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "getDepositData",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "optimalUtilisationRatio", type: "uint256" },
+      { name: "totalAmount", type: "uint256" },
+      { name: "interestRate", type: "uint256" },
+      { name: "interestIndex", type: "uint256" },
+    ],
+  },
+]
+
+const FOLKS_ACCOUNT_MANAGER_READ_ABI = [
+  {
+    name: "isAccountCreated",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "accountId", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "getAccountIdOfAddressOnChain",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "addr", type: "bytes32" },
+      { name: "chainId", type: "uint16" },
+    ],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
+]
+
+const FOLKS_LOAN_MANAGER_READ_ABI = [
+  {
+    name: "isUserLoanActive",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "loanId", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "getUserLoan",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "loanId", type: "bytes32" }],
+    outputs: [
+      { name: "accountId", type: "bytes32" },
+      { name: "loanTypeId", type: "uint16" },
+      { name: "colPools", type: "uint8[]" },
+      { name: "borPools", type: "uint8[]" },
+      {
+        name: "collaterals",
+        type: "tuple[]",
+        components: [
+          { name: "balance", type: "uint256" },
+          { name: "rewardIndex", type: "uint256" },
+        ],
+      },
+      {
+        name: "borrows",
+        type: "tuple[]",
+        components: [
+          { name: "amount", type: "uint256" },
+          { name: "balance", type: "uint256" },
+          { name: "lastInterestIndex", type: "uint256" },
+          { name: "stableInterestRate", type: "uint256" },
+          { name: "lastStableUpdateTimestamp", type: "uint256" },
+          { name: "rewardIndex", type: "uint256" },
+        ],
+      },
+    ],
+  },
+]
+
+const FOLKS_MESSAGE_MANAGER_ABI = [
+  {
+    name: "failedMessages",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+    ],
+    outputs: [{ name: "messageHash", type: "bytes32" }],
+  },
+  {
+    name: "seenMessages",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "adapterId", type: "uint16" },
+      { name: "messageId", type: "bytes32" },
+    ],
+    outputs: [{ name: "hasBeenSeen", type: "bool" }],
+  },
+]
+
+const FOLKS_MESSAGE_FAILED_EVENT_ABI = {
+  anonymous: false,
+  inputs: [
+    { indexed: false, name: "adapterId", type: "uint16" },
+    { indexed: true, name: "messageId", type: "bytes32" },
+    { indexed: false, name: "reason", type: "bytes" },
+    {
+      indexed: false,
+      name: "message",
+      type: "tuple",
+      components: FOLKS_MESSAGE_RECEIVED_COMPONENTS,
+    },
+    { indexed: false, name: "messageHash", type: "bytes32" },
+  ],
+  name: "MessageFailed",
+  type: "event",
+}
+
+const FOLKS_DEFAULT_MESSAGE_PARAMS = Object.freeze({
+  adapterId: 1,
+  returnAdapterId: 1,
+  receiverValue: 0n,
+  gasLimit: 0n,
+  returnGasLimit: 0n,
+})
+
+const FOLKS_ZERO_BYTES32 = `0x${"00".repeat(32)}`
+const FOLKS_DEFAULT_LOAN_NAME = pad(toHex("snowmind-usdc"), { size: 32 })
+
 // ── Permit2 (Uniswap canonical) — same address on ALL EVM chains ──────────
 // Euler V2 (EVK) vaults use Permit2 for token transfers instead of standard
 // ERC-20 transferFrom.  Deposits require: USDC.approve(PERMIT2, amount) +
@@ -299,10 +562,177 @@ const PERMIT2_ABI = [
   },
 ]
 
-const USDC_DECIMALS = 6
-const USDC_SCALE = 10n ** 6n
-const MIN_USDC_PROJECTION_BUFFER = 10_000n // 0.01 USDC
-const USDC_PROJECTION_BUFFER_BPS = 10n // 0.10%
+const USDC_BASE_UNITS = 1_000_000n
+const DEPOSIT_ONLY_USDC_BUFFER_RAW = 1_000n // 0.001 USDC safety headroom
+const RECEIPT_WAIT_TIMEOUT_MS = Number(process.env.EXECUTION_RECEIPT_TIMEOUT_MS || 45_000)
+const FOLKS_MESSAGE_FAILED_TOPIC0 = "0x3f5874d5457242294cfd609fe884fd768ee3c2914ccba7daa8536db7791d1919"
+
+function formatUsdcRaw(rawAmount) {
+  const value = rawAmount >= 0n ? rawAmount : 0n
+  const whole = value / USDC_BASE_UNITS
+  const fraction = (value % USDC_BASE_UNITS).toString().padStart(6, "0")
+  return `${whole.toString()}.${fraction}`
+}
+
+function bytes32ToAddress(value) {
+  const normalized = String(value || "").toLowerCase().replace(/^0x/, "")
+  if (normalized.length !== 64) {
+    throw new Error(`Invalid bytes32 value: ${value}`)
+  }
+  return `0x${normalized.slice(-40)}`
+}
+
+function normalizeRecoveryAction(rawAction) {
+  const normalized = String(rawAction || "reverse").trim().toLowerCase()
+  if (normalized !== "reverse" && normalized !== "retry") {
+    throw new Error(`Unsupported Folks recovery action: ${rawAction}`)
+  }
+  return normalized
+}
+
+function extractFolksMessageFailures(receipt) {
+  const failures = []
+  const logs = Array.isArray(receipt?.logs) ? receipt.logs : []
+  for (const log of logs) {
+    const topics = Array.isArray(log?.topics) ? log.topics : []
+    if (topics.length < 2) continue
+    if (String(topics[0]).toLowerCase() !== FOLKS_MESSAGE_FAILED_TOPIC0) continue
+    failures.push({
+      address: log?.address || null,
+      messageId: topics[1] || null,
+    })
+  }
+  return failures
+}
+
+async function waitForConfirmedSuccess(publicClient, txHash, smartAccountAddress, context) {
+  try {
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: txHash,
+      confirmations: 1,
+      timeout: RECEIPT_WAIT_TIMEOUT_MS,
+    })
+
+    const status = receipt?.status
+    console.log(JSON.stringify({
+      level: "info",
+      action: "tx_receipt_observed",
+      smartAccountAddress,
+      txHash,
+      context,
+      status,
+      blockNumber: receipt?.blockNumber?.toString?.() ?? null,
+      timestamp: new Date().toISOString(),
+    }))
+
+    if (status !== "success") {
+      throw new Error(`Transaction ${txHash} reverted on-chain (${context})`)
+    }
+
+    const folksFailures = extractFolksMessageFailures(receipt)
+    if (folksFailures.length > 0) {
+      const ids = folksFailures
+        .map((entry) => entry.messageId)
+        .filter(Boolean)
+        .join(",")
+      throw new Error(
+        `Folks message processing failed on-chain (${context}); messageIds=${ids || "unknown"}`,
+      )
+    }
+  } catch (err) {
+    throw new Error(
+      `Transaction confirmation failed for ${txHash} (${context}): `
+      + `${err?.shortMessage || err?.message || "unknown"}`,
+    )
+  }
+}
+
+async function clampDepositOnlyAmountsToBalance({
+  publicClient,
+  contracts,
+  smartAccountAddress,
+  deposits,
+}) {
+  if (!Array.isArray(deposits) || deposits.length === 0) {
+    return []
+  }
+
+  const parsed = deposits
+    .map((entry) => {
+      const raw = parseUnits(String(entry.amountUSDC), 6)
+      return {
+        ...entry,
+        _amountRaw: raw,
+      }
+    })
+    .filter((entry) => entry._amountRaw > 0n)
+
+  if (parsed.length === 0) {
+    return []
+  }
+
+  const requestedRaw = parsed.reduce((sum, entry) => sum + entry._amountRaw, 0n)
+  const usdcBalanceRaw = await publicClient.readContract({
+    address: contracts.USDC,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [smartAccountAddress],
+  })
+
+  const safeAvailableRaw = usdcBalanceRaw > DEPOSIT_ONLY_USDC_BUFFER_RAW
+    ? usdcBalanceRaw - DEPOSIT_ONLY_USDC_BUFFER_RAW
+    : 0n
+
+  if (requestedRaw <= safeAvailableRaw) {
+    return parsed.map(({ _amountRaw, ...entry }) => ({
+      ...entry,
+      amountUSDC: formatUsdcRaw(_amountRaw),
+    }))
+  }
+
+  if (safeAvailableRaw <= 0n) {
+    throw new Error("Insufficient idle USDC for deposit-only rebalance")
+  }
+
+  const scaled = parsed.map((entry) => ({
+    ...entry,
+    _amountRaw: (entry._amountRaw * safeAvailableRaw) / requestedRaw,
+  }))
+
+  let scaledTotal = scaled.reduce((sum, entry) => sum + entry._amountRaw, 0n)
+  const largestIndex = scaled.reduce(
+    (bestIndex, entry, index, arr) => (
+      arr[bestIndex]._amountRaw >= entry._amountRaw ? bestIndex : index
+    ),
+    0,
+  )
+
+  if (scaledTotal < safeAvailableRaw) {
+    const remainder = safeAvailableRaw - scaledTotal
+    scaled[largestIndex]._amountRaw += remainder
+    scaledTotal += remainder
+  }
+
+  const clamped = scaled
+    .filter((entry) => entry._amountRaw > 0n)
+    .map(({ _amountRaw, ...entry }) => ({
+      ...entry,
+      amountUSDC: formatUsdcRaw(_amountRaw),
+    }))
+
+  console.log(JSON.stringify({
+    level: "warn",
+    action: "deposit_only_amounts_clamped",
+    smartAccountAddress,
+    requestedRaw: requestedRaw.toString(),
+    availableRaw: usdcBalanceRaw.toString(),
+    safeAvailableRaw: safeAvailableRaw.toString(),
+    clampedRaw: scaledTotal.toString(),
+    timestamp: new Date().toISOString(),
+  }))
+
+  return clamped
+}
 
 function formatExecutionError(err) {
   const message = err?.shortMessage || err?.message || "Unknown execution error"
@@ -755,6 +1185,34 @@ async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddres
         `in ${vaultAddress}. DB allocation is stale — reconciling.`
       )
     }
+
+    let maxWithdrawRaw = null
+    try {
+      maxWithdrawRaw = await publicClient.readContract({
+        address: vaultAddress,
+        abi: ERC4626_ABI,
+        functionName: "maxWithdraw",
+        args: [accountAddress],
+      })
+      if (maxWithdrawRaw === 0n) {
+        throw new Error(
+          `${protocolName} withdrawal skipped: vault ${vaultAddress} reports maxWithdraw=0 for ${accountAddress}.`
+        )
+      }
+    } catch (maxWithdrawError) {
+      if (maxWithdrawError?.message?.includes("withdrawal skipped")) {
+        throw maxWithdrawError
+      }
+      console.log(JSON.stringify({
+        level: "warn",
+        action: "vault_max_withdraw_check_failed",
+        protocol: protocolName,
+        error: maxWithdrawError?.message?.slice(0, 200),
+        timestamp: new Date().toISOString(),
+      }))
+      maxWithdrawRaw = null
+    }
+
     console.log(JSON.stringify({
       level: "info",
       action: "vault_share_balance_verified",
@@ -762,8 +1220,14 @@ async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddres
       vaultAddress,
       accountAddress,
       shareBalance: shareBalance.toString(),
+      maxWithdrawRaw: maxWithdrawRaw != null ? maxWithdrawRaw.toString() : null,
       timestamp: new Date().toISOString(),
     }))
+
+    return {
+      shareBalance,
+      maxWithdrawRaw,
+    }
   } catch (err) {
     if (err.message?.includes("withdrawal skipped")) {
       throw err // Re-throw our own guard error
@@ -777,24 +1241,61 @@ async function verifyVaultShareBalance(publicClient, vaultAddress, accountAddres
       error: err?.message?.slice(0, 200),
       timestamp: new Date().toISOString(),
     }))
+
+    return null
   }
 }
 
-function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAccountAddress) {
+function buildErc4626Withdrawal(
+  vaultAddress,
+  amountUSDC,
+  shareBalance,
+  smartAccountAddress,
+  maxWithdrawRaw = null,
+  protocolName = "erc4626"
+) {
   if (amountUSDC === "MAX") {
-    if (!shareBalance) {
+    if (shareBalance == null) {
       throw new Error(`MAX withdrawal from ${vaultAddress} requires shareBalance but none provided`)
     }
+
+    const redeemShares = typeof shareBalance === "bigint" ? shareBalance : BigInt(shareBalance)
+    if (redeemShares <= 0n) {
+      throw new Error(`${protocolName} withdrawal skipped: zero share balance for MAX redeem`)
+    }
+    if (typeof maxWithdrawRaw === "bigint" && maxWithdrawRaw <= 0n) {
+      throw new Error(`${protocolName} withdrawal skipped: vault reports maxWithdraw=0`)
+    }
+
     return {
       to: vaultAddress,
       value: 0n,
       data: encodeFunctionData({
         abi: ERC4626_ABI,
         functionName: "redeem",
-        args: [BigInt(shareBalance), smartAccountAddress, smartAccountAddress],
+        args: [redeemShares, smartAccountAddress, smartAccountAddress],
       }),
     }
   }
+
+  let assetsRaw = parseUnits(String(amountUSDC), 6)
+  if (typeof maxWithdrawRaw === "bigint" && maxWithdrawRaw > 0n && assetsRaw > maxWithdrawRaw) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "vault_withdraw_amount_clamped",
+      protocol: protocolName,
+      vaultAddress,
+      requestedAssetsRaw: assetsRaw.toString(),
+      maxWithdrawRaw: maxWithdrawRaw.toString(),
+      timestamp: new Date().toISOString(),
+    }))
+    assetsRaw = maxWithdrawRaw
+  }
+
+  if (assetsRaw <= 0n) {
+    throw new Error(`${protocolName} withdrawal skipped: non-positive withdraw amount after safety checks`)
+  }
+
   // Known USDC amount → use withdraw(assets) which accepts the USDC amount directly
   return {
     to: vaultAddress,
@@ -802,196 +1303,521 @@ function buildErc4626Withdrawal(vaultAddress, amountUSDC, shareBalance, smartAcc
     data: encodeFunctionData({
       abi: ERC4626_ABI,
       functionName: "withdraw",
-      args: [parseUnits(String(amountUSDC), 6), smartAccountAddress, smartAccountAddress],
+      args: [assetsRaw, smartAccountAddress, smartAccountAddress],
     }),
   }
 }
 
-function parseUsdcUnits(amountUSDC, fieldName = "amountUSDC") {
-  const raw = String(amountUSDC ?? "").trim()
-  if (!raw) {
-    throw new Error(`${fieldName} is required`)
-  }
-  let units
-  try {
-    units = parseUnits(raw, USDC_DECIMALS)
-  } catch (err) {
-    throw new Error(`${fieldName} must be a valid USDC decimal value: ${err?.message || "invalid format"}`)
-  }
-  if (units < 0n) {
-    throw new Error(`${fieldName} cannot be negative`)
-  }
-  return units
+function parsePositiveInt(rawValue, fallback) {
+  const parsed = Number(rawValue)
+  if (!Number.isFinite(parsed)) return fallback
+  const rounded = Math.trunc(parsed)
+  if (rounded < 0) return fallback
+  return rounded
 }
 
-function formatUsdcUnits(amountUnits) {
-  const isNegative = amountUnits < 0n
-  const abs = isNegative ? -amountUnits : amountUnits
-  const whole = abs / USDC_SCALE
-  const fraction = (abs % USDC_SCALE).toString().padStart(USDC_DECIMALS, "0").replace(/0+$/, "")
-  const sign = isNegative ? "-" : ""
-  if (!fraction) {
-    return `${sign}${whole.toString()}`
+function parseFolksNonceInt(rawValue, fallbackInt) {
+  if (typeof rawValue === "string" && rawValue.trim().toLowerCase().startsWith("0x")) {
+    try {
+      const parsed = Number(BigInt(rawValue.trim()))
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.trunc(parsed)
+      }
+    } catch {
+      return fallbackInt
+    }
   }
-  return `${sign}${whole.toString()}.${fraction}`
+  return parsePositiveInt(rawValue, fallbackInt)
 }
 
-function computeUsdcSafetyBuffer(projectedUnits) {
-  if (projectedUnits <= 0n) {
-    return 0n
-  }
-  const bpsBuffer = (projectedUnits * USDC_PROJECTION_BUFFER_BPS) / 10_000n
-  const baseline = bpsBuffer > MIN_USDC_PROJECTION_BUFFER ? bpsBuffer : MIN_USDC_PROJECTION_BUFFER
-  return baseline > projectedUnits ? projectedUnits : baseline
+function normalizeFolksNonce(rawValue, fallbackInt) {
+  const nonceInt = parseFolksNonceInt(rawValue, fallbackInt)
+  return pad(toHex(BigInt(nonceInt)), { size: 4 })
 }
 
-function sumPlannedDepositUnits(deposits) {
-  let total = 0n
-  for (const deposit of deposits || []) {
-    total += parseUsdcUnits(deposit?.amountUSDC, "deposits[].amountUSDC")
+function buildFolksNonceCandidates(primaryNonceInt, scanMaxRaw) {
+  const scanMax = Math.min(Math.max(parsePositiveInt(scanMaxRaw, 4), 0), 256)
+  const ordered = []
+  const seen = new Set()
+  const push = (value) => {
+    const normalized = Math.max(0, Math.trunc(Number(value)))
+    if (!seen.has(normalized)) {
+      seen.add(normalized)
+      ordered.push(normalized)
+    }
   }
-  return total
+
+  push(primaryNonceInt)
+  for (let nonce = 0; nonce <= scanMax; nonce += 1) {
+    push(nonce)
+  }
+  return ordered
 }
 
-export function isErc20BalanceInsufficientError(err) {
-  const text = [
-    err?.shortMessage,
-    err?.message,
-    err?.details,
-    err?.cause?.message,
-    err?.cause?.details,
-    ...(Array.isArray(err?.metaMessages) ? err.metaMessages : []),
+function buildFolksAccountIdCanonical(smartAccountAddress, chainId, accountNonceHex) {
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 })
+  const addressBytes32 = pad(smartAccountAddress, { size: 32 })
+  return keccak256(concat([addressBytes32, chainIdBytes, accountNonceHex]))
+}
+
+function buildFolksAccountIdLegacy(smartAccountAddress, chainId, accountNonceHex) {
+  const chainIdBytes = pad(toHex(BigInt(chainId)), { size: 2 })
+  return keccak256(concat([smartAccountAddress, chainIdBytes, accountNonceHex]))
+}
+
+function buildFolksLoanId(accountId, loanNonceHex) {
+  return keccak256(concat([accountId, loanNonceHex]))
+}
+
+function isZeroBytes32(value) {
+  if (typeof value !== "string") return false
+  if (!value.startsWith("0x")) return false
+  return /^0x0{64}$/i.test(value)
+}
+
+function buildFolksMessageParams() {
+  return [
+    FOLKS_DEFAULT_MESSAGE_PARAMS.adapterId,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.returnAdapterId,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.receiverValue,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.gasLimit,
+    FOLKS_DEFAULT_MESSAGE_PARAMS.returnGasLimit,
   ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase()
-
-  return (
-    text.includes("erc20: transfer amount exceeds balance")
-    || text.includes("transfer amount exceeds balance")
-    || text.includes("insufficient balance for transfer")
-  )
 }
 
-export function capDepositsToProjectedBalance(deposits, availableUnits) {
-  const available = availableUnits > 0n ? availableUnits : 0n
-  let remaining = available
-  let requestedTotal = 0n
-  let plannedTotal = 0n
-  let cappedLegCount = 0
-  const normalized = []
+function resolveFolksRoutingData(source, contracts, smartAccountAddress) {
+  const accountNonceInt = parseFolksNonceInt(
+    source?.folksAccountNonce ?? contracts.FOLKS_ACCOUNT_NONCE,
+    1,
+  )
+  const loanNonceInt = parseFolksNonceInt(
+    source?.folksLoanNonce ?? contracts.FOLKS_LOAN_NONCE,
+    1,
+  )
+  const accountNonce = normalizeFolksNonce(accountNonceInt, 1)
+  const loanNonce = normalizeFolksNonce(loanNonceInt, 1)
+  const chainId = parsePositiveInt(contracts.FOLKS_HUB_CHAIN_ID, 100)
+  const poolId = parsePositiveInt(contracts.FOLKS_USDC_POOL_ID, 1)
+  const loanTypeId = parsePositiveInt(contracts.FOLKS_USDC_LOAN_TYPE_ID, 2)
 
-  for (const deposit of deposits || []) {
-    const requestedUnits = parseUsdcUnits(deposit?.amountUSDC, "deposits[].amountUSDC")
-    if (requestedUnits === 0n) {
-      continue
-    }
+  const canonicalAccountId = buildFolksAccountIdCanonical(smartAccountAddress, chainId, accountNonce)
+  const legacyAccountId = buildFolksAccountIdLegacy(smartAccountAddress, chainId, accountNonce)
+  const explicitAccountId =
+    typeof source?.folksAccountId === "string" && source.folksAccountId
+      ? source.folksAccountId
+      : null
+  const explicitLoanId =
+    typeof source?.folksLoanId === "string" && source.folksLoanId
+      ? source.folksLoanId
+      : null
 
-    requestedTotal += requestedUnits
-    if (remaining === 0n) {
-      cappedLegCount += 1
-      continue
-    }
-
-    const plannedUnits = requestedUnits <= remaining ? requestedUnits : remaining
-    remaining -= plannedUnits
-    plannedTotal += plannedUnits
-    if (plannedUnits < requestedUnits) {
-      cappedLegCount += 1
-    }
-
-    normalized.push({
-      ...deposit,
-      amountUSDC: formatUsdcUnits(plannedUnits),
-    })
-  }
+  // Creation paths must default to canonical IDs. Explicit IDs are considered
+  // later only when on-chain checks prove they already exist.
+  const accountId = canonicalAccountId
+  const loanId =
+    explicitLoanId &&
+    explicitAccountId &&
+    explicitAccountId.toLowerCase() === canonicalAccountId.toLowerCase()
+      ? explicitLoanId
+      : buildFolksLoanId(accountId, loanNonce)
 
   return {
-    deposits: normalized,
-    requestedTotal,
-    plannedTotal,
-    remainingUnits: remaining,
-    cappedLegCount,
+    folksAccountId: explicitAccountId,
+    folksLoanId: explicitLoanId,
+    explicitAccountId,
+    explicitLoanId,
+    accountId,
+    loanId,
+    accountNonce,
+    loanNonce,
+    accountNonceInt,
+    loanNonceInt,
+    canonicalAccountId,
+    legacyAccountId,
+    chainId,
+    poolId,
+    loanTypeId,
   }
 }
 
-async function estimateErc4626WithdrawalAssets(execPublicClient, vaultAddress, shareBalance) {
-  const shares = BigInt(shareBalance)
-  if (shares <= 0n) {
+async function readFolksLoanFTokenBalance(publicClient, loanManager, loanId, poolId) {
+  const userLoan = await publicClient.readContract({
+    address: loanManager,
+    abi: FOLKS_LOAN_MANAGER_READ_ABI,
+    functionName: "getUserLoan",
+    args: [loanId],
+  })
+
+  const colPools = Array.isArray(userLoan?.[2]) ? userLoan[2] : []
+  const collaterals = Array.isArray(userLoan?.[4]) ? userLoan[4] : []
+  for (let idx = 0; idx < colPools.length; idx += 1) {
+    if (Number(colPools[idx]) !== Number(poolId)) continue
+    const collateral = collaterals[idx]
+    if (Array.isArray(collateral) && collateral.length > 0) {
+      return BigInt(collateral[0] || 0n)
+    }
+    if (collateral && typeof collateral === "object" && "balance" in collateral) {
+      return BigInt(collateral.balance || 0n)
+    }
+    return 0n
+  }
+
+  return 0n
+}
+
+async function resolveFolksActiveRouting(publicClient, contracts, smartAccountAddress, source = {}) {
+  const accountManager = contracts.FOLKS_ACCOUNT_MANAGER
+  const loanManager = contracts.FOLKS_LOAN_MANAGER
+  if (!loanManager || loanManager === zeroAddress) {
+    return null
+  }
+
+  const base = resolveFolksRoutingData(source, contracts, smartAccountAddress)
+  const accountScanMax = Math.max(parsePositiveInt(contracts.FOLKS_ACCOUNT_NONCE_SCAN_MAX, 128), 128)
+  const loanScanMax = Math.max(parsePositiveInt(contracts.FOLKS_LOAN_NONCE_SCAN_MAX, 8), 4)
+  const accountNonceCandidates = buildFolksNonceCandidates(
+    base.accountNonceInt,
+    accountScanMax,
+  )
+  const loanNonceCandidates = buildFolksNonceCandidates(
+    base.loanNonceInt,
+    loanScanMax,
+  )
+
+  const accountCandidates = []
+  const seenAccountIds = new Set()
+  const pushAccountCandidate = (accountId, accountNonceInt, kind) => {
+    if (!accountId || seenAccountIds.has(accountId.toLowerCase())) return
+    seenAccountIds.add(accountId.toLowerCase())
+    accountCandidates.push({ accountId, accountNonceInt, kind })
+  }
+
+  if (source?.folksAccountId) {
+    pushAccountCandidate(source.folksAccountId, base.accountNonceInt, "explicit")
+  }
+
+  if (accountManager && accountManager !== zeroAddress) {
+    try {
+      const registeredAccountId = await publicClient.readContract({
+        address: accountManager,
+        abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+        functionName: "getAccountIdOfAddressOnChain",
+        args: [pad(smartAccountAddress, { size: 32 }), base.chainId],
+      })
+      if (!isZeroBytes32(registeredAccountId)) {
+        pushAccountCandidate(registeredAccountId, base.accountNonceInt, "registered")
+      }
+    } catch {
+      // Ignore and continue with deterministic candidates.
+    }
+  }
+
+  for (const accountNonceInt of accountNonceCandidates) {
+    const accountNonceHex = normalizeFolksNonce(accountNonceInt, base.accountNonceInt)
+    pushAccountCandidate(
+      buildFolksAccountIdCanonical(smartAccountAddress, base.chainId, accountNonceHex),
+      accountNonceInt,
+      "canonical",
+    )
+    pushAccountCandidate(
+      buildFolksAccountIdLegacy(smartAccountAddress, base.chainId, accountNonceHex),
+      accountNonceInt,
+      "legacy",
+    )
+  }
+
+  const accountCreatedCache = new Map()
+  let fallbackAccountRoute = null
+  let fallbackActiveRoute = null
+
+  for (const accountCandidate of accountCandidates) {
+    let accountCreated = true
+    if (accountManager && accountManager !== zeroAddress && accountCandidate.kind !== "registered") {
+      const cacheKey = accountCandidate.accountId.toLowerCase()
+      if (accountCreatedCache.has(cacheKey)) {
+        accountCreated = accountCreatedCache.get(cacheKey)
+      } else {
+        try {
+          accountCreated = Boolean(await publicClient.readContract({
+            address: accountManager,
+            abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+            functionName: "isAccountCreated",
+            args: [accountCandidate.accountId],
+          }))
+        } catch {
+          accountCreated = false
+        }
+        accountCreatedCache.set(cacheKey, accountCreated)
+      }
+    }
+
+    if (!accountCreated) continue
+
+    if (!fallbackAccountRoute) {
+      fallbackAccountRoute = {
+        ...base,
+        accountId: accountCandidate.accountId,
+        accountNonce: normalizeFolksNonce(accountCandidate.accountNonceInt, base.accountNonceInt),
+        accountNonceInt: accountCandidate.accountNonceInt,
+        loanNonce: normalizeFolksNonce(base.loanNonceInt, base.loanNonceInt),
+        loanNonceInt: base.loanNonceInt,
+        loanId: buildFolksLoanId(
+          accountCandidate.accountId,
+          normalizeFolksNonce(base.loanNonceInt, base.loanNonceInt),
+        ),
+        accountCreated: true,
+        loanActive: false,
+        fTokenBalance: 0n,
+      }
+    }
+
+    for (const loanNonceInt of loanNonceCandidates) {
+      const loanNonceHex = normalizeFolksNonce(loanNonceInt, base.loanNonceInt)
+      const loanId =
+        source?.folksLoanId && source?.folksAccountId && source.folksAccountId.toLowerCase() === accountCandidate.accountId.toLowerCase()
+          ? source.folksLoanId
+          : buildFolksLoanId(accountCandidate.accountId, loanNonceHex)
+
+      let loanActive = false
+      try {
+        loanActive = Boolean(await publicClient.readContract({
+          address: loanManager,
+          abi: FOLKS_LOAN_MANAGER_READ_ABI,
+          functionName: "isUserLoanActive",
+          args: [loanId],
+        }))
+      } catch {
+        loanActive = false
+      }
+      if (!loanActive) continue
+
+      let fTokenBalance = 0n
+      try {
+        fTokenBalance = await readFolksLoanFTokenBalance(
+          publicClient,
+          loanManager,
+          loanId,
+          base.poolId,
+        )
+      } catch {
+        fTokenBalance = 0n
+      }
+
+      const route = {
+        ...base,
+        accountId: accountCandidate.accountId,
+        accountNonce: normalizeFolksNonce(accountCandidate.accountNonceInt, base.accountNonceInt),
+        accountNonceInt: accountCandidate.accountNonceInt,
+        loanId,
+        loanNonce: loanNonceHex,
+        loanNonceInt,
+        accountCreated: true,
+        loanActive: true,
+        fTokenBalance,
+      }
+
+      if (fTokenBalance > 0n) {
+        return route
+      }
+      if (!fallbackActiveRoute) {
+        fallbackActiveRoute = route
+      }
+    }
+  }
+
+  return fallbackActiveRoute || fallbackAccountRoute
+}
+
+async function readFolksUnderlyingBalance(publicClient, contracts, smartAccountAddress, source = {}) {
+  const hubPool = contracts.FOLKS_USDC_HUB_POOL
+  if (!hubPool || hubPool === zeroAddress) {
     return 0n
   }
 
   try {
-    const preview = await execPublicClient.readContract({
-      address: vaultAddress,
-      abi: ERC4626_ABI,
-      functionName: "previewRedeem",
-      args: [shares],
-    })
-    return preview > 0n ? preview : 0n
-  } catch {
-    // Fallback to convertToAssets for vaults that do not expose previewRedeem.
-    try {
-      const converted = await execPublicClient.readContract({
-        address: vaultAddress,
-        abi: ERC4626_ABI,
-        functionName: "convertToAssets",
-        args: [shares],
+    const activeRoute = await resolveFolksActiveRouting(
+      publicClient,
+      contracts,
+      smartAccountAddress,
+      source,
+    )
+
+    let shareBalance = BigInt(activeRoute?.fTokenBalance || 0n)
+    if (shareBalance <= 0n) {
+      const walletShares = await publicClient.readContract({
+        address: hubPool,
+        abi: FOLKS_HUB_POOL_READ_ABI,
+        functionName: "balanceOf",
+        args: [smartAccountAddress],
       })
-      return converted > 0n ? converted : 0n
-    } catch {
+      shareBalance = BigInt(walletShares || 0n)
+    }
+    if (shareBalance <= 0n) {
       return 0n
     }
+
+    const [totalSupply, depositData] = await Promise.all([
+      publicClient.readContract({
+        address: hubPool,
+        abi: FOLKS_HUB_POOL_READ_ABI,
+        functionName: "totalSupply",
+      }),
+      publicClient.readContract({
+        address: hubPool,
+        abi: FOLKS_HUB_POOL_READ_ABI,
+        functionName: "getDepositData",
+      }),
+    ])
+
+    const totalShareSupply = BigInt(totalSupply || 0n)
+    const totalDeposits = BigInt((Array.isArray(depositData) ? depositData[1] : 0n) || 0n)
+    if (shareBalance <= 0n || totalShareSupply <= 0n || totalDeposits <= 0n) {
+      return 0n
+    }
+    return (shareBalance * totalDeposits) / totalShareSupply
+  } catch (err) {
+    console.log(JSON.stringify({
+      level: "warn",
+      action: "folks_balance_read_failed",
+      smartAccountAddress,
+      error: err?.message?.slice(0, 220),
+      timestamp: new Date().toISOString(),
+    }))
+    return 0n
   }
 }
 
-async function estimateProjectedWithdrawalUsdc({
-  execPublicClient,
-  smartAccountAddress,
-  withdrawals,
+async function resolveFolksDepositMode(
+  publicClient,
   contracts,
-}) {
-  let projectedUnits = 0n
-  const erc4626VaultByProtocol = {
-    spark: contracts.SPARK_VAULT,
-    euler_v2: contracts.EULER_VAULT,
-    silo_savusd_usdc: contracts.SILO_SAVUSD_VAULT,
-    silo_susdp_usdc: contracts.SILO_SUSDP_VAULT,
+  smartAccountAddress,
+  rawMode,
+  folksRoutingData,
+) {
+  const mode = String(rawMode || "").trim().toLowerCase()
+  if (mode === "deposit") return "deposit"
+
+  const folks = folksRoutingData || resolveFolksRoutingData({}, contracts, smartAccountAddress)
+  const discoveredRoute = await resolveFolksActiveRouting(
+    publicClient,
+    contracts,
+    smartAccountAddress,
+    folks,
+  )
+  if (discoveredRoute?.accountCreated) {
+    Object.assign(folks, discoveredRoute)
+  }
+  if (discoveredRoute?.loanActive) {
+    return "deposit"
   }
 
-  for (const withdrawal of withdrawals || []) {
-    const protocol = String(withdrawal?.protocol || "")
-    const amountUSDC = withdrawal?.amountUSDC
+  const accountManager = contracts.FOLKS_ACCOUNT_MANAGER
+  const loanManager = contracts.FOLKS_LOAN_MANAGER
+  if (
+    accountManager &&
+    loanManager &&
+    accountManager !== zeroAddress &&
+    loanManager !== zeroAddress
+  ) {
+    try {
+      const accountIdsToCheck = [folks.accountId]
+      if (
+        folks.explicitAccountId &&
+        folks.explicitAccountId.toLowerCase() !== folks.accountId.toLowerCase()
+      ) {
+        accountIdsToCheck.push(folks.explicitAccountId)
+      }
+      if (
+        folks.legacyAccountId &&
+        folks.legacyAccountId.toLowerCase() !== folks.accountId.toLowerCase() &&
+        folks.legacyAccountId.toLowerCase() !== String(folks.explicitAccountId || "").toLowerCase()
+      ) {
+        accountIdsToCheck.push(folks.legacyAccountId)
+      }
 
-    if (amountUSDC && amountUSDC !== "MAX") {
-      projectedUnits += parseUsdcUnits(amountUSDC, `withdrawals.${protocol}.amountUSDC`)
-      continue
-    }
+      const accountCreatedFlags = await Promise.all(accountIdsToCheck.map((accountId) =>
+        publicClient.readContract({
+          address: accountManager,
+          abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+          functionName: "isAccountCreated",
+          args: [accountId],
+        })
+      ))
 
-    const vaultAddress = erc4626VaultByProtocol[protocol]
-    if (amountUSDC === "MAX" && vaultAddress && withdrawal?.shareBalance) {
-      const estimated = await estimateErc4626WithdrawalAssets(
-        execPublicClient,
-        vaultAddress,
-        withdrawal.shareBalance,
+      const primaryAccountCreated = Boolean(accountCreatedFlags[0])
+      const explicitAccountCreated = Boolean(
+        folks.explicitAccountId && accountIdsToCheck[1]?.toLowerCase() === folks.explicitAccountId.toLowerCase()
+          ? accountCreatedFlags[1]
+          : false,
       )
-      projectedUnits += estimated
-      continue
-    }
+      const legacyIndex = accountIdsToCheck.findIndex(
+        (accountId) => accountId.toLowerCase() === String(folks.legacyAccountId || "").toLowerCase(),
+      )
+      const legacyAccountCreated = legacyIndex >= 0 ? Boolean(accountCreatedFlags[legacyIndex]) : false
 
-    if (amountUSDC === "MAX") {
+      if (!primaryAccountCreated && explicitAccountCreated) {
+        folks.accountId = folks.explicitAccountId
+        folks.loanId = buildFolksLoanId(folks.accountId, folks.loanNonce)
+      } else if (!primaryAccountCreated && legacyAccountCreated) {
+        folks.accountId = folks.legacyAccountId
+        folks.loanId = buildFolksLoanId(folks.accountId, folks.loanNonce)
+      }
+
+      const [accountCreated, loanActive] = await Promise.all([
+        publicClient.readContract({
+          address: accountManager,
+          abi: FOLKS_ACCOUNT_MANAGER_READ_ABI,
+          functionName: "isAccountCreated",
+          args: [folks.accountId],
+        }),
+        publicClient.readContract({
+          address: loanManager,
+          abi: FOLKS_LOAN_MANAGER_READ_ABI,
+          functionName: "isUserLoanActive",
+          args: [folks.loanId],
+        }),
+      ])
+
+      if (accountCreated && loanActive) {
+        return "deposit"
+      }
+      if (accountCreated) {
+        return "create_loan"
+      }
+      return "create"
+    } catch (err) {
       console.log(JSON.stringify({
         level: "warn",
-        action: "projected_withdrawal_unknown_max_amount",
+        action: "folks_mode_state_check_failed",
         smartAccountAddress,
-        protocol,
-        detail: "Unable to pre-estimate MAX withdrawal amount for this protocol; using conservative zero estimate",
+        accountId: folks.accountId,
+        loanId: folks.loanId,
+        error: err?.message?.slice(0, 220),
         timestamp: new Date().toISOString(),
       }))
     }
   }
 
-  return projectedUnits
+  if (mode === "create" || mode === "initialize" || mode === "create_loan_and_deposit") {
+    return "create"
+  }
+
+  const hubPool = contracts.FOLKS_USDC_HUB_POOL
+  if (!hubPool || hubPool === zeroAddress) {
+    return "create"
+  }
+
+  try {
+    const shareBalance = await publicClient.readContract({
+      address: hubPool,
+      abi: FOLKS_HUB_POOL_READ_ABI,
+      functionName: "balanceOf",
+      args: [smartAccountAddress],
+    })
+    return BigInt(shareBalance || 0n) > 0n ? "deposit" : "create"
+  } catch {
+    return "create"
+  }
 }
 
 function resolveContractKey(protocol, contracts) {
@@ -1003,6 +1829,8 @@ function resolveContractKey(protocol, contracts) {
     euler_v2: "EULER_VAULT",
     silo_savusd_usdc: "SILO_SAVUSD_VAULT",
     silo_susdp_usdc: "SILO_SUSDP_VAULT",
+    silo_gami_usdc: "SILO_GAMI_USDC_VAULT",
+    folks: "FOLKS_SPOKE_USDC",
   }
   return contracts[map[protocol]] || null
 }
@@ -1264,7 +2092,14 @@ export async function executeRebalance({
   }
   const calls = []
 
-  for (const { protocol, amountUSDC, qiTokenAmount, shareBalance } of withdrawals) {
+  for (const withdrawal of withdrawals) {
+    const {
+      protocol,
+      amountUSDC,
+      qiTokenAmount,
+      shareBalance,
+      fallbackAmountUSDC,
+    } = withdrawal
     if (protocol === "aave_v3" || protocol === "aave") {
       calls.push({
         to: contracts.AAVE_POOL,
@@ -1286,17 +2121,105 @@ export async function executeRebalance({
         data: encodeFunctionData({ abi: BENQI_ABI, functionName: "redeem", args: [BigInt(qiTokenAmount)] }),
       })
     } else if (protocol === "spark" && contracts.SPARK_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SPARK_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SPARK_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SPARK_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SPARK_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.EULER_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.EULER_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.EULER_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.EULER_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SAVUSD_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SILO_SAVUSD_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SILO_SAVUSD_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SILO_SAVUSD_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
     } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
-      await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
-      calls.push(buildErc4626Withdrawal(contracts.SILO_SUSDP_VAULT, amountUSDC, shareBalance, smartAccountAddress))
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SILO_SUSDP_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SILO_SUSDP_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
+    } else if (protocol === "silo_gami_usdc" && contracts.SILO_GAMI_USDC_VAULT) {
+      const guard = await verifyVaultShareBalance(execPublicClient, contracts.SILO_GAMI_USDC_VAULT, smartAccountAddress, protocol)
+      const resolvedShareBalance = guard?.shareBalance ?? (shareBalance != null ? BigInt(shareBalance) : null)
+      calls.push(buildErc4626Withdrawal(
+        contracts.SILO_GAMI_USDC_VAULT,
+        amountUSDC,
+        resolvedShareBalance,
+        smartAccountAddress,
+        guard?.maxWithdrawRaw ?? null,
+        protocol,
+      ))
+    } else if (protocol === "folks" && contracts.FOLKS_SPOKE_COMMON) {
+      let folks = resolveFolksRoutingData(withdrawal, contracts, smartAccountAddress)
+      const discoveredFolks = await resolveFolksActiveRouting(
+        execPublicClient,
+        contracts,
+        smartAccountAddress,
+        withdrawal,
+      )
+      if (discoveredFolks) {
+        folks = { ...folks, ...discoveredFolks }
+      }
+
+      let withdrawAmountRaw = 0n
+      if (amountUSDC === "MAX") {
+        withdrawAmountRaw = await readFolksUnderlyingBalance(
+          execPublicClient,
+          contracts,
+          smartAccountAddress,
+          folks,
+        )
+        if (withdrawAmountRaw <= 0n && fallbackAmountUSDC != null) {
+          withdrawAmountRaw = parseUnits(String(fallbackAmountUSDC), 6)
+        }
+      } else {
+        withdrawAmountRaw = parseUnits(String(amountUSDC), 6)
+      }
+      if (withdrawAmountRaw > 0n) {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_COMMON,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_COMMON_ABI,
+            functionName: "withdraw",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanId,
+              folks.poolId,
+              folks.chainId,
+              withdrawAmountRaw,
+              false,
+            ],
+          }),
+        })
+      }
     }
   }
 
@@ -1427,7 +2350,30 @@ export async function executeRebalance({
   // The Registry can be called in a SEPARATE, non-critical transaction later
   // if on-chain audit logging is needed.
 
-  const baseCallCount = calls.length
+  let effectiveDeposits = deposits
+  if ((!withdrawals || withdrawals.length === 0) && deposits.length > 0) {
+    effectiveDeposits = await clampDepositOnlyAmountsToBalance({
+      publicClient: execPublicClient,
+      contracts,
+      smartAccountAddress,
+      deposits,
+    })
+
+    if (effectiveDeposits.length === 0) {
+      throw new Error("No executable deposits after balance clamp")
+    }
+  }
+
+  // Approve exact amounts per protocol — never use infinite approvals.
+  // Aggregate deposits per protocol, then approve-to-zero + approve exact sum.
+  const depositAmountsPerProtocol = new Map()
+  for (const { protocol, amountUSDC } of effectiveDeposits) {
+    const prev = depositAmountsPerProtocol.get(protocol) || 0n
+    depositAmountsPerProtocol.set(protocol, prev + parseUnits(String(amountUSDC), 6))
+  }
+  for (const [protocol, totalAmount] of depositAmountsPerProtocol) {
+    const spender = resolveContractKey(protocol, contracts)
+    if (!spender) continue
 
   const rebuildDepositAndApprovalCalls = () => {
     // Keep withdrawals + transfers untouched, then rebuild mutable deposit tail.
@@ -1562,7 +2508,151 @@ export async function executeRebalance({
     }
   }
 
-  rebuildDepositAndApprovalCalls()
+  for (const depositEntry of effectiveDeposits) {
+    const { protocol, amountUSDC } = depositEntry
+    const amount = parseUnits(String(amountUSDC), 6)
+    if (protocol === "aave_v3" || protocol === "aave") {
+      calls.push({
+        to: contracts.AAVE_POOL,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: AAVE_ABI,
+          functionName: "supply",
+          args: [contracts.USDC, amount, smartAccountAddress, 0],
+        }),
+      })
+    } else if (protocol === "benqi") {
+      calls.push({
+        to: contracts.BENQI_POOL,
+        value: 0n,
+        data: encodeFunctionData({ abi: BENQI_ABI, functionName: "mint", args: [amount] }),
+      })
+    } else if (protocol === "spark" && contracts.SPARK_VAULT) {
+      calls.push({
+        to: contracts.SPARK_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "euler_v2" && contracts.EULER_VAULT) {
+      calls.push({
+        to: contracts.EULER_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "silo_savusd_usdc" && contracts.SILO_SAVUSD_VAULT) {
+      calls.push({
+        to: contracts.SILO_SAVUSD_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "silo_susdp_usdc" && contracts.SILO_SUSDP_VAULT) {
+      calls.push({
+        to: contracts.SILO_SUSDP_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "silo_gami_usdc" && contracts.SILO_GAMI_USDC_VAULT) {
+      calls.push({
+        to: contracts.SILO_GAMI_USDC_VAULT,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: ERC4626_ABI,
+          functionName: "deposit",
+          args: [amount, smartAccountAddress],
+        }),
+      })
+    } else if (protocol === "folks" && contracts.FOLKS_SPOKE_USDC && contracts.FOLKS_SPOKE_COMMON) {
+      const folks = resolveFolksRoutingData(depositEntry, contracts, smartAccountAddress)
+      const mode = await resolveFolksDepositMode(
+        execPublicClient,
+        contracts,
+        smartAccountAddress,
+        depositEntry.folksMode,
+        folks,
+      )
+
+      if (mode === "create") {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_COMMON,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_COMMON_ABI,
+            functionName: "createAccount",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.accountNonce,
+              FOLKS_ZERO_BYTES32,
+            ],
+          }),
+        })
+        calls.push({
+          to: contracts.FOLKS_SPOKE_USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_USDC_ABI,
+            functionName: "createLoanAndDeposit",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanNonce,
+              amount,
+              folks.loanTypeId,
+              FOLKS_DEFAULT_LOAN_NAME,
+            ],
+          }),
+        })
+      } else if (mode === "create_loan") {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_USDC_ABI,
+            functionName: "createLoanAndDeposit",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanNonce,
+              amount,
+              folks.loanTypeId,
+              FOLKS_DEFAULT_LOAN_NAME,
+            ],
+          }),
+        })
+      } else {
+        calls.push({
+          to: contracts.FOLKS_SPOKE_USDC,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: FOLKS_SPOKE_USDC_ABI,
+            functionName: "deposit",
+            args: [
+              buildFolksMessageParams(),
+              folks.accountId,
+              folks.loanId,
+              amount,
+            ],
+          }),
+        })
+      }
+    }
+  }
 
   if (!calls.length) {
     throw new Error("No executable calls generated for rebalance")
@@ -1606,6 +2696,10 @@ export async function executeRebalance({
     "0xa0712d68": "mint(uint256)",
     "0xdb006a75": "benqiRedeem(uint256)",
     "0x87517c45": "permit2Approve(address,address,uint160,uint48)",
+    "0x8557c1a8": "folksCreateAccount((uint16,uint16,uint256,uint256,uint256),bytes32,bytes4,bytes32)",
+    "0x65cf003c": "folksWithdraw((uint16,uint16,uint256,uint256,uint256),bytes32,bytes32,uint8,uint16,uint256,bool)",
+    "0x5fd60a5b": "folksCreateLoanAndDeposit((uint16,uint16,uint256,uint256,uint256),bytes32,bytes4,uint256,uint16,bytes32)",
+    "0x5eabd9c7": "folksDeposit((uint16,uint16,uint256,uint256,uint256),bytes32,bytes32,uint256)",
   }
   const callDetails = calls.map((c, i) => ({
     index: i,
@@ -2104,6 +3198,12 @@ export async function executeRebalance({
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
+    await waitForConfirmedSuccess(
+      execPublicClient,
+      txHash,
+      smartAccountAddress,
+      useEnableModeFirst ? "primary_enable_mode" : "primary_regular_mode",
+    )
 
     // If enable mode was used (first-ever execution), the permission is now
     // registered on-chain. Log success so we know future attempts can skip enable.
@@ -2193,12 +3293,18 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: retryClient } = await getKernelClient(
+        const { client: retryClient, publicClient: retryPublicClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
           { withPaymaster: true, forceRegularMode: retryForceRegular },
         )
         const retryTxHash = await retryClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          retryPublicClient,
+          retryTxHash,
+          smartAccountAddress,
+          `permission_mode_retry_${retryForceRegular ? "regular" : "enable"}`,
+        )
         console.log(JSON.stringify({
           level: "info", action: "permission_mode_retry_succeeded",
           smartAccountAddress, txHash: retryTxHash,
@@ -2348,12 +3454,18 @@ export async function executeRebalance({
           timestamp: new Date().toISOString(),
         }))
         try {
-          const { client: noPaymasterClient } = await getKernelClient(
+          const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(
             serializedPermission,
             sessionPrivateKey || "",
             { withPaymaster: false, forceRegularMode: noPaymasterForceRegular },
           )
           const noPaymasterTxHash = await noPaymasterClient.sendTransaction({ calls })
+          await waitForConfirmedSuccess(
+            noPaymasterPublicClient,
+            noPaymasterTxHash,
+            smartAccountAddress,
+            `no_paymaster_retry_${noPaymasterForceRegular ? "regular" : "enable"}`,
+          )
           console.log(JSON.stringify({
             level: "info", action: "no_paymaster_retry_succeeded",
             smartAccountAddress, txHash: noPaymasterTxHash,
@@ -2388,8 +3500,14 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "paymaster_error_retry",
+        )
         return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
       } catch (paymasterRetryErr) {
         throw new Error(
@@ -2407,8 +3525,14 @@ export async function executeRebalance({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "validate_user_op_retry",
+        )
         return { txHash, explorerUrl: `${EXPLORER_BASE}/tx/${txHash}` }
       } catch (retryErr) {
         // Both attempts failed — throw the ORIGINAL error with more context
@@ -2436,6 +3560,298 @@ export async function executeRebalance({
       causeCauseDetails: err?.cause?.cause?.details?.slice(0, 300),
       timestamp: new Date().toISOString(),
     }))
+    throw new Error(formatExecutionError(err))
+  }
+}
+
+export async function executeFolksRecovery({
+  serializedPermission,
+  sessionPrivateKey,
+  smartAccountAddress,
+  contracts,
+  recoveries,
+}) {
+  if (!ZERODEV_ID) {
+    throw new Error("ZERODEV_PROJECT_ID is missing in execution service environment")
+  }
+
+  if (!contracts?.FOLKS_MESSAGE_MANAGER || contracts.FOLKS_MESSAGE_MANAGER === zeroAddress) {
+    throw new Error("FOLKS_MESSAGE_MANAGER is required for Folks recovery")
+  }
+  if (!Array.isArray(recoveries) || recoveries.length === 0) {
+    throw new Error("recoveries must include at least one failed message")
+  }
+
+  let blobHasEnableSig = false
+  try {
+    const decoded = JSON.parse(Buffer.from(serializedPermission, "base64").toString("utf-8"))
+    blobHasEnableSig = !!decoded.enableSignature && decoded.enableSignature.length > 2
+  } catch {
+    // Ignore parse errors; getKernelClient will fail with a clearer message.
+  }
+
+  const useEnableFirst = blobHasEnableSig
+  const { client: kernelClient, publicClient: recoveryPublicClient, permissionAccountAddress } = await getKernelClient(
+    serializedPermission,
+    sessionPrivateKey || "",
+    { withPaymaster: true, forceRegularMode: !useEnableFirst },
+  )
+
+  if (permissionAccountAddress.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+    throw new Error(
+      `Session key/account mismatch: permissionAccount=${permissionAccountAddress} sender=${smartAccountAddress}`,
+    )
+  }
+
+  const normalizedSmart = smartAccountAddress.toLowerCase().replace(/^0x/, "")
+  const smartMarker = normalizedSmart.padStart(64, "0")
+  const expectedHub = contracts.FOLKS_HUB ? String(contracts.FOLKS_HUB).toLowerCase() : null
+  const messageManager = String(contracts.FOLKS_MESSAGE_MANAGER).toLowerCase()
+
+  const sourceMap = new Map()
+  if (contracts.FOLKS_SPOKE_COMMON && contracts.FOLKS_SPOKE_COMMON !== zeroAddress) {
+    sourceMap.set(String(contracts.FOLKS_SPOKE_COMMON).toLowerCase(), {
+      address: contracts.FOLKS_SPOKE_COMMON,
+      abi: FOLKS_SPOKE_COMMON_ABI,
+    })
+  }
+  if (contracts.FOLKS_SPOKE_USDC && contracts.FOLKS_SPOKE_USDC !== zeroAddress) {
+    sourceMap.set(String(contracts.FOLKS_SPOKE_USDC).toLowerCase(), {
+      address: contracts.FOLKS_SPOKE_USDC,
+      abi: FOLKS_SPOKE_USDC_ABI,
+    })
+  }
+  if (sourceMap.size === 0) {
+    throw new Error("FOLKS_SPOKE_COMMON or FOLKS_SPOKE_USDC must be configured")
+  }
+
+  const calls = []
+  const verifiedMessages = []
+  const seenKeys = new Set()
+
+  for (const rawRecovery of recoveries) {
+    const txHash = String(rawRecovery?.txHash || "").trim().toLowerCase()
+    const messageId = String(rawRecovery?.messageId || "").trim().toLowerCase()
+    const action = normalizeRecoveryAction(rawRecovery?.action)
+
+    if (!(txHash.startsWith("0x") && txHash.length === 66)) {
+      throw new Error(`Invalid recovery txHash: ${txHash}`)
+    }
+    if (!(messageId.startsWith("0x") && messageId.length === 66)) {
+      throw new Error(`Invalid recovery messageId: ${messageId}`)
+    }
+
+    const dedupeKey = `${txHash}:${messageId}:${action}`
+    if (seenKeys.has(dedupeKey)) {
+      throw new Error(`Duplicate recovery entry: ${dedupeKey}`)
+    }
+    seenKeys.add(dedupeKey)
+
+    const receipt = await recoveryPublicClient.getTransactionReceipt({ hash: txHash })
+    let matched = null
+
+    for (const log of receipt.logs || []) {
+      if (String(log?.address || "").toLowerCase() !== messageManager) {
+        continue
+      }
+
+      try {
+        const decoded = decodeEventLog({
+          abi: [FOLKS_MESSAGE_FAILED_EVENT_ABI],
+          data: log.data,
+          topics: log.topics,
+        })
+        if (decoded?.eventName !== "MessageFailed") {
+          continue
+        }
+        const decodedMessageId = String(decoded.args?.messageId || "").toLowerCase()
+        if (decodedMessageId !== messageId) {
+          continue
+        }
+        matched = decoded.args
+        break
+      } catch {
+        // Keep scanning logs for the requested messageId.
+      }
+    }
+
+    if (!matched) {
+      throw new Error(`MessageFailed event not found for tx=${txHash} messageId=${messageId}`)
+    }
+
+    const adapterId = Number(matched.adapterId)
+    if (!Number.isInteger(adapterId) || adapterId < 0 || adapterId > 65535) {
+      throw new Error(`Invalid adapterId for message ${messageId}`)
+    }
+
+    const sourceAddress = bytes32ToAddress(matched.message.sourceAddress)
+    const handlerAddress = bytes32ToAddress(matched.message.handler)
+    const source = sourceMap.get(sourceAddress.toLowerCase())
+    if (!source) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: unsupported source address ${sourceAddress}`,
+      )
+    }
+    if (expectedHub && handlerAddress.toLowerCase() !== expectedHub) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: unexpected handler ${handlerAddress}`,
+      )
+    }
+
+    const payloadHex = String(matched.message.payload || "0x").toLowerCase().replace(/^0x/, "")
+    if (!payloadHex.includes(smartMarker)) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: payload does not reference smart account ${smartAccountAddress}`,
+      )
+    }
+
+    const [seenOnchain, failedHash] = await Promise.all([
+      recoveryPublicClient.readContract({
+        address: contracts.FOLKS_MESSAGE_MANAGER,
+        abi: FOLKS_MESSAGE_MANAGER_ABI,
+        functionName: "seenMessages",
+        args: [adapterId, messageId],
+      }),
+      recoveryPublicClient.readContract({
+        address: contracts.FOLKS_MESSAGE_MANAGER,
+        abi: FOLKS_MESSAGE_MANAGER_ABI,
+        functionName: "failedMessages",
+        args: [adapterId, messageId],
+      }),
+    ])
+
+    const failedHashNormalized = String(failedHash || "").toLowerCase()
+    const eventHashNormalized = String(matched.messageHash || "").toLowerCase()
+    if (!seenOnchain) {
+      throw new Error(`Rejected recovery for ${messageId}: message is not marked as seen on-chain`)
+    }
+    if (failedHashNormalized === FOLKS_ZERO_BYTES32.toLowerCase()) {
+      throw new Error(`Rejected recovery for ${messageId}: message is no longer in failedMessages`)
+    }
+    if (failedHashNormalized !== eventHashNormalized) {
+      throw new Error(
+        `Rejected recovery for ${messageId}: failed hash mismatch (on-chain ${failedHashNormalized}, event ${eventHashNormalized})`,
+      )
+    }
+
+    calls.push({
+      to: source.address,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: source.abi,
+        functionName: action === "retry" ? "retryMessage" : "reverseMessage",
+        args: [adapterId, messageId, matched.message, "0x"],
+      }),
+    })
+    verifiedMessages.push({ adapterId, messageId, action })
+  }
+
+  if (calls.length === 0) {
+    throw new Error("No validated Folks recovery calls were generated")
+  }
+
+  const submitAndVerify = async (client, publicClient, context) => {
+    const txHash = await client.sendTransaction({ calls })
+    await waitForConfirmedSuccess(publicClient, txHash, smartAccountAddress, context)
+
+    for (const item of verifiedMessages) {
+      const afterHash = await publicClient.readContract({
+        address: contracts.FOLKS_MESSAGE_MANAGER,
+        abi: FOLKS_MESSAGE_MANAGER_ABI,
+        functionName: "failedMessages",
+        args: [item.adapterId, item.messageId],
+      })
+      if (String(afterHash || "").toLowerCase() !== FOLKS_ZERO_BYTES32.toLowerCase()) {
+        throw new Error(
+          `Folks recovery did not clear failed message ${item.messageId} (adapter=${item.adapterId})`,
+        )
+      }
+    }
+
+    return txHash
+  }
+
+  try {
+    const txHash = await submitAndVerify(
+      kernelClient,
+      recoveryPublicClient,
+      useEnableFirst ? "folks_recovery_primary_enable_mode" : "folks_recovery_primary_regular_mode",
+    )
+    return {
+      txHash,
+      explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+      recoveredMessageIds: verifiedMessages.map((item) => item.messageId),
+      recoveredCount: verifiedMessages.length,
+    }
+  } catch (err) {
+    const allText = [err?.shortMessage, err?.message, err?.details,
+      err?.cause?.message, err?.cause?.details]
+      .filter(Boolean).join(" ").toLowerCase()
+
+    const isPermissionRelated = (
+      allText.includes("aa24") ||
+      allText.includes("signature error") ||
+      allText.includes("enablenotapproved") ||
+      allText.includes("duplicate permissionhash") ||
+      allText.includes("invalidnonce") ||
+      allText.includes("call policy") ||
+      (allText.includes("useroperation reverted") && allText.includes("simulation"))
+    )
+
+    if (isPermissionRelated) {
+      const retryForceRegular = useEnableFirst
+      try {
+        const { client: retryClient, publicClient: retryPublicClient } = await getKernelClient(
+          serializedPermission,
+          sessionPrivateKey || "",
+          { withPaymaster: true, forceRegularMode: retryForceRegular },
+        )
+        const retryTxHash = await submitAndVerify(
+          retryClient,
+          retryPublicClient,
+          `folks_recovery_permission_mode_retry_${retryForceRegular ? "regular" : "enable"}`,
+        )
+        return {
+          txHash: retryTxHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
+          recoveredMessageIds: verifiedMessages.map((item) => item.messageId),
+          recoveredCount: verifiedMessages.length,
+        }
+      } catch (retryErr) {
+        throw new Error(
+          `Folks recovery failed in both modes. ` +
+          `Primary (${useEnableFirst ? "enable" : "regular"}): ${err?.shortMessage || err?.message || "unknown"} | ` +
+          `Retry (${retryForceRegular ? "regular" : "enable"}): ${retryErr?.shortMessage || retryErr?.message || "unknown"}`,
+        )
+      }
+    }
+
+    if (isLikelyPaymasterError(err) || isValidateUserOpRevert(err)) {
+      try {
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(
+          serializedPermission,
+          sessionPrivateKey || "",
+          { withPaymaster: false, forceRegularMode: !useEnableFirst },
+        )
+        const txHash = await submitAndVerify(
+          noPaymasterClient,
+          noPaymasterPublicClient,
+          "folks_recovery_no_paymaster_retry",
+        )
+        return {
+          txHash,
+          explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
+          recoveredMessageIds: verifiedMessages.map((item) => item.messageId),
+          recoveredCount: verifiedMessages.length,
+        }
+      } catch (retryErr) {
+        throw new Error(
+          formatExecutionError(err)
+          + ` [no-paymaster retry also failed: ${retryErr?.shortMessage || retryErr?.message || "unknown"}]`,
+        )
+      }
+    }
+
     throw new Error(formatExecutionError(err))
   }
 }
@@ -2578,6 +3994,65 @@ export async function executeWithdrawal({
     })
   }
 
+  const siloGamiShareBalance = BigInt(balances?.siloGamiShareBalance || "0")
+  if (
+    contracts.SILO_GAMI_USDC_VAULT &&
+    contracts.SILO_GAMI_USDC_VAULT !== "0x0000000000000000000000000000000000000000" &&
+    siloGamiShareBalance > 0n
+  ) {
+    calls.push({
+      to: contracts.SILO_GAMI_USDC_VAULT,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: ERC4626_ABI,
+        functionName: "redeem",
+        args: [siloGamiShareBalance, smartAccountAddress, smartAccountAddress],
+      }),
+    })
+  }
+
+  if (
+    contracts.FOLKS_SPOKE_COMMON &&
+    contracts.FOLKS_SPOKE_COMMON !== "0x0000000000000000000000000000000000000000"
+  ) {
+    let folks = resolveFolksRoutingData(balances, contracts, smartAccountAddress)
+    const discoveredFolks = await resolveFolksActiveRouting(
+      wdPublicClient,
+      contracts,
+      smartAccountAddress,
+      balances,
+    )
+    if (discoveredFolks) {
+      folks = { ...folks, ...discoveredFolks }
+    }
+
+    const folksWithdrawRaw = await readFolksUnderlyingBalance(
+      wdPublicClient,
+      contracts,
+      smartAccountAddress,
+      folks,
+    )
+    if (folksWithdrawRaw > 0n) {
+      calls.push({
+        to: contracts.FOLKS_SPOKE_COMMON,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: FOLKS_SPOKE_COMMON_ABI,
+          functionName: "withdraw",
+          args: [
+            buildFolksMessageParams(),
+            folks.accountId,
+            folks.loanId,
+            folks.poolId,
+            folks.chainId,
+            folksWithdrawRaw,
+            false,
+          ],
+        }),
+      })
+    }
+  }
+
   const feeAmountRaw = BigInt(agentFeeAmount || "0")
   if (feeAmountRaw > 0n) {
     if (!contracts.TREASURY || contracts.TREASURY === "0x0000000000000000000000000000000000000000") {
@@ -2612,6 +4087,12 @@ export async function executeWithdrawal({
 
   try {
     const txHash = await kernelClient.sendTransaction({ calls })
+    await waitForConfirmedSuccess(
+      wdPublicClient,
+      txHash,
+      smartAccountAddress,
+      wdUseEnableFirst ? "withdrawal_primary_enable_mode" : "withdrawal_primary_regular_mode",
+    )
     return {
       txHash,
       explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
@@ -2655,12 +4136,18 @@ export async function executeWithdrawal({
         timestamp: new Date().toISOString(),
       }))
       try {
-        const { client: retryClient } = await getKernelClient(
+        const { client: retryClient, publicClient: retryPublicClient } = await getKernelClient(
           serializedPermission,
           sessionPrivateKey || "",
           { withPaymaster: true, forceRegularMode: wdRetryForceRegular },
         )
         const retryTxHash = await retryClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          retryPublicClient,
+          retryTxHash,
+          smartAccountAddress,
+          `withdrawal_permission_mode_retry_${wdRetryForceRegular ? "regular" : "enable"}`,
+        )
         return {
           txHash: retryTxHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${retryTxHash}`,
@@ -2689,8 +4176,14 @@ export async function executeWithdrawal({
     }
     if (isLikelyPaymasterError(err)) {
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "withdrawal_paymaster_error_retry",
+        )
         return {
           txHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,
@@ -2706,8 +4199,14 @@ export async function executeWithdrawal({
     }
     if (isValidateUserOpRevert(err)) {
       try {
-        const { client: noPaymasterClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
+        const { client: noPaymasterClient, publicClient: noPaymasterPublicClient } = await getKernelClient(serializedPermission, sessionPrivateKey || "", { withPaymaster: false })
         const txHash = await noPaymasterClient.sendTransaction({ calls })
+        await waitForConfirmedSuccess(
+          noPaymasterPublicClient,
+          txHash,
+          smartAccountAddress,
+          "withdrawal_validate_user_op_retry",
+        )
         return {
           txHash,
           explorerUrl: `${EXPLORER_BASE}/tx/${txHash}`,

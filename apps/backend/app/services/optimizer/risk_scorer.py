@@ -40,7 +40,10 @@ STATIC_SCORES: dict[str, dict[str, int]] = {
     "spark": {"oracle": 2, "collateral": 2, "architecture": 0},
     "euler_v2": {"oracle": 1, "collateral": 1, "architecture": 0},
     "silo_savusd_usdc": {"oracle": 2, "collateral": 1, "architecture": 1},
-    "silo_susdp_usdc": {"oracle": 0, "collateral": 1, "architecture": 1},
+    "silo_susdp_usdc": {"oracle": 1, "collateral": 1, "architecture": 1},
+    "silo_gami_usdc": {"oracle": 0, "collateral": 0, "architecture": 0},
+    "folks": {"oracle": 2, "collateral": 1, "architecture": 1},
+    "folks_finance_xchain": {"oracle": 2, "collateral": 1, "architecture": 1},
 }
 
 DEFAULT_STATIC_SCORES: dict[str, int] = {
@@ -185,12 +188,16 @@ class RiskScorer:
             return {}
 
         apy_samples = self.get_recent_apy_samples(db, rates.keys())
+        spark_psm_liquidity = _ZERO
+        if "spark" in rates:
+            spark_psm_liquidity = await self._read_spark_psm_liquidity_usd()
 
         out: dict[str, RiskScoreResult] = {}
         for protocol_id, rate in rates.items():
             available_liquidity = self.derive_available_liquidity(
                 protocol_id=protocol_id,
                 rate=rate,
+                spark_psm_liquidity_usd=spark_psm_liquidity,
             )
 
             static = self._get_static_scores(protocol_id)
@@ -232,13 +239,13 @@ class RiskScorer:
         Lending protocols: available = total_supplied - total_borrowed,
         where total_borrowed is derived from utilization when provided.
 
-        Spark: use TVL directly as liquidity proxy for risk scoring.
+        Spark: available = min(total_tvl, instant_buffer_10pct + psm_usdc_liquidity).
         """
-        del spark_psm_liquidity_usd
-
         tvl = max(self._to_decimal(rate.tvl_usd) or _ZERO, _ZERO)
         if protocol_id == "spark":
-            return tvl
+            instant_buffer = tvl * _SPARK_INSTANT_BUFFER_RATIO
+            psm_liquidity = max(self._to_decimal(spark_psm_liquidity_usd) or _ZERO, _ZERO)
+            return min(tvl, instant_buffer + psm_liquidity)
 
         util = self._to_decimal(rate.utilization_rate)
         if util is None:
@@ -418,6 +425,8 @@ class RiskScorer:
             return _ZERO
 
     def _get_static_scores(self, protocol_id: str) -> dict[str, int]:
+        if protocol_id in {"folks_finance_xchain", "folks_finance"}:
+            protocol_id = "folks"
         scores = STATIC_SCORES.get(protocol_id)
         if scores is None:
             logger.warning(

@@ -274,6 +274,21 @@ class ExecutionService:
                 "EULER_VAULT": settings.EULER_VAULT,
                 "SILO_SAVUSD_VAULT": settings.SILO_SAVUSD_VAULT,
                 "SILO_SUSDP_VAULT": settings.SILO_SUSDP_VAULT,
+                "SILO_GAMI_USDC_VAULT": settings.SILO_GAMI_USDC_VAULT,
+                "FOLKS_SPOKE_COMMON": settings.FOLKS_SPOKE_COMMON,
+                "FOLKS_SPOKE_USDC": settings.FOLKS_SPOKE_USDC,
+                "FOLKS_HUB": settings.FOLKS_HUB,
+                "FOLKS_MESSAGE_MANAGER": settings.FOLKS_MESSAGE_MANAGER,
+                "FOLKS_ACCOUNT_MANAGER": settings.FOLKS_ACCOUNT_MANAGER,
+                "FOLKS_LOAN_MANAGER": settings.FOLKS_LOAN_MANAGER,
+                "FOLKS_USDC_HUB_POOL": settings.FOLKS_USDC_HUB_POOL,
+                "FOLKS_HUB_CHAIN_ID": settings.FOLKS_HUB_CHAIN_ID,
+                "FOLKS_USDC_POOL_ID": settings.FOLKS_USDC_POOL_ID,
+                "FOLKS_USDC_LOAN_TYPE_ID": settings.FOLKS_USDC_LOAN_TYPE_ID,
+                "FOLKS_ACCOUNT_NONCE": settings.FOLKS_ACCOUNT_NONCE,
+                "FOLKS_LOAN_NONCE": settings.FOLKS_LOAN_NONCE,
+                "FOLKS_ACCOUNT_NONCE_SCAN_MAX": settings.FOLKS_ACCOUNT_NONCE_SCAN_MAX,
+                "FOLKS_LOAN_NONCE_SCAN_MAX": settings.FOLKS_LOAN_NONCE_SCAN_MAX,
                 "USDC": settings.USDC_ADDRESS,
                 "PERMIT2": settings.PERMIT2,
                 "REGISTRY": settings.REGISTRY_CONTRACT_ADDRESS,
@@ -295,14 +310,10 @@ class ExecutionService:
         self,
         payload: dict,
     ) -> dict:
-        smart_account_address = str(payload.get("smartAccountAddress") or "").strip()
-        if not smart_account_address:
-            raise RuntimeError("Withdrawal payload missing smartAccountAddress")
+        return await self._post("/execute/withdrawal", payload)
 
-        result = await self._post("/execute/withdrawal", payload)
-        tx_hash = str(result.get("txHash") or "").strip()
-        if not tx_hash:
-            raise RuntimeError("Execution service response missing txHash")
-        await assert_userop_execution_succeeded(tx_hash, smart_account_address)
-        result["userOpConfirmed"] = True
-        return result
+    async def execute_folks_recovery(
+        self,
+        payload: dict,
+    ) -> dict:
+        return await self._post("/execute/folks-recovery", payload)

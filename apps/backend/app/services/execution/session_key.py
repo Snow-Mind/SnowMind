@@ -50,6 +50,38 @@ _DEFAULT_ALLOWED_PROTOCOLS = [
     "silo_susdp_usdc",
 ]
 
+_SUPPORTED_ALLOWED_PROTOCOLS = [
+    *_DEFAULT_ALLOWED_PROTOCOLS,
+    "silo_gami_usdc",
+    "folks",
+]
+
+
+def _canonical_protocol_id(raw_protocol_id: object) -> str:
+    pid = str(raw_protocol_id).strip().lower()
+    if pid == "aave":
+        return "aave_v3"
+    if pid in {"folks_finance_xchain", "folks_finance"}:
+        return "folks"
+    return pid
+
+
+def _normalize_allowed_protocols(raw_protocols: object) -> list[str]:
+    if not isinstance(raw_protocols, list):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_protocols:
+        pid = _canonical_protocol_id(raw)
+        if not pid or pid not in _SUPPORTED_ALLOWED_PROTOCOLS:
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        normalized.append(pid)
+    return normalized
+
 
 def _normalize_allocation_caps(raw_caps: object) -> dict[str, int] | None:
     if not isinstance(raw_caps, dict):
@@ -57,10 +89,8 @@ def _normalize_allocation_caps(raw_caps: object) -> dict[str, int] | None:
 
     normalized: dict[str, int] = {}
     for raw_pid, raw_value in raw_caps.items():
-        pid = str(raw_pid).strip().lower()
-        if pid == "aave":
-            pid = "aave_v3"
-        if pid not in _DEFAULT_ALLOWED_PROTOCOLS:
+        pid = _canonical_protocol_id(raw_pid)
+        if pid not in _SUPPORTED_ALLOWED_PROTOCOLS:
             continue
 
         if isinstance(raw_value, bool):
@@ -445,12 +475,14 @@ def store_session_key(
         "serialized_permission": encrypted,
         "key_address": key_address,
         "expires_at": expires_at,
-        # Insert inactive first so an insert failure cannot orphan the account
-        # without an active key.
-        "is_active": False,
-        "allowed_protocols": session_key_data.get("allowed_protocols")
-            or session_key_data.get("allowedProtocols")
-            or ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"],
+        "is_active": True,
+        "allowed_protocols": (
+            _normalize_allowed_protocols(
+                session_key_data.get("allowed_protocols")
+                or session_key_data.get("allowedProtocols")
+            )
+            or list(_DEFAULT_ALLOWED_PROTOCOLS)
+        ),
         "allocation_caps": _normalize_allocation_caps(
             session_key_data.get("allocation_caps")
             if "allocation_caps" in session_key_data
@@ -592,10 +624,8 @@ def get_active_session_key_metadata(db: Client, account_id: UUID) -> dict | None
         return None
 
     raw_allowed = row.get("allowed_protocols")
-    allowed_protocols = (
-        [str(p) for p in raw_allowed]
-        if isinstance(raw_allowed, list) and raw_allowed
-        else ["aave_v3", "benqi", "spark", "euler_v2", "silo_savusd_usdc", "silo_susdp_usdc"]
+    allowed_protocols = _normalize_allowed_protocols(raw_allowed) or list(
+        _DEFAULT_ALLOWED_PROTOCOLS
     )
     allocation_caps = _normalize_allocation_caps(row.get("allocation_caps"))
 
@@ -753,11 +783,8 @@ def get_deactivated_session_key_records(
                 continue  # Legacy key without private key — unusable
 
             raw_allowed = row.get("allowed_protocols")
-            allowed_protocols = (
-                [str(p) for p in raw_allowed]
-                if isinstance(raw_allowed, list) and raw_allowed
-                else ["aave_v3", "benqi", "spark", "euler_v2",
-                      "silo_savusd_usdc", "silo_susdp_usdc"]
+            allowed_protocols = _normalize_allowed_protocols(raw_allowed) or list(
+                _DEFAULT_ALLOWED_PROTOCOLS
             )
             records.append({
                 "key_id": row["id"],

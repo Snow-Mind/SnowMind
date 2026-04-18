@@ -1,4 +1,4 @@
-import { BACKEND_URL } from "./constants";
+import { BACKEND_URL, BACKEND_URL_CANDIDATES } from "./constants";
 import type {
   GetPortfolioResponse,
   RunOptimizerResponse,
@@ -71,6 +71,10 @@ function isPublicPath(path: string): boolean {
   );
 }
 
+function isAbsoluteHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
   _getAccessToken = getter;
 }
@@ -78,6 +82,7 @@ export function setPrivyTokenGetter(getter: () => Promise<string | null>) {
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const DEFAULT_REQUEST_TIMEOUT_MS = 25_000;
 const AUTH_COOLDOWN_MS = 15_000;
 const AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS = 30_000;
 const AUTH_MISSING_TOKEN_COOLDOWN_MS = 5_000;
@@ -193,8 +198,22 @@ function parseApiErrorMessage(rawBody: string): string {
   return text;
 }
 
-async function request<T>(path: string, options?: RequestInit & { retryable?: boolean }): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit & { retryable?: boolean; timeoutMs?: number },
+): Promise<T> {
   const requiresAuth = !isPublicPath(path);
+
+  const {
+    retryable,
+    timeoutMs,
+    headers: optionHeaders,
+    ...fetchOptions
+  } = options ?? {};
+
+  const requestTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.max(1_000, Math.trunc(timeoutMs as number))
+    : DEFAULT_REQUEST_TIMEOUT_MS;
 
   if (requiresAuth && Date.now() < _authRejectedUntil) {
     throw new APIError(
@@ -246,51 +265,110 @@ async function request<T>(path: string, options?: RequestInit & { retryable?: bo
   const headers: Record<string, string> = {
     ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
     ...(requiresAuth && token && { Authorization: `Bearer ${token}` }),
-    ...(options?.headers as Record<string, string>),
+    ...(optionHeaders as Record<string, string>),
   };
 
   const isIdempotent = method === "GET" || method === "HEAD";
-  const canRetry = isIdempotent || options?.retryable === true;
+  const canRetry = isIdempotent || retryable === true;
   const maxAttempts = canRetry ? MAX_RETRIES + 1 : 1;
+  const browserSafeCandidates = typeof window !== "undefined"
+    ? BACKEND_URL_CANDIDATES.filter((entry) => !isAbsoluteHttpUrl(entry))
+    : BACKEND_URL_CANDIDATES;
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+  // Browser requests always use same-origin /api first. If any absolute URL
+  // leaks into candidates, filter it out to avoid client-side DNS failures.
+  const candidatePool = typeof window !== "undefined"
+    ? ["", ...browserSafeCandidates]
+    : browserSafeCandidates;
+
+  const backendCandidates = Array.from(
+    new Set(candidatePool.length > 0 ? candidatePool : [BACKEND_URL]),
+  );
+
+  let lastNetworkError: NetworkError | null = null;
+  for (const backendBase of backendCandidates) {
+    let lastError: Error | null = null;
+    const endpoint = `${backendBase}${path}`;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+      }
+
+      let res: Response;
+      try {
+        const abortController = new AbortController();
+        const upstreamSignal = fetchOptions.signal;
+        if (upstreamSignal) {
+          if (upstreamSignal.aborted) {
+            abortController.abort();
+          } else {
+            upstreamSignal.addEventListener("abort", () => abortController.abort(), { once: true });
+          }
+        }
+
+        const timeoutId = setTimeout(() => {
+          abortController.abort();
+        }, requestTimeoutMs);
+
+        try {
+          res = await fetch(endpoint, {
+            ...fetchOptions,
+            headers,
+            signal: abortController.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (err) {
+        const hostLabel = backendBase || "origin-relative API";
+        const errorName = err instanceof Error ? err.name : "";
+        if (errorName === "AbortError") {
+          lastError = new NetworkError(
+            `Request to ${hostLabel} timed out after ${(requestTimeoutMs / 1000).toFixed(0)}s.`,
+          );
+        } else {
+          lastError = new NetworkError(`Network request failed for ${hostLabel}.`);
+        }
+        if (!canRetry) {
+          break;
+        }
+        continue;
+      }
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          setAuthCooldown(AUTH_COOLDOWN_MS);
+        }
+        if (res.status === 429) {
+          setAuthCooldown(AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS);
+        }
+        if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
+          continue;
+        }
+        const text = await res.text().catch(() => "Unknown error");
+        const message = parseApiErrorMessage(text);
+        throw new APIError(res.status, `HTTP_${res.status}`, message);
+      }
+
+      if (requiresAuth) {
+        _authRejectedUntil = 0;
+      }
+
+      return res.json() as Promise<T>;
     }
 
-    let res: Response;
-    try {
-      res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
-    } catch {
-      lastError = new NetworkError("Network request failed. Check your connection.");
-      if (!canRetry) throw lastError;
+    if (lastError instanceof NetworkError) {
+      lastNetworkError = lastError;
       continue;
     }
 
-    if (!res.ok) {
-      if (res.status === 401) {
-        setAuthCooldown(AUTH_COOLDOWN_MS);
-      }
-      if (res.status === 429) {
-        setAuthCooldown(AUTH_PROVIDER_RATE_LIMIT_COOLDOWN_MS);
-      }
-      if (canRetry && RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts - 1) {
-        continue;
-      }
-      const text = await res.text().catch(() => "Unknown error");
-      const message = parseApiErrorMessage(text);
-      throw new APIError(res.status, `HTTP_${res.status}`, message);
+    if (lastError) {
+      throw lastError;
     }
-
-    if (requiresAuth) {
-      _authRejectedUntil = 0;
-    }
-
-    return res.json() as Promise<T>;
   }
 
-  throw lastError ?? new NetworkError("Request failed after retries.");
+  throw lastNetworkError ?? new NetworkError("Request failed after retries.");
 }
 
 // ── API client ─────────────────────────────────────────────

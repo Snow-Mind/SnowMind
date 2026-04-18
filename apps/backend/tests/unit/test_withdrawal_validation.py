@@ -11,6 +11,70 @@ Tests cover:
 import pytest
 from decimal import Decimal
 from pydantic import ValidationError
+from types import SimpleNamespace
+
+
+class _FakeAllocationsQuery:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self._rows)
+
+
+class _FakeDb:
+    def __init__(self, allocation_rows):
+        self._allocation_rows = allocation_rows
+
+    def table(self, name: str):
+        assert name == "allocations"
+        return _FakeAllocationsQuery(self._allocation_rows)
+
+
+class _FakeAdapter:
+    def __init__(self, balance_raw: int = 0, exc: Exception | None = None):
+        self._balance_raw = balance_raw
+        self._exc = exc
+
+    async def get_balance(self, _smart_account: str) -> int:
+        if self._exc is not None:
+            raise self._exc
+        return self._balance_raw
+
+
+class _FakeIdleCall:
+    def __init__(self, idle_raw: int):
+        self._idle_raw = idle_raw
+
+    async def call(self) -> int:
+        return self._idle_raw
+
+
+class _FakeIdleContract:
+    def __init__(self, idle_raw: int):
+        self._idle_raw = idle_raw
+        self.functions = self
+
+    def balanceOf(self, _address: str) -> _FakeIdleCall:
+        return _FakeIdleCall(self._idle_raw)
+
+
+class _FakeW3:
+    def __init__(self, idle_raw: int):
+        self._idle_raw = idle_raw
+        self.eth = self
+
+    def contract(self, *_args, **_kwargs) -> _FakeIdleContract:
+        return _FakeIdleContract(self._idle_raw)
+
+    def to_checksum_address(self, address: str) -> str:
+        return address
 
 
 def test_dust_amount_rejected():
@@ -221,37 +285,66 @@ def test_withdrawal_quote_guard_keeps_valid_quote_unchanged():
     assert normalized.agent_fee == Decimal("0")
 
 
-def test_conservative_erc4626_assets_prefers_preview_when_lower():
-    from app.api.routes.withdrawal import _conservative_erc4626_assets
+@pytest.mark.asyncio
+async def test_onchain_balance_ignores_non_expected_protocol_failures(monkeypatch):
+    """Protocol read failures should not block withdrawal if protocol is not allocated."""
+    from app.api.routes.withdrawal import _get_on_chain_balance
 
-    assert _conservative_erc4626_assets(808148, 808147) == 808147
-
-
-def test_conservative_erc4626_assets_falls_back_to_convert_when_preview_missing():
-    from app.api.routes.withdrawal import _conservative_erc4626_assets
-
-    assert _conservative_erc4626_assets(808148, None) == 808148
-
-
-def test_conservative_erc4626_shares_prefers_max_redeem_when_lower():
-    from app.api.routes.withdrawal import _conservative_erc4626_shares
-
-    assert _conservative_erc4626_shares(1_000_000, 900_000) == 900_000
-
-
-def test_conservative_erc4626_shares_keeps_requested_when_max_missing():
-    from app.api.routes.withdrawal import _conservative_erc4626_shares
-
-    assert _conservative_erc4626_shares(1_000_000, None) == 1_000_000
-
-
-def test_cap_benqi_redeemable_shares_limited_by_pool_cash():
-    from app.api.routes.withdrawal import _cap_benqi_redeemable_shares
-
-    # exchange rate = 2e18 => each qi redeem needs 2 underlying units
-    capped = _cap_benqi_redeemable_shares(
-        user_qi_shares=1_000,
-        cash_raw=1_500,
-        exchange_rate_raw=2 * 10**18,
+    monkeypatch.setattr(
+        "app.api.routes.withdrawal.ACTIVE_ADAPTERS",
+        {
+            "spark": _FakeAdapter(balance_raw=0),
+            "folks": _FakeAdapter(exc=RuntimeError("read failed")),
+        },
     )
-    assert capped == 750
+    monkeypatch.setattr(
+        "app.api.routes.withdrawal.get_shared_async_web3",
+        lambda: _FakeW3(idle_raw=0),
+    )
+
+    db = _FakeDb(
+        [
+            {"protocol_id": "spark", "amount_usdc": "10"},
+        ]
+    )
+
+    balance = await _get_on_chain_balance(
+        db=db,
+        account_id="test-account",
+        smart_account="0x1234567890abcdef1234567890abcdef12345678",
+    )
+    assert balance == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_onchain_balance_fails_when_expected_protocol_read_fails(monkeypatch):
+    """Protocol read failures must fail-closed when allocated protocol cannot be verified."""
+    from fastapi import HTTPException
+    from app.api.routes.withdrawal import _get_on_chain_balance
+
+    monkeypatch.setattr(
+        "app.api.routes.withdrawal.ACTIVE_ADAPTERS",
+        {
+            "folks": _FakeAdapter(exc=RuntimeError("read failed")),
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.routes.withdrawal.get_shared_async_web3",
+        lambda: _FakeW3(idle_raw=0),
+    )
+
+    db = _FakeDb(
+        [
+            {"protocol_id": "folks", "amount_usdc": "5"},
+        ]
+    )
+
+    with pytest.raises(HTTPException, match="active protocols") as exc:
+        await _get_on_chain_balance(
+            db=db,
+            account_id="test-account",
+            smart_account="0x1234567890abcdef1234567890abcdef12345678",
+        )
+
+    assert exc.value.status_code == 503
+    assert "folks" in str(exc.value.detail)

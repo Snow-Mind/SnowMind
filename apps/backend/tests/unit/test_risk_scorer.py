@@ -90,6 +90,13 @@ def test_derive_available_liquidity_lending_and_spark() -> None:
         "spark",
         spark_rate,
         spark_psm_liquidity_usd=Decimal("50"),
+    ) == Decimal("60.00")
+
+    # Spark liquidity cannot exceed total vault TVL.
+    assert scorer.derive_available_liquidity(
+        "spark",
+        spark_rate,
+        spark_psm_liquidity_usd=Decimal("5000"),
     ) == Decimal("100")
 
 

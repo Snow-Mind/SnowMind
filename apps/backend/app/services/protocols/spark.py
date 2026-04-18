@@ -458,12 +458,22 @@ class SparkAdapter(BaseProtocolAdapter):
         """Returns underlying USDC amount by converting shares → assets."""
         vault = self._get_vault_contract()
         w3 = get_web3()
-        shares = await vault.functions.balanceOf(
-            w3.to_checksum_address(user_address)
-        ).call()
+        user_checksum = w3.to_checksum_address(user_address)
+        shares = await vault.functions.balanceOf(user_checksum).call()
         if shares == 0:
             return 0
-        return await vault.functions.convertToAssets(shares).call()
+        assets = await vault.functions.convertToAssets(shares).call()
+
+        # Cap displayed balance to currently withdrawable assets when limits apply.
+        # If maxWithdraw is unreadable/zero, keep the converted balance visible.
+        try:
+            max_withdraw = await vault.functions.maxWithdraw(user_checksum).call()
+            if max_withdraw > 0 and max_withdraw < assets:
+                return max_withdraw
+        except Exception as exc:
+            logger.debug("Spark maxWithdraw read failed for %s: %s", user_address, exc)
+
+        return assets
 
     async def get_shares(self, user_address: str) -> int:
         """Returns the user's spUSDC share balance (for share-based redemption)."""

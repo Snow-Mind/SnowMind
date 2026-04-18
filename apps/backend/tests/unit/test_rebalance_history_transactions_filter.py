@@ -1,11 +1,22 @@
 """Unit tests for rebalance history transaction-only filtering."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from starlette.requests import Request
 
 from app.api.routes import rebalance
+
+
+@pytest.fixture(autouse=True)
+def _stub_tx_receipt_lookup(monkeypatch):
+    """Keep unit tests deterministic by disabling live receipt lookups."""
+    monkeypatch.setattr(
+        rebalance,
+        "_tx_receipt_succeeded",
+        AsyncMock(return_value=None),
+    )
 
 
 class _FakeRebalanceLogsQuery:
@@ -160,9 +171,7 @@ async def test_get_rebalance_history_sanitizes_legacy_rows(monkeypatch) -> None:
     )
 
     assert result.total == 2
-    assert len(result.logs) == 1
-    assert result.logs[0].status == "failed"
-    assert "Legacy rebalance status" in (result.logs[0].skip_reason or "")
+    assert len(result.logs) == 0
 
 
 @pytest.mark.asyncio
@@ -224,3 +233,125 @@ async def test_get_rebalance_history_backfills_executed_metadata(monkeypatch) ->
     assert result.logs[0].amount_moved == "1.000000"
     assert result.logs[0].from_protocol == "rebalance"
     assert result.logs[0].to_protocol == "euler_v2"
+
+
+@pytest.mark.asyncio
+async def test_get_rebalance_history_downgrades_reverted_executed_rows(monkeypatch) -> None:
+    """Executed rows with reverted tx receipts must be surfaced as failed."""
+
+    class _RevertedTxDB:
+        def __init__(self):
+            self._count_query = _FakeRebalanceLogsQuery(count=1)
+            self._rows_query = _FakeRebalanceLogsQuery(rows=[
+                {
+                    "id": "00000000-0000-0000-0000-000000000020",
+                    "status": "executed",
+                    "skip_reason": None,
+                    "from_protocol": None,
+                    "to_protocol": None,
+                    "amount_moved": None,
+                    "proposed_allocations": '{"folks":"1.0"}',
+                    "executed_allocations": None,
+                    "apr_improvement": None,
+                    "gas_cost_usd": None,
+                    "tx_hash": "0xdeadbeef",
+                    "created_at": "2026-04-01T00:00:00Z",
+                }
+            ])
+            self._table_calls = 0
+
+        def table(self, name: str):
+            assert name == "rebalance_logs"
+            self._table_calls += 1
+            return self._count_query if self._table_calls == 1 else self._rows_query
+
+    db = _RevertedTxDB()
+
+    async def _fake_lookup_account(_db, _address, _auth):
+        return {"id": "acct-reverted", "address": "0xabc"}
+
+    monkeypatch.setattr(rebalance, "_lookup_account", _fake_lookup_account)
+    monkeypatch.setattr(
+        rebalance,
+        "_tx_receipt_succeeded",
+        AsyncMock(return_value=False),
+    )
+
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/rebalance/0xabc/history",
+        "headers": [],
+    })
+
+    result = await rebalance.get_rebalance_history(
+        request=request,
+        address="0xabc",
+        db=db,
+        _auth={"sub": "did:privy:test"},
+        limit=10,
+        offset=0,
+        transactions_only=True,
+    )
+
+    assert result.total == 1
+    assert len(result.logs) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_rebalance_history_keeps_failed_executed_allocations_empty(monkeypatch) -> None:
+    """Failed rows must not inherit proposed allocations as executed allocations."""
+
+    class _FailedRowDB:
+        def __init__(self):
+            self._count_query = _FakeRebalanceLogsQuery(count=1)
+            self._rows_query = _FakeRebalanceLogsQuery(rows=[
+                {
+                    "id": "00000000-0000-0000-0000-000000000021",
+                    "status": "failed",
+                    "skip_reason": "execution reverted",
+                    "from_protocol": None,
+                    "to_protocol": None,
+                    "amount_moved": None,
+                    "proposed_allocations": '{"folks":"1.0"}',
+                    "executed_allocations": None,
+                    "apr_improvement": None,
+                    "gas_cost_usd": None,
+                    "tx_hash": None,
+                    "created_at": "2026-04-01T00:00:00Z",
+                }
+            ])
+            self._table_calls = 0
+
+        def table(self, name: str):
+            assert name == "rebalance_logs"
+            self._table_calls += 1
+            return self._count_query if self._table_calls == 1 else self._rows_query
+
+    db = _FailedRowDB()
+
+    async def _fake_lookup_account(_db, _address, _auth):
+        return {"id": "acct-failed", "address": "0xabc"}
+
+    monkeypatch.setattr(rebalance, "_lookup_account", _fake_lookup_account)
+
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/rebalance/0xabc/history",
+        "headers": [],
+    })
+
+    result = await rebalance.get_rebalance_history(
+        request=request,
+        address="0xabc",
+        db=db,
+        _auth={"sub": "did:privy:test"},
+        limit=10,
+        offset=0,
+        transactions_only=False,
+    )
+
+    assert len(result.logs) == 1
+    assert result.logs[0].status == "failed"
+    assert result.logs[0].executed_allocations is None

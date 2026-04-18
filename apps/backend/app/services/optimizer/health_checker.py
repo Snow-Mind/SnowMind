@@ -1,17 +1,17 @@
 """
 Unified health checker — runs all protocol-specific safety gates.
 
-This module consolidates health checks for all 3 protocols into a single
+This module consolidates health checks for all supported protocols into a single
 callable that returns per-protocol health status. It's called by the
 rebalancer before allocation decisions.
 
-Aave/Benqi checks:
+Non-Spark checks:
   - Reserve/comptroller pause flags
   - Utilization > 90% → HIGH_UTILIZATION (exclude from new deposits)
   - Velocity check: >25% APY change in 30 min → exclude
     - Liquidity stress: utilization > 90% with active position → FORCED_REBALANCE
   - Sanity bound: TWAP APY > 25% → exclude
-  - 7-day stability: >50% relative swing → exclude from new deposits
+    - 7-day stability (Aave/Benqi only): >50% relative swing → exclude from new deposits
     - TVL cap auto-withdraw: position > 7.5% of available liquidity → FORCED_REBALANCE
 
 Spark checks (ONLY these — all others are intentionally skipped):
@@ -68,8 +68,8 @@ async def check_protocol_health(
     """
     Run all applicable health checks for a single protocol.
 
-    Spark is intentionally exempt from: velocity, exploit detection,
-    sanity bound, 7-day stability, and TVL cap checks.
+    Spark is intentionally exempt from velocity, sanity bound,
+    7-day stability, and TVL-cap checks.
     """
     settings = get_settings()
     result = HealthCheckResult(
@@ -130,7 +130,7 @@ async def check_protocol_health(
         return result
 
     # ══════════════════════════════════════════════════════════════════
-    # Aave/Benqi-only checks below
+    # Non-Spark checks below
     # ══════════════════════════════════════════════════════════════════
 
     # ── Velocity check (step 10) ─────────────────────────────────────
