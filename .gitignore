@@ -18,7 +18,7 @@ __pycache__/
 venv/
 .venv/
 .pytest_cache/
-
+backend_logs1.md
 # ── Build outputs ────────────────────────────────────────────
 dist/
 docs/AUDIT_AND_SCALE_RUNBOOK.md
