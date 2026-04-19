@@ -43,6 +43,7 @@ def mock_settings():
     settings.MAX_TOTAL_PLATFORM_DEPOSIT_USD = 100000
     settings.MIN_BALANCE_USD = 0.0
     settings.PORTFOLIO_VALUE_DROP_PCT = 0.10
+    settings.MAX_IDLE_OVERFLOW_PCT = 0.80
     settings.PROFITABILITY_BREAKEVEN_DAYS = 7
     settings.REBALANCE_CHECK_INTERVAL = 360
     settings.PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
@@ -502,6 +503,76 @@ class TestRebalancerPipeline:
             and (daily_gain * breakeven_days) < gas_cost
         )
         assert not should_skip_profitability, "Idle top-up must not be blocked by profitability gate"
+
+    @pytest.mark.asyncio
+    async def test_no_deposit_safe_protocols_keep_idle_without_execution(self, rebalancer):
+        """If no market is deposit-safe, keep funds idle and skip execution."""
+
+        account_id = str(uuid4())
+        address = "0xea5e76244dcAE7b17d9787b804F76dAaF6923184"
+
+        with patch("app.services.optimizer.rebalancer.get_supabase") as gdb, \
+             patch("app.services.optimizer.rebalancer.get_active_session_key_record") as gsk, \
+             patch.dict("app.services.optimizer.rebalancer.ALL_ADAPTERS", {}, clear=True), \
+             patch("app.services.optimizer.rebalancer.check_protocol_health", new_callable=AsyncMock) as health_check, \
+             patch("app.services.optimizer.rebalancer.compute_allocation") as compute_alloc, \
+             patch("app.services.optimizer.rebalancer.record_deposit") as record_deposit_mock, \
+             patch.object(rebalancer, "_execute_rebalance_once", new_callable=AsyncMock) as execute_once, \
+             patch.object(rebalancer, "_log", new_callable=AsyncMock) as log_mock:
+
+            db = _make_db_mock()
+            gdb.return_value = db
+
+            gsk.return_value = {
+                "serialized_permission": "0xperm",
+                "session_private_key": "0xpriv",
+                "allowed_protocols": ["benqi"],
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            }
+
+            rebalancer.rate_fetcher.fetch_all_rates = AsyncMock(return_value={
+                "benqi": ProtocolRate(
+                    protocol_id="benqi",
+                    apy=Decimal("0.05"),
+                    effective_apy=Decimal("0.05"),
+                    tvl_usd=Decimal("1000000"),
+                ),
+            })
+            rebalancer.rate_validator.validate_all = AsyncMock(return_value={
+                "benqi": Decimal("0.05"),
+            })
+            rebalancer._get_idle_usdc_balance = AsyncMock(return_value=Decimal("10.00"))
+
+            health_check.return_value = HealthCheckResult(
+                protocol_id="benqi",
+                is_healthy=False,
+                is_deposit_safe=False,
+                is_withdrawal_safe=True,
+                exclusion_reasons=["high utilization"],
+                flag=RebalanceFlag.NONE,
+            )
+            compute_alloc.return_value = MagicMock(
+                allocations={},
+                idle_amount=Decimal("10.00"),
+                weighted_apy=Decimal("0"),
+                details={"reason": "no_eligible_protocols", "ranked_order": []},
+            )
+            log_mock.return_value = {
+                "status": "skipped",
+                "skip_reason": "No protocol passed deposit safety checks; keeping funds idle",
+            }
+
+            result = await rebalancer.check_and_rebalance(
+                account_id=account_id,
+                smart_account_address=address,
+            )
+
+            assert result["status"] == "skipped"
+            reason = log_mock.await_args.kwargs["reason"]
+            assert "gate=no_deposit_safe_protocols" in reason
+            assert "keeping funds idle" in reason
+            execute_once.assert_not_awaited()
+            record_deposit_mock.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_portfolio_drop_circuit_breaker_ignores_legitimate_withdrawals(self, rebalancer):

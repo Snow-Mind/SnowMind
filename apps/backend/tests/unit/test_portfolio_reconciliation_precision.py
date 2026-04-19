@@ -74,6 +74,27 @@ def test_apply_principal_display_dust_keeps_material_drift() -> None:
     assert adjusted == Decimal("100.000000")
 
 
+def test_should_include_idle_allocation_when_amount_hits_dust_floor() -> None:
+    assert portfolio._should_include_idle_allocation(
+        idle_usdc=Decimal("0.01"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
+def test_should_include_idle_allocation_when_ratio_is_material() -> None:
+    assert portfolio._should_include_idle_allocation(
+        idle_usdc=Decimal("0.005"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
+def test_should_not_include_idle_allocation_for_micro_dust() -> None:
+    assert not portfolio._should_include_idle_allocation(
+        idle_usdc=Decimal("0.0005"),
+        total_current_value=Decimal("1.00"),
+    )
+
+
 def test_payload_has_unsupported_protocol_detects_legacy_protocol() -> None:
     assert portfolio._payload_has_unsupported_protocol({"folks": "1"})
 

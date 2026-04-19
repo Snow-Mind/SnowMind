@@ -1328,6 +1328,36 @@ class Rebalancer:
             )
 
         result_allocations = allocation_result.allocations
+        no_eligible_protocols = (
+            allocation_result.details.get("reason") == "no_eligible_protocols"
+        )
+        has_actionable_positions = any(
+            amount > Decimal("0.01") and protocol_id in allowed_rates
+            for protocol_id, amount in current.items()
+        )
+
+        if no_eligible_protocols:
+            if has_actionable_positions and global_flag == RebalanceFlag.NONE:
+                logger.warning(
+                    "No deposit-safe protocols for %s; forcing exit to idle USDC",
+                    smart_account_address,
+                )
+                global_flag = RebalanceFlag.FORCED_REBALANCE
+            elif not has_actionable_positions:
+                return await self._log(
+                    db,
+                    account_id,
+                    "skipped",
+                    reason=_format_skip_gate_reason(
+                        "No protocol passed deposit safety checks; keeping funds idle",
+                        gate="no_deposit_safe_protocols",
+                        observed=f"idle=${float(idle_usdc):.2f}",
+                        threshold="at least one deposit-safe protocol",
+                        skipped_markets_suffix=skipped_markets_suffix,
+                    ),
+                    proposed={},
+                )
+
         ranked_protocols = allocation_result.details.get("ranked_order", [])
         new_weighted_apy = allocation_result.weighted_apy
         current_weighted_apy = compute_alloc_weighted_apy(

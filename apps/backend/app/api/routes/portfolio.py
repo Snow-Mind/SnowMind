@@ -48,6 +48,7 @@ _ERC20_ABI = [
 
 _PROTOCOL_BALANCE_DUST_USDC = Decimal("0.01")
 _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC = Decimal("0.000001")
+_IDLE_DISPLAY_MIN_RATIO = Decimal("0.001")
 _BALANCE_RECONCILE_EPSILON_USDC = Decimal("0.000001")
 _USDC_TRANSFER_TOPIC_PREFIX = "ddf252ad"
 _PRINCIPAL_RECONCILE_DRIFT_USDC = Decimal("0.50")
@@ -127,6 +128,21 @@ def _apply_principal_display_dust(
     if abs(total_current_value - net_principal) <= _PRINCIPAL_DISPLAY_DUST_USD:
         return total_current_value
     return net_principal
+
+
+def _should_include_idle_allocation(
+    *,
+    idle_usdc: Decimal,
+    total_current_value: Decimal,
+) -> bool:
+    """Return True when idle balance is material enough to display."""
+    if idle_usdc <= _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
+        return False
+    if idle_usdc >= _PROTOCOL_BALANCE_DUST_USDC:
+        return True
+    if total_current_value <= _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
+        return False
+    return (idle_usdc / total_current_value) >= _IDLE_DISPLAY_MIN_RATIO
 
 
 def _persist_principal_normalization(
@@ -1006,7 +1022,10 @@ async def get_portfolio(
     if not acct.data:
         idle_usdc = await _get_idle_usdc(address)
         allocations: list[AllocationResponse] = []
-        if idle_usdc > Decimal("0.01"):
+        if _should_include_idle_allocation(
+            idle_usdc=idle_usdc,
+            total_current_value=idle_usdc,
+        ):
             allocations.append(
                 AllocationResponse(
                     protocol_id="idle",
@@ -1168,7 +1187,10 @@ async def get_portfolio(
     # Include idle USDC in valuation even when it is below display dust.
     if idle_usdc > _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
         total_current_value += idle_usdc
-        if idle_usdc > _PROTOCOL_BALANCE_DUST_USDC:
+        if _should_include_idle_allocation(
+            idle_usdc=idle_usdc,
+            total_current_value=total_current_value,
+        ):
             allocations.append(
                 AllocationResponse(
                     protocol_id="idle",
