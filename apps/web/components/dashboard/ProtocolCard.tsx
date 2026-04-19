@@ -11,7 +11,7 @@ import { useState } from 'react'
 import Image from 'next/image'
 import { ExternalLink, Shield, TrendingUp, AlertTriangle } from 'lucide-react'
 import { PROTOCOL_CONFIG, type ProtocolId } from '@/lib/constants'
-import { riskBandFromScore, toNinePointRiskScore } from '@/lib/risk-level'
+import { riskBandFromScore, riskBandLabel, toNinePointRiskScore } from '@/lib/risk-level'
 
 interface ProtocolCardProps {
   protocolId: ProtocolId
@@ -151,7 +151,7 @@ export function ProtocolCard({
         <div className="flex items-center justify-between border-t border-white/[0.06] pt-3">
           <div className="flex items-center gap-1.5 text-xs text-white/40">
             <Shield className="h-3 w-3" />
-            <span>Risk: {riskBand}</span>
+            <span>{riskBandLabel(riskBand)}</span>
           </div>
           {tvlUsd && (
             <div className="text-xs text-white/40">

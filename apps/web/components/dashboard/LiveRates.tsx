@@ -7,7 +7,12 @@ import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
 import { getRebalanceCadence } from "@/lib/rebalanceCadence";
-import { riskBandFromScore, toNinePointRiskScore } from "@/lib/risk-level";
+import {
+  riskBandFromScore,
+  riskBandLabel,
+  RISK_BAND_TOOLTIP,
+  toNinePointRiskScore,
+} from "@/lib/risk-level";
 
 function canonicalProtocolId(rawProtocolId: string): string {
   const normalized = (rawProtocolId || "").trim().toLowerCase();
@@ -100,9 +105,9 @@ export default function LiveRates({
             {!r.isComingSoon && (
               <span
                 className="rounded-full bg-void-2 px-2 py-0.5 text-[10px] text-muted-foreground"
-                title="Risk band from 9-point score (Low: 0-3, Medium: 4-6, High: 7-9)."
+                title={RISK_BAND_TOOLTIP}
               >
-                Risk {riskBand}
+                {riskBandLabel(riskBand)}
               </span>
             )}
           </div>
@@ -220,7 +225,7 @@ export default function LiveRates({
       </div>
 
       <p className="mt-2 text-[10px] text-muted-foreground">
-        Risk score is out of 9 (higher is safer). Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
+        Risk score is out of 9 (higher score means lower risk). Scores reflect SnowMind&apos;s independent assessment based on publicly available on-chain data and documentation. They are not endorsements or financial advice. Users should conduct their own research before making decisions.
       </p>
     </div>
   );

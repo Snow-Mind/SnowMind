@@ -29,17 +29,17 @@ export function toNinePointRiskScore(
 
 export function riskBandFromScore(rawScore: number): RiskBand {
   const score = normalizeNinePointScore(rawScore, NINE_POINT_MIN);
-  if (score <= 3) {
+  if (score >= 6) {
     return "Low";
   }
-  if (score <= 6) {
+  if (score >= 3) {
     return "Medium";
   }
   return "High";
 }
 
 export function riskBandClassName(band: RiskBand): string {
-  if (band === "High") {
+  if (band === "Low") {
     return "bg-[#059669]/10 text-[#059669]";
   }
   if (band === "Medium") {
@@ -47,3 +47,10 @@ export function riskBandClassName(band: RiskBand): string {
   }
   return "bg-[#DC2626]/10 text-[#DC2626]";
 }
+
+export function riskBandLabel(band: RiskBand): string {
+  return `${band} Risk`;
+}
+
+export const RISK_BAND_TOOLTIP =
+  "Risk band from 9-point score (Low Risk: 6-9, Medium Risk: 3-5, High Risk: 0-2).";

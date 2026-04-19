@@ -10,7 +10,13 @@ import { toast } from "sonner";
 import { api } from "@/lib/api-client";
 import { cn, openExternalUrl } from "@/lib/utils";
 import { PROTOCOL_CONFIG } from "@/lib/constants";
-import { riskBandClassName, riskBandFromScore, toNinePointRiskScore } from "@/lib/risk-level";
+import {
+  riskBandClassName,
+  riskBandFromScore,
+  riskBandLabel,
+  RISK_BAND_TOOLTIP,
+  toNinePointRiskScore,
+} from "@/lib/risk-level";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import type { ProtocolRateResponse } from "@snowmind/shared-types";
 
@@ -366,9 +372,9 @@ export default function AgentManager({
                           "rounded px-1.5 py-0.5 text-[9px] font-semibold",
                           riskToneClass,
                         )}
-                        title="Risk band from 9-point score (Low: 0-3, Medium: 4-6, High: 7-9)."
+                        title={RISK_BAND_TOOLTIP}
                       >
-                        {riskBand}
+                        {riskBandLabel(riskBand)}
                       </span>
                       {!isEnabled && (
                         <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">
