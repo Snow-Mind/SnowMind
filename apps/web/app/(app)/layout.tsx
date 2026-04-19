@@ -1298,6 +1298,8 @@ function WithdrawAgentModal({
 
   const displayUserReceivesUsdc = withdrawPreview?.userReceives ?? fallbackTotalUsdc;
   const requestCurrentBalanceUsdc = withdrawPreview?.currentBalance ?? fallbackTotalUsdc;
+  const liquidityGapUsdc = Math.max(requestCurrentBalanceUsdc - displayUserReceivesUsdc, 0);
+  const liquidityConstrained = requestCurrentBalanceUsdc > 0 && liquidityGapUsdc > 0.01;
 
   useEffect(() => {
     let cancelled = false;
@@ -1455,6 +1457,14 @@ function WithdrawAgentModal({
           )}
         </div>
 
+        {liquidityConstrained && !previewLoading && (
+          <div className="mt-3 rounded-lg border border-[#F59E0B]/30 bg-[#FEF3C7]/50 px-3 py-2">
+            <p className="text-[11px] text-[#92400E]">
+              Silo liquidity is currently lower than your full position. You can withdraw only the currently available amount now, and the remaining balance will stay invested. Please come back when liquidity increases.
+            </p>
+          </div>
+        )}
+
         <button
           onClick={handleFullWithdraw}
           disabled={
@@ -1465,7 +1475,7 @@ function WithdrawAgentModal({
           className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2.5 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
         >
           {withdrawStep === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Withdraw and deactivate
+          {liquidityConstrained ? "Withdraw available liquidity" : "Withdraw and deactivate"}
         </button>
       </div>
     </div>

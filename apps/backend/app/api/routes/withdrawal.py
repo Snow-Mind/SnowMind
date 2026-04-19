@@ -1128,7 +1128,8 @@ async def execute_withdrawal(
                     )
                 message = (
                     "Withdrawal executed for currently redeemable funds. "
-                    "Some protocol positions remain and account stays active."
+                    "Vault liquidity is currently below your full position, so some funds remain invested. "
+                    "Your account stays active; please retry when liquidity returns."
                 )
 
         return WithdrawalExecuteResponse(
