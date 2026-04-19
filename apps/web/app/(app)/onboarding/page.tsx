@@ -53,7 +53,7 @@ import {
   withRetry,
 } from "@/lib/zerodev";
 import { ensureWalletOnAvalancheChain, type Eip1193Provider } from "@/lib/wallet-chain";
-import { cn, openExternalUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { DiversificationPreference, ProtocolRateResponse } from "@snowmind/shared-types";
 
 const ERC20_ABI = [
@@ -452,9 +452,8 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!smartAccountAddress || !accountDetail || onboardingPortfolioLoading) return;
 
-    const accountIsActive = Boolean(accountDetail.isActive);
     const hasActiveSessionKey = Boolean(accountDetail.sessionKey?.isActive);
-    const needsRegrant = accountIsActive && hasRecoverableFunds && !hasActiveSessionKey;
+    const needsRegrant = hasRecoverableFunds && !hasActiveSessionKey;
 
     if (!needsRegrant) {
       setRegrantOnlyMode(false);
@@ -473,8 +472,7 @@ export default function OnboardingPage() {
     if (!smartAccountAddress || onboardingPortfolioLoading || !accountDetail) return;
     if (accountDetailError instanceof APIError && accountDetailError.status === 401) return;
 
-    const isFullyActive = Boolean(accountDetail.isActive && accountDetail.sessionKey?.isActive && hasPortfolioFunds);
-    if (isFullyActive) {
+    if (hasPortfolioFunds) {
       setAgentActivated(true);
       router.replace("/dashboard");
     }
@@ -758,12 +756,12 @@ export default function OnboardingPage() {
           const derivedAccountDetail = await api.getAccountDetail(derivedAddr);
           const derivedPortfolio = await api.getPortfolio(derivedAddr).catch(() => null);
           const hasDerivedFunds = portfolioHasFunds(derivedPortfolio);
-          if (derivedAccountDetail?.address && derivedAccountDetail.sessionKey?.isActive && hasDerivedFunds) {
+          if (derivedAccountDetail?.address && hasDerivedFunds) {
             setAgentActivated(true);
             router.replace("/dashboard");
             return;
           }
-          if (derivedAccountDetail?.isActive && !derivedAccountDetail?.sessionKey?.isActive && hasDerivedFunds) {
+          if (!derivedAccountDetail?.sessionKey?.isActive && hasDerivedFunds) {
             setRegrantOnlyMode(true);
             setDepositAmount("0");
           }
@@ -1808,11 +1806,6 @@ export default function OnboardingPage() {
                                 href={protocol.vaultUrl}
                                 target="_blank"
                                 rel="noopener noreferrer external"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  openExternalUrl(protocol.vaultUrl);
-                                }}
                                 className="shrink-0 text-[#8A837C] transition-colors hover:text-[#E84142]"
                                 title={`View ${protocol.name} vault`}
                               >

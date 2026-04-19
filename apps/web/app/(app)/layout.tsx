@@ -304,6 +304,28 @@ export default function AppLayout({
   };
   const hasAuthFault = isAuthFault(portfolioError) || isAuthFault(accountDetailError);
 
+  const continueAfterSlowSync = async () => {
+    setRouteDecisionStalled(false);
+
+    if (effectiveSmartAccountAddress) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    if (activeWallet) {
+      try {
+        const { smartAccountAddress } = await createSmartAccount(activeWallet);
+        setSmartAccountAddress(smartAccountAddress);
+        router.replace("/dashboard");
+        return;
+      } catch {
+        // Fall through to onboarding if address recovery is unavailable.
+      }
+    }
+
+    router.replace("/onboarding");
+  };
+
   // Silent recovery: if persisted smart-account address is missing (common in
   // mobile in-app browsers), derive it from the connected wallet without
   // prompting signatures so returning users can stay on dashboard.
@@ -473,10 +495,10 @@ export default function AppLayout({
     if (!accountDataReady) return;
     if (accountDetailError || portfolioError) return;
     if (isOnboardingInProgress) return;
-    if (accountDetail?.isActive && hasActiveSessionKey && hasFunds && pathname === "/onboarding") {
+    if (hasFunds && pathname === "/onboarding") {
       router.replace("/dashboard");
     }
-  }, [accountDataReady, accountDetail, hasActiveSessionKey, hasFunds, pathname, router, isOnboardingInProgress, accountDetailError, portfolioError]);
+  }, [accountDataReady, hasFunds, pathname, router, isOnboardingInProgress, accountDetailError, portfolioError]);
 
   const shouldShowRouteDecisionLoader =
     !clientReady
@@ -666,7 +688,9 @@ export default function AppLayout({
               Retry Sync
             </button>
             <button
-              onClick={() => router.replace(effectiveSmartAccountAddress ? "/dashboard" : "/onboarding")}
+              onClick={() => {
+                void continueAfterSlowSync();
+              }}
               className="rounded-lg bg-[#E84142] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#D63031]"
             >
               Continue

@@ -99,6 +99,15 @@ export default function WithdrawPage() {
   const balance = livePortfolio
     ? Math.max(Number(livePortfolio.totalDepositedUsd) + Number(livePortfolio.totalYieldUsd), 0)
     : Math.max(fallbackBalance, 0)
+  const previewCurrentBalance = parseFloat(preview?.currentBalance ?? '0')
+  const previewReceivable = parseFloat(preview?.userReceives ?? '0')
+  const liquidityGapUsdc = Math.max(previewCurrentBalance - previewReceivable, 0)
+  const liquidityConstrained =
+    step === 'preview'
+    && isFullWithdrawal
+    && Number.isFinite(previewCurrentBalance)
+    && Number.isFinite(previewReceivable)
+    && liquidityGapUsdc > FULL_WITHDRAWAL_DUST_USDC
 
   const handlePreview = useCallback(async () => {
     setIsLoading(true)
@@ -258,7 +267,7 @@ export default function WithdrawPage() {
               {isFullWithdrawal && (
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400/80">
                   <AlertCircle className="h-3 w-3" />
-                  Full withdrawal — account will be deactivated and session key revoked
+                  Full withdrawal intent. Account deactivates only if no positions remain after execution.
                 </div>
               )}
             </div>
@@ -312,6 +321,12 @@ export default function WithdrawPage() {
               </div>
             </div>
 
+            {liquidityConstrained && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+                Vault liquidity is currently lower than your full portfolio. This withdrawal will move only currently redeemable funds, and the remainder stays invested until liquidity returns.
+              </div>
+            )}
+
             {/* Security note */}
             <div className="flex items-start gap-2 rounded-xl bg-white/[0.02] border border-white/[0.04] p-3">
               <Shield className="h-4 w-4 text-emerald-400/60 mt-0.5 shrink-0" />
@@ -335,7 +350,7 @@ export default function WithdrawPage() {
                 className="flex-[2] rounded-xl bg-emerald-500 hover:bg-emerald-400
                   px-4 py-3 text-sm font-semibold text-zinc-950 transition-all duration-200"
               >
-                Confirm Withdrawal
+                {liquidityConstrained ? 'Withdraw Available Liquidity' : 'Confirm Withdrawal'}
               </button>
             </div>
           </div>

@@ -30,7 +30,8 @@ from app.services.execution.session_key import (
     store_session_key,
 )
 from app.services.execution.executor import verify_userop_execution
-from app.services.protocols import get_adapter
+from app.services.protocols import ACTIVE_ADAPTERS, get_adapter
+from app.services.protocols.base import get_shared_async_web3
 
 
 logger = logging.getLogger("snowmind")
@@ -44,6 +45,18 @@ _DEFAULT_ALLOWED_PROTOCOLS = [
     "euler_v2",
     "silo_savusd_usdc",
     "silo_susdp_usdc",
+]
+
+_ACCOUNT_REACTIVATION_DUST_USDC = Decimal("0.01")
+_ACCOUNT_BALANCE_READ_TIMEOUT_SECONDS = 8.0
+_ERC20_BALANCE_OF_ABI = [
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    }
 ]
 
 
@@ -821,6 +834,97 @@ async def _recover_failed_full_withdrawal_deactivation(
     return patched
 
 
+async def _read_total_position_balance_usdc(address: str) -> tuple[Decimal, bool]:
+    """Read total on-chain position value (full balances, not withdrawable-only)."""
+    settings = get_settings()
+    w3 = get_shared_async_web3()
+
+    total_raw = 0
+    balance_check_complete = True
+
+    for pid, adapter in ACTIVE_ADAPTERS.items():
+        try:
+            balance = await asyncio.wait_for(
+                adapter.get_balance(address),
+                timeout=_ACCOUNT_BALANCE_READ_TIMEOUT_SECONDS,
+            )
+            total_raw += int(balance)
+        except Exception as exc:
+            balance_check_complete = False
+            logger.warning(
+                "Failed to read %s balance for inactive-account recovery %s: %s",
+                pid,
+                address,
+                exc,
+            )
+
+    try:
+        usdc = w3.eth.contract(
+            address=w3.to_checksum_address(settings.USDC_ADDRESS),
+            abi=_ERC20_BALANCE_OF_ABI,
+        )
+        idle_raw = await asyncio.wait_for(
+            usdc.functions.balanceOf(w3.to_checksum_address(address)).call(),
+            timeout=_ACCOUNT_BALANCE_READ_TIMEOUT_SECONDS,
+        )
+        total_raw += int(idle_raw)
+    except Exception as exc:
+        balance_check_complete = False
+        logger.warning(
+            "Failed to read idle USDC for inactive-account recovery %s: %s",
+            address,
+            exc,
+        )
+
+    return Decimal(str(total_raw)) / Decimal("1e6"), balance_check_complete
+
+
+async def _recover_inactive_funded_account(
+    db: Client,
+    account_row: dict,
+) -> dict:
+    """Auto-reactivate legacy rows when on-chain funds still exist."""
+    if account_row.get("is_active", True):
+        return account_row
+
+    account_id = str(account_row.get("id") or "").strip()
+    address = str(account_row.get("address") or "").strip()
+    if not account_id or not address:
+        return account_row
+
+    total_usdc, balance_check_complete = await _read_total_position_balance_usdc(address)
+    if not balance_check_complete:
+        return account_row
+    if total_usdc <= _ACCOUNT_REACTIVATION_DUST_USDC:
+        return account_row
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        db.table("accounts").update(
+            {
+                "is_active": True,
+                "updated_at": now_iso,
+            }
+        ).eq("id", account_id).execute()
+    except Exception as exc:
+        logger.error(
+            "Failed to auto-reactivate funded account %s (%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        return account_row
+
+    logger.warning(
+        "Auto-reactivated funded account %s with residual on-chain balance $%.6f",
+        address,
+        float(total_usdc),
+    )
+    patched = dict(account_row)
+    patched["is_active"] = True
+    return patched
+
+
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("30/minute")
 async def register_account(
@@ -881,6 +985,7 @@ async def get_account(
     row = acct.data[0]
     verify_account_ownership(_auth, row, db=db)
     row = await _recover_failed_full_withdrawal_deactivation(db, row)
+    row = await _recover_inactive_funded_account(db, row)
 
     # Fetch latest active session key metadata with robust expiry handling.
     sk_meta = get_active_session_key_metadata(db, row["id"])
