@@ -441,21 +441,60 @@ class UtilizationMonitor:
         if not positions:
             return
 
+        now = datetime.now(timezone.utc)
+        actionable_positions: list[PositionSnapshot] = []
+        cooling_down_count = 0
+        for position in positions:
+            cooldown_until = self._cooldowns.get((position.account_id, protocol_id))
+            if cooldown_until and now < cooldown_until:
+                cooling_down_count += 1
+                continue
+            actionable_positions.append(position)
+
+        if not actionable_positions:
+            logger.debug(
+                "Utilization alert suppressed for %s: all %d position(s) currently cooling down",
+                protocol_id,
+                len(positions),
+            )
+            return
+
         utilization_label = "unknown" if utilization is None else f"{float(utilization * 100):.2f}%"
         logger.warning(
-            "Utilization alert on %s (%s): %s; positions=%d",
+            "Utilization alert on %s (%s): %s; positions=%d actionable=%d cooling_down=%d",
             protocol_id,
             utilization_label,
             trigger_reason,
             len(positions),
+            len(actionable_positions),
+            cooling_down_count,
         )
 
-        for position in positions:
+        for position in actionable_positions:
             await self._execute_targeted_withdrawal(
                 protocol_id=protocol_id,
                 position=position,
                 trigger_reason=trigger_reason,
             )
+
+    async def _read_protocol_balance_usdc(
+        self,
+        protocol_id: str,
+        smart_account_address: str,
+    ) -> Decimal | None:
+        """Return protocol balance in USDC units from on-chain reads."""
+        try:
+            adapter = get_adapter(protocol_id)
+            raw_balance = await adapter.get_balance(smart_account_address)
+            return Decimal(str(raw_balance)) / Decimal("1000000")
+        except Exception as exc:
+            logger.debug(
+                "Failed to read protocol balance for utilization accounting %s/%s: %s",
+                smart_account_address,
+                protocol_id,
+                exc,
+            )
+            return None
 
     async def _execute_targeted_withdrawal(
         self,
@@ -497,6 +536,11 @@ class UtilizationMonitor:
             )
             return
 
+        pre_balance_usdc = await self._read_protocol_balance_usdc(
+            protocol_id,
+            position.smart_account_address,
+        )
+
         async with execution_lock:
             try:
                 tx_hash = await self.rebalancer.execute_partial_withdrawal(
@@ -530,21 +574,42 @@ class UtilizationMonitor:
                     )
                 return
 
+        post_balance_usdc = await self._read_protocol_balance_usdc(
+            protocol_id,
+            position.smart_account_address,
+        )
+        observed_amount_usdc = amount_usdc
+        if pre_balance_usdc is not None and post_balance_usdc is not None:
+            observed_delta = max(pre_balance_usdc - post_balance_usdc, Decimal("0"))
+            observed_amount_usdc = min(amount_usdc, observed_delta).quantize(
+                _USDC_QUANT,
+                rounding=ROUND_DOWN,
+            )
+            if observed_amount_usdc <= Decimal("0"):
+                logger.debug(
+                    "Observed utilization-withdrawal delta was non-positive for account=%s protocol=%s; "
+                    "falling back to requested amount for activity logging",
+                    position.account_id,
+                    protocol_id,
+                )
+                observed_amount_usdc = amount_usdc
+
         cooldown_seconds = max(0, int(self.settings.EMERGENCY_WITHDRAWAL_COOLDOWN))
         self._cooldowns[cooldown_key] = now + timedelta(seconds=cooldown_seconds)
 
         logger.warning(
-            "Emergency partial withdrawal executed for account=%s protocol=%s amount=$%.6f tx=%s",
+            "Emergency partial withdrawal executed for account=%s protocol=%s requested=$%.6f observed=$%.6f tx=%s",
             position.account_id,
             protocol_id,
             float(amount_usdc),
+            float(observed_amount_usdc),
             tx_hash,
         )
 
         self._record_withdrawal_activity(
             account_id=position.account_id,
             protocol_id=protocol_id,
-            amount_usdc=amount_usdc,
+            amount_usdc=observed_amount_usdc,
             tx_hash=tx_hash,
             trigger_reason=trigger_reason,
         )

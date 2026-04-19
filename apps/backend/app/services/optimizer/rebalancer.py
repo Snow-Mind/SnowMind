@@ -438,6 +438,44 @@ class Rebalancer:
                 logger.debug("On-chain balance check for %s/%s failed: %s", smart_account_address, pid, exc)
         return discovered
 
+    async def _read_protocol_balance_usdc(
+        self,
+        protocol_id: str,
+        smart_account_address: str,
+    ) -> Decimal | None:
+        """Read a protocol balance from chain in USDC units."""
+        try:
+            adapter = get_adapter(protocol_id)
+            raw_balance = await adapter.get_balance(smart_account_address)
+            return Decimal(str(raw_balance)) / Decimal("1000000")
+        except Exception as exc:
+            logger.warning(
+                "On-chain balance read failed for %s/%s: %s",
+                smart_account_address,
+                protocol_id,
+                exc,
+            )
+            return None
+
+    async def _read_onchain_allocation_snapshot(
+        self,
+        smart_account_address: str,
+        protocol_ids: set[str],
+    ) -> tuple[dict[str, Decimal], bool]:
+        """Return on-chain protocol balances and whether all reads succeeded."""
+        snapshot: dict[str, Decimal] = {}
+        read_complete = True
+
+        for protocol_id in protocol_ids:
+            balance = await self._read_protocol_balance_usdc(protocol_id, smart_account_address)
+            if balance is None:
+                read_complete = False
+                continue
+            if balance > Decimal("0.01"):
+                snapshot[protocol_id] = balance
+
+        return snapshot, read_complete
+
     async def _execute_rebalance_once(
         self,
         account_id: str,
@@ -2106,10 +2144,25 @@ class Rebalancer:
             account_id=account_id,
         )
 
-        # Step 4: Update allocations in DB
-        await self._update_allocations_db(
-            db, account_id, target_allocations,
+        # Step 4: Persist on-chain-confirmed balances, not planned targets.
+        snapshot_protocol_ids = set(ALL_ADAPTERS.keys()) | set(current.keys()) | set(target_allocations.keys())
+        onchain_allocations, read_complete = await self._read_onchain_allocation_snapshot(
+            smart_account_address=smart_account_address,
+            protocol_ids=snapshot_protocol_ids,
         )
+
+        if read_complete:
+            await self._update_allocations_db(
+                db,
+                account_id,
+                onchain_allocations,
+            )
+        else:
+            logger.warning(
+                "Skipping allocation DB overwrite for %s after tx=%s because on-chain snapshot was incomplete",
+                smart_account_address,
+                tx_hash,
+            )
 
         return tx_hash
 
@@ -2161,6 +2214,11 @@ class Rebalancer:
             qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
             entry["qiTokenAmount"] = str(qi_amount)
 
+        pre_balance_usdc = await self._read_protocol_balance_usdc(
+            protocol_id,
+            smart_account_address,
+        )
+
         tx_hash = await self._call_execution_service(
             serialized_permission=session_key,
             smart_account_address=smart_account_address,
@@ -2170,26 +2228,53 @@ class Rebalancer:
             account_id=account_id,
         )
 
-        # Track the partial withdrawal for fee calculation
-        record_partial_withdrawal(db, account_id, amount)
+        # Persist allocation amount from post-confirmation on-chain read.
+        post_balance_usdc = await self._read_protocol_balance_usdc(
+            protocol_id,
+            smart_account_address,
+        )
+        if post_balance_usdc is not None:
+            if post_balance_usdc < Decimal("0.01"):
+                db.table("allocations").delete().eq(
+                    "account_id", account_id
+                ).eq("protocol_id", protocol_id).execute()
+            else:
+                db.table("allocations").upsert(
+                    {
+                        "account_id": account_id,
+                        "protocol_id": protocol_id,
+                        "amount_usdc": str(post_balance_usdc.quantize(Decimal("0.000001"))),
+                        "allocation_pct": "0.0000",
+                    },
+                    on_conflict="account_id,protocol_id",
+                ).execute()
 
-        # Update allocations in DB: reduce the protocol allocation
-        current = await self._get_current_allocations(account_id, smart_account_address)
-        current_amt = current.get(protocol_id, Decimal("0"))
-        new_amt = max(current_amt - amount, Decimal("0"))
-        if new_amt < Decimal("0.01"):
-            # Remove the allocation entirely
-            db.table("allocations").delete().eq(
-                "account_id", account_id
-            ).eq("protocol_id", protocol_id).execute()
+        # Track the partial withdrawal with observed on-chain delta when possible.
+        observed_withdrawal = amount
+        if pre_balance_usdc is not None and post_balance_usdc is not None:
+            observed_delta = max(pre_balance_usdc - post_balance_usdc, Decimal("0"))
+            observed_withdrawal = min(amount, observed_delta)
+
+        if observed_withdrawal > Decimal("0"):
+            record_partial_withdrawal(
+                db,
+                account_id,
+                observed_withdrawal.quantize(Decimal("0.000001"), rounding=ROUND_DOWN),
+            )
         else:
-            db.table("allocations").update(
-                {"amount_usdc": str(new_amt.quantize(Decimal("0.000001")))}
-            ).eq("account_id", account_id).eq("protocol_id", protocol_id).execute()
+            logger.warning(
+                "Skipping partial-withdrawal yield tracking update for %s/%s due non-positive observed delta",
+                smart_account_address,
+                protocol_id,
+            )
 
         logger.info(
-            "Partial withdrawal of $%.2f from %s for %s: tx=%s",
-            amount_usdc, protocol_id, smart_account_address, tx_hash,
+            "Partial withdrawal from %s for %s: requested=$%.6f observed=$%.6f tx=%s",
+            protocol_id,
+            smart_account_address,
+            float(amount),
+            float(observed_withdrawal),
+            tx_hash,
         )
         return tx_hash
 

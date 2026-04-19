@@ -1,4 +1,5 @@
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -256,6 +257,30 @@ async def test_execute_targeted_withdrawal_zero_withdrawable_sets_cooldown(
 
     assert monitor._resolve_withdrawable_amount.await_count == 1
     monitor.rebalancer.execute_partial_withdrawal.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_protocol_alert_skips_when_all_positions_cooling_down(
+    monitor: UtilizationMonitor,
+) -> None:
+    position = PositionSnapshot(
+        account_id="acct-cooldown",
+        smart_account_address="0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556",
+        amount_usdc=Decimal("50"),
+    )
+    monitor._cooldowns[(position.account_id, "silo_savusd_usdc")] = (
+        datetime.now(timezone.utc) + timedelta(seconds=300)
+    )
+    monitor._execute_targeted_withdrawal = AsyncMock()
+
+    await monitor._handle_protocol_alert(
+        protocol_id="silo_savusd_usdc",
+        utilization=Decimal("1"),
+        trigger_reason="absolute utilization above 92%",
+        positions=[position],
+    )
+
+    monitor._execute_targeted_withdrawal.assert_not_awaited()
 
 
 def test_non_retryable_classifier_includes_liquidity_exhaustion(
