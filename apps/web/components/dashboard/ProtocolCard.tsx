@@ -10,7 +10,8 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import { ExternalLink, Shield, TrendingUp, AlertTriangle } from 'lucide-react'
-import { PROTOCOL_CONFIG, RISK_SCORE_MAX, type ProtocolId } from '@/lib/constants'
+import { PROTOCOL_CONFIG, type ProtocolId } from '@/lib/constants'
+import { riskBandFromScore, toNinePointRiskScore } from '@/lib/risk-level'
 
 interface ProtocolCardProps {
   protocolId: ProtocolId
@@ -39,14 +40,13 @@ export function ProtocolCard({
   const [imageFailed, setImageFailed] = useState(false)
   const config = PROTOCOL_CONFIG[protocolId]
   const allocationPct = totalBalance > 0 ? (userAllocation / totalBalance) * 100 : 0
-  const parsedRiskScore = Number(riskScore)
-  const parsedRiskScoreMax = Number(riskScoreMax)
-  const displayRiskScore = Number.isFinite(parsedRiskScore)
-    ? Math.max(0, Math.round(parsedRiskScore))
-    : config.riskScore
-  const displayRiskScoreMax = Number.isFinite(parsedRiskScoreMax)
-    ? Math.max(1, Math.round(parsedRiskScoreMax))
-    : RISK_SCORE_MAX
+  const riskBand = riskBandFromScore(
+    toNinePointRiskScore(
+      Number(riskScore),
+      Number(riskScoreMax),
+      config.riskScore,
+    ),
+  )
 
   const statusColors = {
     healthy: 'text-emerald-400',
@@ -151,7 +151,7 @@ export function ProtocolCard({
         <div className="flex items-center justify-between border-t border-white/[0.06] pt-3">
           <div className="flex items-center gap-1.5 text-xs text-white/40">
             <Shield className="h-3 w-3" />
-            <span>Risk: {displayRiskScore}/{displayRiskScoreMax}</span>
+            <span>Risk: {riskBand}</span>
           </div>
           {tvlUsd && (
             <div className="text-xs text-white/40">

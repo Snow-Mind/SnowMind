@@ -226,6 +226,38 @@ async def test_execute_targeted_withdrawal_non_retryable_failure_sets_cooldown(
     assert monitor.rebalancer.execute_partial_withdrawal.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_execute_targeted_withdrawal_zero_withdrawable_sets_cooldown(
+    monitor: UtilizationMonitor,
+) -> None:
+    monitor._resolve_withdrawable_amount = AsyncMock(return_value=Decimal("0"))
+    monitor._read_erc4626_max_withdrawable_assets = AsyncMock(return_value=Decimal("0"))
+    monitor.rebalancer.execute_partial_withdrawal = AsyncMock()
+
+    position = PositionSnapshot(
+        account_id="acct-3b",
+        smart_account_address="0x4006ce775C928E4e4dE5BAC01d9d69Ed3a793556",
+        amount_usdc=Decimal("50"),
+    )
+
+    await monitor._execute_targeted_withdrawal(
+        protocol_id="silo_savusd_usdc",
+        position=position,
+        trigger_reason="absolute utilization above 92%",
+    )
+
+    assert ("acct-3b", "silo_savusd_usdc") in monitor._cooldowns
+
+    await monitor._execute_targeted_withdrawal(
+        protocol_id="silo_savusd_usdc",
+        position=position,
+        trigger_reason="absolute utilization above 92%",
+    )
+
+    assert monitor._resolve_withdrawable_amount.await_count == 1
+    monitor.rebalancer.execute_partial_withdrawal.assert_not_awaited()
+
+
 def test_non_retryable_classifier_includes_liquidity_exhaustion(
     monitor: UtilizationMonitor,
 ) -> None:

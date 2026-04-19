@@ -9,7 +9,8 @@ import { toast } from "sonner";
 
 import { api } from "@/lib/api-client";
 import { cn, openExternalUrl } from "@/lib/utils";
-import { PROTOCOL_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
+import { PROTOCOL_CONFIG } from "@/lib/constants";
+import { riskBandClassName, riskBandFromScore, toNinePointRiskScore } from "@/lib/risk-level";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import type { ProtocolRateResponse } from "@snowmind/shared-types";
 
@@ -323,12 +324,14 @@ export default function AgentManager({
               ? `${(rateData.currentApy * 100).toFixed(2)}%`
               : "-";
             const tvlLabel = formatTvl(rateData?.tvlUsd);
-            const displayRiskScore = rateData && Number.isFinite(rateData.riskScore)
-              ? Math.round(rateData.riskScore)
-              : protocol.riskScore;
-            const displayRiskScoreMax = rateData && Number.isFinite(rateData.riskScoreMax)
-              ? Math.max(1, Math.round(rateData.riskScoreMax))
-              : RISK_SCORE_MAX;
+            const riskBand = riskBandFromScore(
+              toNinePointRiskScore(
+                Number(rateData?.riskScore),
+                Number(rateData?.riskScoreMax),
+                protocol.riskScore,
+              ),
+            );
+            const riskToneClass = riskBandClassName(riskBand);
             const displayCap = protocolCaps[protocolId] ?? 100;
             const isEditingRow = editingCapProtocol === protocolId;
 
@@ -359,10 +362,13 @@ export default function AgentManager({
                         <span className="hidden sm:inline">{protocol.name}</span>
                       </p>
                       <span
-                        className="rounded bg-[#111111]/5 px-1.5 py-0.5 text-[9px] font-mono text-[#5C5550]"
-                        title="Risk score is out of 9. Higher is safer."
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[9px] font-semibold",
+                          riskToneClass,
+                        )}
+                        title="Risk band from 9-point score (Low: 0-3, Medium: 4-6, High: 7-9)."
                       >
-                        Risk {displayRiskScore}/{displayRiskScoreMax}
+                        {riskBand}
                       </span>
                       {!isEnabled && (
                         <span className="rounded bg-[#E8E2DA] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-[#8A837C]">

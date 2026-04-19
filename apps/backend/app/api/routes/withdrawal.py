@@ -273,6 +273,54 @@ async def _get_on_chain_balance(smart_account: str) -> Decimal:
     return Decimal(str(total_raw)) / Decimal("1e6")
 
 
+async def _get_total_position_balance(smart_account: str) -> tuple[Decimal, bool]:
+    """
+    Read total on-chain position value without withdrawability caps.
+
+    This is used only after a full-withdrawal attempt to decide whether the
+    account can be safely deactivated. If any balance read fails, the check is
+    treated as incomplete and the account remains active as a safety default.
+    """
+    settings = get_settings()
+    w3 = get_shared_async_web3()
+
+    total_raw = 0
+    balance_check_complete = True
+
+    for pid, adapter in ACTIVE_ADAPTERS.items():
+        try:
+            balance = await adapter.get_balance(smart_account)
+            total_raw += int(balance)
+        except Exception as exc:
+            balance_check_complete = False
+            logger.warning(
+                "Failed to read full %s balance for %s during deactivation guard: %s",
+                pid,
+                smart_account,
+                exc,
+            )
+
+    try:
+        usdc = w3.eth.contract(
+            address=w3.to_checksum_address(settings.USDC_ADDRESS),
+            abi=_ERC20_BALANCE_OF_ABI,
+        )
+        idle_raw = await usdc.functions.balanceOf(
+            w3.to_checksum_address(smart_account)
+        ).call()
+        total_raw += int(idle_raw)
+    except Exception as exc:
+        balance_check_complete = False
+        logger.warning(
+            "Failed to read idle USDC balance for %s during deactivation guard: %s",
+            smart_account,
+            exc,
+        )
+
+    total_usdc = Decimal(str(total_raw)) / Decimal("1e6")
+    return total_usdc, balance_check_complete
+
+
 def _erc4626_vault_address(protocol_id: str, settings) -> str | None:
     if protocol_id == "spark":
         return settings.SPARK_SPUSDC
@@ -449,6 +497,15 @@ def _resolve_withdrawal_intent(
         return current_balance_usdc, True
 
     return requested_amount_usdc, False
+
+
+def _can_deactivate_after_full_withdrawal(
+    *,
+    post_withdraw_total_usdc: Decimal,
+    balance_check_complete: bool,
+) -> bool:
+    """Return True only when post-withdraw balance check proves account is empty."""
+    return balance_check_complete and post_withdraw_total_usdc <= _FULL_WITHDRAWAL_DUST_USDC
 
 
 def _to_raw_usdc(amount_usdc: Decimal) -> int:
@@ -1023,40 +1080,64 @@ async def execute_withdrawal(
             tx_hash=tx_hash,
         )
 
-        # If full withdrawal, deactivate account and clear live allocations.
-        # Keep historical rows (yield tracking, rebalance logs, session-key
-        # history) so lifetime metrics remain consistent.
+        account_deactivated = False
+        message = f"Partial withdrawal of ${fee_calc.user_receives} complete."
+
+        # A full-withdrawal request can still leave residual protocol positions
+        # when vault liquidity is temporarily constrained. Deactivate only when
+        # post-withdraw total on-chain position value is effectively zero.
         if effective_full_withdrawal:
-            # Revoke session key first (best-effort)
-            try:
-                revoke_session_key(db, UUID(account["id"]))
-            except Exception as exc:
-                logger.warning("Session key revocation during full withdrawal failed: %s", exc)
-
-            # Clear live allocations now that funds have been withdrawn.
-            db.table("allocations").delete().eq("account_id", account["id"]).execute()
-
-            db.table("accounts").update({
-                "is_active": False,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", account["id"]).execute()
-
-            logger.info(
-                "Full withdrawal complete for %s. Account deactivated and history preserved.",
-                address,
+            post_withdraw_total, balance_check_complete = await _get_total_position_balance(address)
+            can_deactivate = _can_deactivate_after_full_withdrawal(
+                post_withdraw_total_usdc=post_withdraw_total,
+                balance_check_complete=balance_check_complete,
             )
+
+            if can_deactivate:
+                # Revoke session key first (best-effort)
+                try:
+                    revoke_session_key(db, UUID(account["id"]))
+                except Exception as exc:
+                    logger.warning("Session key revocation during full withdrawal failed: %s", exc)
+
+                # Clear live allocations now that funds have been withdrawn.
+                db.table("allocations").delete().eq("account_id", account["id"]).execute()
+
+                db.table("accounts").update({
+                    "is_active": False,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", account["id"]).execute()
+
+                logger.info(
+                    "Full withdrawal complete for %s. Account deactivated and history preserved.",
+                    address,
+                )
+                account_deactivated = True
+                message = "Full withdrawal complete. Account deactivated."
+            else:
+                if not balance_check_complete:
+                    logger.warning(
+                        "Skipping account deactivation for %s after full-withdrawal request because post-withdraw balance check was incomplete",
+                        address,
+                    )
+                else:
+                    logger.warning(
+                        "Skipping account deactivation for %s after full-withdrawal request; residual position remains: $%.6f",
+                        address,
+                        float(post_withdraw_total),
+                    )
+                message = (
+                    "Withdrawal executed for currently redeemable funds. "
+                    "Some protocol positions remain and account stays active."
+                )
 
         return WithdrawalExecuteResponse(
             status="executed",
             txHash=tx_hash,
             agentFee=str(fee_calc.agent_fee),
             userReceives=str(fee_calc.user_receives),
-            accountDeactivated=effective_full_withdrawal,
-            message=(
-                "Full withdrawal complete. Account deactivated."
-                if effective_full_withdrawal
-                else f"Partial withdrawal of ${fee_calc.user_receives} complete."
-            ),
+            accountDeactivated=account_deactivated,
+            message=message,
         )
 
     except HTTPException as exc:

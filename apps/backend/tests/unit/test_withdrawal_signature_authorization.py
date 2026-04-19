@@ -1,6 +1,7 @@
 """Unit tests for withdrawal authorization signature checks."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from eth_account import Account
@@ -10,6 +11,7 @@ from fastapi import HTTPException
 from app.api.routes.withdrawal import (
     WithdrawalExecuteRequest,
     _build_withdrawal_authorization_message,
+    _can_deactivate_after_full_withdrawal,
     _verify_withdrawal_authorization,
 )
 
@@ -124,3 +126,24 @@ def test_valid_signature_passes() -> None:
     account = {"owner_address": signer.address}
 
     _verify_withdrawal_authorization(req, account)
+
+
+def test_can_deactivate_after_full_withdrawal_when_empty_and_complete() -> None:
+    assert _can_deactivate_after_full_withdrawal(
+        post_withdraw_total_usdc=Decimal("0.009999"),
+        balance_check_complete=True,
+    )
+
+
+def test_cannot_deactivate_after_full_withdrawal_when_residual_balance_remains() -> None:
+    assert not _can_deactivate_after_full_withdrawal(
+        post_withdraw_total_usdc=Decimal("0.500000"),
+        balance_check_complete=True,
+    )
+
+
+def test_cannot_deactivate_after_full_withdrawal_when_balance_check_incomplete() -> None:
+    assert not _can_deactivate_after_full_withdrawal(
+        post_withdraw_total_usdc=Decimal("0.000000"),
+        balance_check_complete=False,
+    )

@@ -2,11 +2,12 @@
 
 import Image from "next/image";
 import { Activity, RefreshCw, TrendingUp, Clock, Loader2, ExternalLink } from "lucide-react";
-import { PROTOCOL_CONFIG, RISK_SCORE_MAX } from "@/lib/constants";
+import { PROTOCOL_CONFIG } from "@/lib/constants";
 import { formatPct } from "@/lib/format";
 import { useProtocolRates } from "@/hooks/useProtocolRates";
 import { useQueryClient } from "@tanstack/react-query";
 import { getRebalanceCadence } from "@/lib/rebalanceCadence";
+import { riskBandFromScore, toNinePointRiskScore } from "@/lib/risk-level";
 
 function canonicalProtocolId(rawProtocolId: string): string {
   const normalized = (rawProtocolId || "").trim().toLowerCase();
@@ -56,12 +57,13 @@ export default function LiveRates({
       PROTOCOL_CONFIG[canonicalId as keyof typeof PROTOCOL_CONFIG];
     if (!meta) return null;
 
-    const displayRiskScore = Number.isFinite(r.riskScore)
-      ? Math.round(r.riskScore)
-      : meta.riskScore;
-    const displayRiskScoreMax = Number.isFinite(r.riskScoreMax)
-      ? Math.max(1, Math.round(r.riskScoreMax))
-      : RISK_SCORE_MAX;
+    const riskBand = riskBandFromScore(
+      toNinePointRiskScore(
+        Number(r.riskScore),
+        Number(r.riskScoreMax),
+        meta.riskScore,
+      ),
+    );
 
     const isSelected = activeProtocolIds.includes(canonicalId);
     const hasAllocation = activeAllocationIds.includes(canonicalId);
@@ -98,9 +100,9 @@ export default function LiveRates({
             {!r.isComingSoon && (
               <span
                 className="rounded-full bg-void-2 px-2 py-0.5 text-[10px] text-muted-foreground"
-                title="Risk score is out of 9. Higher is safer."
+                title="Risk band from 9-point score (Low: 0-3, Medium: 4-6, High: 7-9)."
               >
-                Risk {displayRiskScore}/{displayRiskScoreMax}
+                Risk {riskBand}
               </span>
             )}
           </div>

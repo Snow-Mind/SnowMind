@@ -274,7 +274,7 @@ export default function AppLayout({
     || (portfolio?.allocations?.some((a) => Number(a.amountUsdc) > 0) ?? false)
   );
   const hasActiveSessionKey = accountDetail?.sessionKey?.isActive ?? false;
-  const hasInactiveAccount = !!effectiveSmartAccountAddress && accountDetail?.isActive === false;
+  const hasInactiveAccount = !!effectiveSmartAccountAddress && accountDetail?.isActive === false && !hasFunds;
   // True only after Zustand persist has finished hydrating from localStorage.
   const clientReady = usePortfolioHydrated();
   const accountDataReady = clientReady && !!effectiveSmartAccountAddress && !portfolioLoading && !accountDetailLoading;
@@ -1380,10 +1380,17 @@ function WithdrawAgentModal({
           queryClient.invalidateQueries({ queryKey: ["account-detail", smartAccountAddress] }),
         ]);
 
-        setWithdrawStep("deactivating");
-        toast.success("Successfully withdrawn funds!");
-        await new Promise((r) => setTimeout(r, 1500));
-        await onDeactivate();
+        if (result.accountDeactivated) {
+          setWithdrawStep("deactivating");
+          toast.success(result.message || "Successfully withdrawn funds!");
+          await new Promise((r) => setTimeout(r, 1500));
+          await onDeactivate();
+          return;
+        }
+
+        toast.success(result.message || "Withdrawal completed.");
+        setWithdrawStep("idle");
+        onClose();
         return;
       }
 
@@ -1429,7 +1436,8 @@ function WithdrawAgentModal({
         </div>
 
         <p className="mt-3 text-xs text-[#8A837C]">
-          This action withdraws your full agent balance to your wallet and deactivates automation.
+          This action withdraws your full currently redeemable agent balance to your wallet.
+          Automation deactivates only if no protocol positions remain after execution.
         </p>
 
         <div className="mt-5 rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] px-4 py-3">

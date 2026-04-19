@@ -467,7 +467,7 @@ class UtilizationMonitor:
         cooldown_key = (position.account_id, protocol_id)
         cooldown_until = self._cooldowns.get(cooldown_key)
         if cooldown_until and now < cooldown_until:
-            logger.info(
+            logger.debug(
                 "Utilization monitor cooldown active for account=%s protocol=%s (%ds remaining)",
                 position.account_id,
                 protocol_id,
@@ -489,6 +489,12 @@ class UtilizationMonitor:
 
         amount_usdc = await self._resolve_withdrawable_amount(position, protocol_id)
         if amount_usdc <= _MIN_POSITION_USDC:
+            await self._apply_zero_withdrawable_cooldown_if_needed(
+                cooldown_key=cooldown_key,
+                position=position,
+                protocol_id=protocol_id,
+                now=now,
+            )
             return
 
         async with execution_lock:
@@ -550,6 +556,33 @@ class UtilizationMonitor:
             account_id=position.account_id,
             smart_account_address=position.smart_account_address,
             source_protocol_id=protocol_id,
+        )
+
+    async def _apply_zero_withdrawable_cooldown_if_needed(
+        self,
+        *,
+        cooldown_key: tuple[str, str],
+        position: PositionSnapshot,
+        protocol_id: str,
+        now: datetime,
+    ) -> None:
+        """Back off when vault reports zero withdrawable assets for this owner."""
+        max_withdrawable_assets = await self._read_erc4626_max_withdrawable_assets(
+            protocol_id=protocol_id,
+            owner_address=position.smart_account_address,
+        )
+        if max_withdrawable_assets is None or max_withdrawable_assets > _MIN_POSITION_USDC:
+            return
+
+        cooldown_seconds = max(300, int(self.settings.EMERGENCY_WITHDRAWAL_COOLDOWN))
+        self._cooldowns[cooldown_key] = now + timedelta(seconds=cooldown_seconds)
+        logger.info(
+            "Utilization-triggered withdrawal skipped for account=%s protocol=%s "
+            "due to zero withdrawable liquidity (maxWithdraw=$%.6f); applying %ss cooldown",
+            position.account_id,
+            protocol_id,
+            float(max_withdrawable_assets),
+            cooldown_seconds,
         )
 
     async def _run_post_withdrawal_rebalance(
