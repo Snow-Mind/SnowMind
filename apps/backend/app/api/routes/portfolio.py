@@ -52,6 +52,7 @@ _BALANCE_RECONCILE_EPSILON_USDC = Decimal("0.000001")
 _USDC_TRANSFER_TOPIC_PREFIX = "ddf252ad"
 _PRINCIPAL_RECONCILE_DRIFT_USDC = Decimal("0.50")
 _PRINCIPAL_RECONCILE_UNDERCOUNT_DRIFT_USDC = Decimal("0.01")
+_PRINCIPAL_RECONCILE_SEVERE_UNDERCOUNT_USDC = Decimal("5.00")
 _PRINCIPAL_RECONCILE_UNDERCOUNT_LOOKBACK_MINUTES = 180
 _PRINCIPAL_RECONCILE_IMPROVEMENT_EPSILON_USDC = Decimal("0.01")
 _PRINCIPAL_RECONCILE_MAX_TX = 5000
@@ -60,6 +61,8 @@ _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 _PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
 _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS = 3600
 _YIELD_DUST_EPSILON_USD = Decimal("0.00001")
+_PRINCIPAL_DISPLAY_DUST_USD = Decimal("0.01")
+_PORTFOLIO_ONCHAIN_CALL_TIMEOUT_SECONDS = 8.0
 _UNSUPPORTED_PROTOCOL_SCAN_LIMIT = 250
 _SNOWTRACE_PAGE_SIZE = 1000
 _SNOWTRACE_MAX_PAGES = 20
@@ -865,8 +868,6 @@ async def _get_idle_usdc(address: str) -> Decimal:
 
     Retries on both 429 (rate-limit) and -32603 (RPC internal error).
     """
-    import asyncio
-
     for attempt in range(3):
         try:
             settings = get_settings()
@@ -875,10 +876,21 @@ async def _get_idle_usdc(address: str) -> Decimal:
                 address=w3.to_checksum_address(settings.USDC_ADDRESS),
                 abi=_ERC20_ABI,
             )
-            balance_wei = await usdc.functions.balanceOf(
-                w3.to_checksum_address(address)
-            ).call()
+            balance_wei = await asyncio.wait_for(
+                usdc.functions.balanceOf(w3.to_checksum_address(address)).call(),
+                timeout=_PORTFOLIO_ONCHAIN_CALL_TIMEOUT_SECONDS,
+            )
             return Decimal(str(balance_wei)) / Decimal("1000000")
+        except asyncio.TimeoutError:
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (2 ** attempt))
+                continue
+            logger.warning(
+                "Timed out reading idle USDC for %s after %d attempts",
+                address,
+                attempt + 1,
+            )
+            return Decimal("0")
         except Exception as exc:
             err_str = str(exc)
             if attempt < 2:
@@ -902,8 +914,20 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | Non
         try:
             settings = get_settings()
             adapter = get_adapter(protocol_id)
-            balance_wei = await adapter.get_user_balance(address, settings.USDC_ADDRESS)
+            balance_wei = await asyncio.wait_for(
+                adapter.get_user_balance(address, settings.USDC_ADDRESS),
+                timeout=_PORTFOLIO_ONCHAIN_CALL_TIMEOUT_SECONDS,
+            )
             return Decimal(str(balance_wei)) / Decimal("1000000")
+        except asyncio.TimeoutError:
+            if attempt == 0:
+                continue
+            logger.warning(
+                "On-chain balance read timed out for %s/%s",
+                protocol_id,
+                address,
+            )
+            return None
         except Exception as exc:
             err_str = str(exc)
             if attempt == 0 and ("429" in err_str or "Too Many Requests" in err_str):
@@ -1173,6 +1197,9 @@ async def get_portfolio(
     if tracked_net_principal is not None:
         principal_overcount = (tracked_net_principal - total_current_value) > _PRINCIPAL_RECONCILE_DRIFT_USDC
         principal_undercount = (total_current_value - tracked_net_principal) > _PRINCIPAL_RECONCILE_UNDERCOUNT_DRIFT_USDC
+        severe_principal_undercount = (
+            total_current_value - tracked_net_principal
+        ) > _PRINCIPAL_RECONCILE_SEVERE_UNDERCOUNT_USDC
 
         recent_funding_transfer = False
         if principal_undercount:
@@ -1204,7 +1231,11 @@ async def get_portfolio(
                     exc,
                 )
 
-        reconcile_principal = principal_overcount or (principal_undercount and recent_funding_transfer)
+        reconcile_principal = (
+            principal_overcount
+            or severe_principal_undercount
+            or (principal_undercount and recent_funding_transfer)
+        )
 
     reconcile_source: str | None = None
     reconcile_skipped_no_improvement = False
@@ -1322,6 +1353,11 @@ async def get_portfolio(
                 has_executed_rebalance,
             )
         # No deployed positions means any PnL shown here is usually ledger drift, not real yield.
+        net_principal = total_current_value
+
+    # Suppress sub-cent principal drift in display so tiny reconciliation noise
+    # does not appear as misleading negative/positive earned value.
+    if abs(total_current_value - net_principal) <= _PRINCIPAL_DISPLAY_DUST_USD:
         net_principal = total_current_value
 
     total_yield = _normalize_yield_dust(total_current_value - net_principal)

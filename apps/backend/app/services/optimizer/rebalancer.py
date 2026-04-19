@@ -38,7 +38,6 @@ from app.services.optimizer.rate_validator import RateValidator
 from app.services.protocols import ALL_ADAPTERS
 from app.services.fee_calculator import (
     record_deposit,
-    record_partial_withdrawal,
 )
 from app.services.protocols import get_adapter
 from app.services.protocols.base import ProtocolHealth, ProtocolStatus, get_shared_async_web3
@@ -2177,8 +2176,8 @@ class Rebalancer:
     ) -> str:
         """Withdraw a portion from a single protocol — no fee charged.
 
-        Tracks cumulative_withdrawn in account_yield_tracking so the
-        full-withdrawal profit calculation remains correct.
+        Used for internal risk actions (e.g. emergency exits to idle).
+        This path must NOT mutate user principal/withdrawal accounting.
         """
         db = get_supabase()
         amount = Decimal(str(amount_usdc))
@@ -2214,11 +2213,6 @@ class Rebalancer:
             qi_amount = await adapter.usdc_to_qi_tokens(amount_wei)
             entry["qiTokenAmount"] = str(qi_amount)
 
-        pre_balance_usdc = await self._read_protocol_balance_usdc(
-            protocol_id,
-            smart_account_address,
-        )
-
         tx_hash = await self._call_execution_service(
             serialized_permission=session_key,
             smart_account_address=smart_account_address,
@@ -2249,31 +2243,11 @@ class Rebalancer:
                     on_conflict="account_id,protocol_id",
                 ).execute()
 
-        # Track the partial withdrawal with observed on-chain delta when possible.
-        observed_withdrawal = amount
-        if pre_balance_usdc is not None and post_balance_usdc is not None:
-            observed_delta = max(pre_balance_usdc - post_balance_usdc, Decimal("0"))
-            observed_withdrawal = min(amount, observed_delta)
-
-        if observed_withdrawal > Decimal("0"):
-            record_partial_withdrawal(
-                db,
-                account_id,
-                observed_withdrawal.quantize(Decimal("0.000001"), rounding=ROUND_DOWN),
-            )
-        else:
-            logger.warning(
-                "Skipping partial-withdrawal yield tracking update for %s/%s due non-positive observed delta",
-                smart_account_address,
-                protocol_id,
-            )
-
         logger.info(
-            "Partial withdrawal from %s for %s: requested=$%.6f observed=$%.6f tx=%s",
+            "Partial withdrawal from %s for %s: requested=$%.6f tx=%s",
             protocol_id,
             smart_account_address,
             float(amount),
-            float(observed_withdrawal),
             tx_hash,
         )
         return tx_hash
