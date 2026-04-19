@@ -47,6 +47,7 @@ _ERC20_ABI = [
 ]
 
 _PROTOCOL_BALANCE_DUST_USDC = Decimal("0.01")
+_PROTOCOL_BALANCE_VALUATION_EPSILON_USDC = Decimal("0.000001")
 _BALANCE_RECONCILE_EPSILON_USDC = Decimal("0.000001")
 _USDC_TRANSFER_TOPIC_PREFIX = "ddf252ad"
 _PRINCIPAL_RECONCILE_DRIFT_USDC = Decimal("0.50")
@@ -58,7 +59,7 @@ _PRINCIPAL_RECONCILE_PAGE_SIZE = 500
 _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 _PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
 _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS = 3600
-_YIELD_DUST_EPSILON_USD = Decimal("0.000000001")
+_YIELD_DUST_EPSILON_USD = Decimal("0.00001")
 _UNSUPPORTED_PROTOCOL_SCAN_LIMIT = 250
 _SNOWTRACE_PAGE_SIZE = 1000
 _SNOWTRACE_MAX_PAGES = 20
@@ -1088,9 +1089,8 @@ async def get_portfolio(
     live_apys = balance_results[len(protocol_ids) + 1]
 
     # Reconcile DB allocations against on-chain reality:
-    #   - If on-chain > 0 and DB differs significantly → use on-chain
-    #   - If on-chain > 0 and not in DB → add as discovered allocation
-    #   - If on-chain ≈ 0 but DB > 0 → zero out the stale DB entry
+    #   - Always use on-chain balances for valuation (micro-USDC precision)
+    #   - Keep tiny dust out of allocation display, but include it in totals
     for pid in protocol_ids:
         onchain_balance = onchain_balances[pid]
         existing = next((a for a in allocations if a.protocol_id == pid), None)
@@ -1099,7 +1099,7 @@ async def get_portfolio(
         if onchain_balance is None:
             continue
 
-        if onchain_balance > _PROTOCOL_BALANCE_DUST_USDC:
+        if onchain_balance > _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
             if existing:
                 if _should_refresh_amount(existing.amount_usdc, onchain_balance):
                     total_current_value -= existing.amount_usdc
@@ -1117,12 +1117,12 @@ async def get_portfolio(
                 )
                 total_current_value += onchain_balance
         else:
-            if existing and existing.amount_usdc > _PROTOCOL_BALANCE_DUST_USDC:
+            if existing and existing.amount_usdc > _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
                 total_current_value -= existing.amount_usdc
                 existing.amount_usdc = Decimal("0")
 
-    # Remove zero-balance allocations so they don't clutter the response
-    allocations = [a for a in allocations if a.amount_usdc > Decimal("0.01")]
+    # Remove tiny allocations from display so response stays readable.
+    allocations = [a for a in allocations if a.amount_usdc > _PROTOCOL_BALANCE_DUST_USDC]
 
     # Apply live APYs (already fetched in parallel above)
     for alloc in allocations:
@@ -1130,18 +1130,19 @@ async def get_portfolio(
         if apy > Decimal("0"):
             alloc.current_apy = apy
 
-    # Add idle USDC if present
-    if idle_usdc > Decimal("0.01"):
+    # Include idle USDC in valuation even when it is below display dust.
+    if idle_usdc > _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
         total_current_value += idle_usdc
-        allocations.append(
-            AllocationResponse(
-                protocol_id="idle",
-                name="Idle USDC (Wallet)",
-                amount_usdc=idle_usdc,
-                allocation_pct=Decimal("0"),
-                current_apy=Decimal("0"),
+        if idle_usdc > _PROTOCOL_BALANCE_DUST_USDC:
+            allocations.append(
+                AllocationResponse(
+                    protocol_id="idle",
+                    name="Idle USDC (Wallet)",
+                    amount_usdc=idle_usdc,
+                    allocation_pct=Decimal("0"),
+                    current_apy=Decimal("0"),
+                )
             )
-        )
 
     # Recalculate allocation_pct for all entries
     if total_current_value > 0:

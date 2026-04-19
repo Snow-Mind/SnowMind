@@ -14,13 +14,14 @@ export function usePortfolio(address: string | undefined) {
     queryKey: ["portfolio", safeAddress],
     queryFn: () => api.getPortfolio(safeAddress!),
     enabled: !!safeAddress && ready && authenticated,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     refetchInterval: (query) => {
       const err = query.state.error;
       if (err instanceof APIError && (err.status === 401 || err.status === 429)) return false;
-      return 30_000;
+      return 10_000;
     },
-    staleTime: 15_000,
+    staleTime: 5_000,
     retry: (failureCount, error) => {
       // Never retry auth/not-found failures.
       if (error instanceof APIError && (error.status === 401 || error.status === 404 || error.status === 429)) return false;
