@@ -58,6 +58,22 @@ def test_normalize_yield_dust_keeps_real_values() -> None:
     assert portfolio._normalize_yield_dust(Decimal("-0.0002")) == Decimal("-0.0002")
 
 
+def test_apply_principal_display_dust_clamps_sub_cent_drift() -> None:
+    adjusted = portfolio._apply_principal_display_dust(
+        net_principal=Decimal("1.010759"),
+        total_current_value=Decimal("1.001625"),
+    )
+    assert adjusted == Decimal("1.001625")
+
+
+def test_apply_principal_display_dust_keeps_material_drift() -> None:
+    adjusted = portfolio._apply_principal_display_dust(
+        net_principal=Decimal("100.000000"),
+        total_current_value=Decimal("99.970000"),
+    )
+    assert adjusted == Decimal("100.000000")
+
+
 def test_payload_has_unsupported_protocol_detects_legacy_protocol() -> None:
     assert portfolio._payload_has_unsupported_protocol({"folks": "1"})
 

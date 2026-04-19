@@ -118,6 +118,17 @@ def _normalize_yield_dust(total_yield: Decimal) -> Decimal:
     return total_yield
 
 
+def _apply_principal_display_dust(
+    *,
+    net_principal: Decimal,
+    total_current_value: Decimal,
+) -> Decimal:
+    """Clamp sub-cent principal drift in display to avoid noisy earned value."""
+    if abs(total_current_value - net_principal) <= _PRINCIPAL_DISPLAY_DUST_USD:
+        return total_current_value
+    return net_principal
+
+
 def _persist_principal_normalization(
     db: Client,
     *,
@@ -1357,8 +1368,10 @@ async def get_portfolio(
 
     # Suppress sub-cent principal drift in display so tiny reconciliation noise
     # does not appear as misleading negative/positive earned value.
-    if abs(total_current_value - net_principal) <= _PRINCIPAL_DISPLAY_DUST_USD:
-        net_principal = total_current_value
+    net_principal = _apply_principal_display_dust(
+        net_principal=net_principal,
+        total_current_value=total_current_value,
+    )
 
     total_yield = _normalize_yield_dust(total_current_value - net_principal)
 
