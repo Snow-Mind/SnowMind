@@ -1320,10 +1320,13 @@ function WithdrawAgentModal({
     : 0;
   const fallbackTotalUsdc = Math.max(allocationTotalUsdc, portfolioTotalUsdc, 0);
 
-  const displayUserReceivesUsdc = withdrawPreview?.userReceives ?? fallbackTotalUsdc;
-  const requestCurrentBalanceUsdc = withdrawPreview?.currentBalance ?? fallbackTotalUsdc;
-  const liquidityGapUsdc = Math.max(requestCurrentBalanceUsdc - displayUserReceivesUsdc, 0);
-  const liquidityConstrained = requestCurrentBalanceUsdc > 0 && liquidityGapUsdc > 0.01;
+  const hasExactPreviewQuote = withdrawPreview !== null;
+  const displayUserReceivesUsdc = withdrawPreview?.userReceives ?? 0;
+  const requestCurrentBalanceUsdc = withdrawPreview?.currentBalance ?? 0;
+  const liquidityGapUsdc = hasExactPreviewQuote
+    ? Math.max(requestCurrentBalanceUsdc - displayUserReceivesUsdc, 0)
+    : 0;
+  const liquidityConstrained = hasExactPreviewQuote && requestCurrentBalanceUsdc > 0 && liquidityGapUsdc > 0.01;
 
   useEffect(() => {
     let cancelled = false;
@@ -1373,6 +1376,12 @@ function WithdrawAgentModal({
   async function handleFullWithdraw() {
     if (!smartAccountAddress) return;
     setWithdrawStep("processing");
+
+    if (!withdrawPreview) {
+      toast.error("Unable to fetch exact on-chain withdrawal quote. Please retry.");
+      setWithdrawStep("idle");
+      return;
+    }
 
     const requestedAmount = Math.max(requestCurrentBalanceUsdc, 0).toFixed(6);
 
@@ -1473,9 +1482,16 @@ function WithdrawAgentModal({
             <span className="font-mono text-sm text-[#5C5550]">
               {previewLoading
                 ? "Calculating..."
-                : `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`}
+                : hasExactPreviewQuote
+                  ? `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`
+                  : "Unavailable"}
             </span>
           </div>
+          {hasExactPreviewQuote && !previewLoading && (
+            <p className="mt-1 text-[10px] text-[#8A837C]">
+              On-chain currently redeemable: {requestCurrentBalanceUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC
+            </p>
+          )}
           {previewError && (
             <p className="mt-1 text-[10px] text-[#DC2626]">{previewError}</p>
           )}
@@ -1494,6 +1510,7 @@ function WithdrawAgentModal({
           disabled={
             withdrawStep === "processing"
             || previewLoading
+            || !hasExactPreviewQuote
             || displayUserReceivesUsdc <= 0
           }
           className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2.5 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"

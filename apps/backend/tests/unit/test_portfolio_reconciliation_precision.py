@@ -95,6 +95,22 @@ def test_should_not_include_idle_allocation_for_micro_dust() -> None:
     )
 
 
+def test_conservative_erc4626_assets_prefers_preview_redeem_when_lower() -> None:
+    assert portfolio._conservative_erc4626_assets(100032509, 100029182) == 100029182
+
+
+def test_conservative_erc4626_assets_falls_back_to_convert_to_assets() -> None:
+    assert portfolio._conservative_erc4626_assets(100032509, None) == 100032509
+
+
+def test_conservative_erc4626_shares_caps_to_max_redeem() -> None:
+    assert portfolio._conservative_erc4626_shares(1000, 995) == 995
+
+
+def test_conservative_erc4626_shares_preserves_original_without_cap() -> None:
+    assert portfolio._conservative_erc4626_shares(1000, None) == 1000
+
+
 def test_payload_has_unsupported_protocol_detects_legacy_protocol() -> None:
     assert portfolio._payload_has_unsupported_protocol({"folks": "1"})
 

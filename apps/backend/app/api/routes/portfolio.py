@@ -46,6 +46,37 @@ _ERC20_ABI = [
     }
 ]
 
+_ERC4626_WITHDRAWABLE_PROTOCOLS = {
+    "spark",
+    "euler_v2",
+    "silo_savusd_usdc",
+    "silo_susdp_usdc",
+}
+
+_ERC4626_WITHDRAWABLE_ABI = [
+    {
+        "name": "maxRedeem",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "previewRedeem",
+        "type": "function",
+        "inputs": [{"name": "shares", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "convertToAssets",
+        "type": "function",
+        "inputs": [{"name": "shares", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+]
+
 _PROTOCOL_BALANCE_DUST_USDC = Decimal("0.01")
 _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC = Decimal("0.000001")
 _IDLE_DISPLAY_MIN_RATIO = Decimal("0.001")
@@ -935,10 +966,86 @@ async def _get_idle_usdc(address: str) -> Decimal:
     return Decimal("0")
 
 
+def _erc4626_vault_address(protocol_id: str) -> str | None:
+    settings = get_settings()
+    if protocol_id == "spark":
+        return settings.SPARK_SPUSDC
+    if protocol_id == "euler_v2":
+        return settings.EULER_VAULT
+    if protocol_id == "silo_savusd_usdc":
+        return settings.SILO_SAVUSD_VAULT
+    if protocol_id == "silo_susdp_usdc":
+        return settings.SILO_SUSDP_VAULT
+    return None
+
+
+def _conservative_erc4626_assets(convert_to_assets_raw: int, preview_redeem_raw: int | None) -> int:
+    if preview_redeem_raw is None:
+        return int(convert_to_assets_raw)
+    return int(min(int(convert_to_assets_raw), int(preview_redeem_raw)))
+
+
+def _conservative_erc4626_shares(shares_raw: int, max_redeem_raw: int | None) -> int:
+    if max_redeem_raw is None:
+        return int(shares_raw)
+    return int(min(int(shares_raw), int(max_redeem_raw)))
+
+
+async def _get_erc4626_withdrawable_balance(address: str, protocol_id: str) -> Decimal | None:
+    vault_address = _erc4626_vault_address(protocol_id)
+    if not vault_address:
+        return None
+
+    try:
+        adapter = get_adapter(protocol_id)
+        shares = int(await adapter.get_shares(address))
+        if shares <= 0:
+            return Decimal("0")
+
+        w3 = get_shared_async_web3()
+        owner = w3.to_checksum_address(address)
+        vault = w3.eth.contract(
+            address=w3.to_checksum_address(vault_address),
+            abi=_ERC4626_WITHDRAWABLE_ABI,
+        )
+
+        max_redeem_raw: int | None = None
+        try:
+            max_redeem_raw = int(await vault.functions.maxRedeem(owner).call())
+        except Exception as exc:
+            logger.debug("maxRedeem unavailable for %s/%s: %s", protocol_id, address, exc)
+
+        redeemable_shares = _conservative_erc4626_shares(shares, max_redeem_raw)
+        if redeemable_shares <= 0:
+            return Decimal("0")
+
+        convert_raw = int(await vault.functions.convertToAssets(redeemable_shares).call())
+
+        preview_raw: int | None = None
+        try:
+            preview_raw = int(await vault.functions.previewRedeem(redeemable_shares).call())
+        except Exception as exc:
+            logger.debug("previewRedeem unavailable for %s/%s: %s", protocol_id, address, exc)
+
+        conservative_raw = _conservative_erc4626_assets(convert_raw, preview_raw)
+        return Decimal(str(conservative_raw)) / Decimal("1000000")
+    except Exception as exc:
+        logger.warning("Conservative ERC-4626 read failed for %s/%s: %s", protocol_id, address, exc)
+        return None
+
+
 async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | None:
     """Read on-chain underlying balance for a protocol."""
     for attempt in range(2):
         try:
+            if protocol_id in _ERC4626_WITHDRAWABLE_PROTOCOLS:
+                conservative_balance = await asyncio.wait_for(
+                    _get_erc4626_withdrawable_balance(address, protocol_id),
+                    timeout=_PORTFOLIO_ONCHAIN_CALL_TIMEOUT_SECONDS,
+                )
+                if conservative_balance is not None:
+                    return conservative_balance
+
             settings = get_settings()
             adapter = get_adapter(protocol_id)
             balance_wei = await asyncio.wait_for(

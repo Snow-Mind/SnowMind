@@ -167,15 +167,21 @@ function allocationSummary(allocations: Record<string, number>): string {
   const total = allocationTotal(allocations);
   if (!Number.isFinite(total) || total <= 0) return "-";
 
+  const formatAllocationPercent = (pct: number) => {
+    if (pct >= 10) return `${pct.toFixed(1)}%`;
+    if (pct >= 1) return `${pct.toFixed(2)}%`;
+    return `${pct.toFixed(3)}%`;
+  };
+
   const [topId, topAmount] = sorted[0];
   const topPct = (topAmount / total) * 100;
   if (sorted.length === 1) {
-    return `${protocolLabel(topId)} ${topPct.toFixed(0)}%`;
+    return `${protocolLabel(topId)} ${formatAllocationPercent(topPct)}`;
   }
 
   const [secondId, secondAmount] = sorted[1];
   const secondPct = (secondAmount / total) * 100;
-  return `${protocolLabel(topId)} ${topPct.toFixed(0)}% · ${protocolLabel(secondId)} ${secondPct.toFixed(0)}%`;
+  return `${protocolLabel(topId)} ${formatAllocationPercent(topPct)} · ${protocolLabel(secondId)} ${formatAllocationPercent(secondPct)}`;
 }
 
 function inferAction(entry: RebalanceLogEntry): ActionType {

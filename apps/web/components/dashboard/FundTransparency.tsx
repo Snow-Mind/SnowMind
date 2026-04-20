@@ -12,7 +12,7 @@ import {
   Copy,
 } from "lucide-react";
 import { EXPLORER, PROTOCOL_CONFIG, CONTRACTS, type ProtocolId } from "@/lib/constants";
-import { formatUsd, formatUsdExact } from "@/lib/format";
+import { formatPct, formatUsd, formatUsdExact } from "@/lib/format";
 import { toast } from "sonner";
 import type { Portfolio } from "@snowmind/shared-types";
 import type { SessionKeyStatusResponse } from "@snowmind/shared-types";
@@ -83,6 +83,18 @@ export default function FundTransparency({
     : 0;
   const totalYield = portfolio ? Number(portfolio.totalYieldUsd) : 0;
   const allocations = portfolio?.allocations ?? [];
+  const totalAllocatedUsdc = allocations.reduce(
+    (sum, allocation) => sum + Number(allocation.amountUsdc),
+    0,
+  );
+
+  const formatAllocationPct = (amountUsdc: number) => {
+    if (totalAllocatedUsdc <= 0) return "0.0%";
+    const pct = (amountUsdc / totalAllocatedUsdc) * 100;
+    if (pct >= 10) return formatPct(pct, 1);
+    if (pct >= 1) return formatPct(pct, 2);
+    return formatPct(pct, 3);
+  };
 
   // Protocol breakdown with on-chain links
   const protocolAllocations = allocations.filter(
@@ -154,6 +166,7 @@ export default function FundTransparency({
               const cfg =
                 PROTOCOL_CONFIG[alloc.protocolId as ProtocolId];
               const amount = Number(alloc.amountUsdc);
+              const allocationPct = formatAllocationPct(amount);
               return (
                 <div
                   key={alloc.protocolId}
@@ -179,7 +192,7 @@ export default function FundTransparency({
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-xs font-medium text-[#1A1715]">
-                      {formatUsd(amount)}
+                      {formatUsd(amount)} ({allocationPct})
                     </span>
                     {cfg && (
                       <a
@@ -203,7 +216,7 @@ export default function FundTransparency({
             </p>
           )}
 
-          {idleBalance && Number(idleBalance.amountUsdc) > 0.01 && (
+          {idleBalance && Number(idleBalance.amountUsdc) > 0 && (
             <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-[#F5F0EB]/50 px-3 py-2.5">
               <div className="flex items-center gap-2">
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#64748B]" />
@@ -212,7 +225,7 @@ export default function FundTransparency({
                 </span>
               </div>
               <span className="font-mono text-xs font-medium text-[#1A1715]">
-                {formatUsd(Number(idleBalance.amountUsdc))}
+                {formatUsd(Number(idleBalance.amountUsdc))} ({formatAllocationPct(Number(idleBalance.amountUsdc))})
               </span>
             </div>
           )}
