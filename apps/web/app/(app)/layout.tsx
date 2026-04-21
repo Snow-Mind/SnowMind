@@ -67,7 +67,7 @@ function TopBar({
     : "Connected";
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[#E8E2DA] bg-[#FAFAF8]/90 px-6 backdrop-blur-xl">
+    <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between border-b border-[#E8E2DA] bg-[#FAFAF8]/90 px-3 py-2 backdrop-blur-xl sm:h-14 sm:px-6 sm:py-0">
       {/* Left: Logo */}
       <Link href="/dashboard" className="flex items-center gap-2">
         <NeuralSnowflakeLogo className="h-5 w-5" />
@@ -77,11 +77,11 @@ function TopBar({
       </Link>
 
       {/* Right: Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-end gap-1.5 sm:gap-2">
         {isAgentActive && (
           <button
             onClick={onDeposit}
-            className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
+            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#E8E2DA] bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm sm:px-3 sm:text-xs"
           >
             <ArrowDownToLine className="h-3.5 w-3.5" />
             Deposit
@@ -91,7 +91,7 @@ function TopBar({
         {isAgentActive && (
           <button
             onClick={onWithdraw}
-            className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 text-xs font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm"
+            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#E8E2DA] bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm sm:px-3 sm:text-xs"
           >
             <ArrowUpFromLine className="h-3.5 w-3.5" />
             Withdraw
@@ -102,10 +102,10 @@ function TopBar({
         <div className="relative">
           <button
             onClick={() => setAccountOpen(!accountOpen)}
-            className="flex items-center gap-2 rounded-lg border border-[#E8E2DA] bg-white px-3 py-1.5 transition-colors hover:border-[#D4CEC7]"
+            className="flex items-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-2.5 py-1.5 transition-colors hover:border-[#D4CEC7] sm:gap-2 sm:px-3"
           >
             <span className="inline-block h-2 w-2 rounded-full bg-[#059669]" />
-            <span className="font-mono text-xs text-[#5C5550]">{truncatedEoa}</span>
+            <span className="max-w-[84px] truncate font-mono text-[11px] text-[#5C5550] sm:max-w-none sm:text-xs">{truncatedEoa}</span>
             <ChevronDown className="h-3 w-3 text-[#8A837C]" />
           </button>
 

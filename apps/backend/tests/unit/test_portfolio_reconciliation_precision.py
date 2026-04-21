@@ -162,6 +162,44 @@ async def test_get_protocol_balance_returns_none_after_rate_limit_retries() -> N
 
 
 @pytest.mark.asyncio
+async def test_get_protocol_balance_erc4626_prefers_primary_balance_read() -> None:
+    """ERC-4626 balances should use adapter get_user_balance when available."""
+    adapter = MagicMock()
+    adapter.get_user_balance = AsyncMock(return_value=123_456_789)
+
+    settings = MagicMock()
+    settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    conservative = AsyncMock(return_value=Decimal("120.000000"))
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio.get_adapter", return_value=adapter
+    ), patch("app.api.routes.portfolio._get_erc4626_withdrawable_balance", conservative):
+        result = await portfolio._get_protocol_balance("0xabc", "spark")
+
+    assert result == Decimal("123.456789")
+    conservative.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_protocol_balance_erc4626_falls_back_to_conservative_on_error() -> None:
+    """When ERC-4626 primary balance reads fail, use conservative redeemable balance."""
+    adapter = MagicMock()
+    adapter.get_user_balance = AsyncMock(side_effect=RuntimeError("execution reverted"))
+
+    settings = MagicMock()
+    settings.USDC_ADDRESS = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+
+    conservative = AsyncMock(return_value=Decimal("99.500000"))
+    with patch("app.api.routes.portfolio.get_settings", return_value=settings), patch(
+        "app.api.routes.portfolio.get_adapter", return_value=adapter
+    ), patch("app.api.routes.portfolio._get_erc4626_withdrawable_balance", conservative):
+        result = await portfolio._get_protocol_balance("0xabc", "spark")
+
+    assert result == Decimal("99.500000")
+    conservative.assert_awaited_once_with("0xabc", "spark")
+
+
+@pytest.mark.asyncio
 async def test_get_protocol_balance_returns_none_on_non_retryable_error() -> None:
     """Non-rate-limit balance read failures should return None immediately."""
     adapter = MagicMock()

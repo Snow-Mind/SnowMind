@@ -1038,14 +1038,6 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | Non
     """Read on-chain underlying balance for a protocol."""
     for attempt in range(2):
         try:
-            if protocol_id in _ERC4626_WITHDRAWABLE_PROTOCOLS:
-                conservative_balance = await asyncio.wait_for(
-                    _get_erc4626_withdrawable_balance(address, protocol_id),
-                    timeout=_PORTFOLIO_ONCHAIN_CALL_TIMEOUT_SECONDS,
-                )
-                if conservative_balance is not None:
-                    return conservative_balance
-
             settings = get_settings()
             adapter = get_adapter(protocol_id)
             balance_wei = await asyncio.wait_for(
@@ -1056,6 +1048,15 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | Non
         except asyncio.TimeoutError:
             if attempt == 0:
                 continue
+            if protocol_id in _ERC4626_WITHDRAWABLE_PROTOCOLS:
+                conservative_balance = await _get_erc4626_withdrawable_balance(address, protocol_id)
+                if conservative_balance is not None:
+                    logger.warning(
+                        "Falling back to conservative ERC-4626 balance for %s/%s after timeout",
+                        protocol_id,
+                        address,
+                    )
+                    return conservative_balance
             logger.warning(
                 "On-chain balance read timed out for %s/%s",
                 protocol_id,
@@ -1068,6 +1069,16 @@ async def _get_protocol_balance(address: str, protocol_id: str) -> Decimal | Non
                 from app.core.rpc import get_rpc_manager
                 get_rpc_manager().report_rate_limit()
                 continue  # retry with rotated provider
+            if protocol_id in _ERC4626_WITHDRAWABLE_PROTOCOLS:
+                conservative_balance = await _get_erc4626_withdrawable_balance(address, protocol_id)
+                if conservative_balance is not None:
+                    logger.warning(
+                        "Falling back to conservative ERC-4626 balance for %s/%s after read error: %s",
+                        protocol_id,
+                        address,
+                        exc,
+                    )
+                    return conservative_balance
             logger.warning("On-chain balance read failed for %s/%s: %s", protocol_id, address, exc)
             return None
     return None

@@ -44,6 +44,7 @@ def mock_settings():
     settings.MIN_BALANCE_USD = 0.0
     settings.PORTFOLIO_VALUE_DROP_PCT = 0.10
     settings.MAX_IDLE_OVERFLOW_PCT = 0.80
+    settings.EMERGENCY_PROTOCOL_BLOCKLIST = ""
     settings.PROFITABILITY_BREAKEVEN_DAYS = 7
     settings.REBALANCE_CHECK_INTERVAL = 360
     settings.PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
@@ -82,6 +83,26 @@ def _make_db_mock():
 
     db.table = table
     return db
+
+
+def test_emergency_blocked_protocols_parses_and_normalizes_aliases(mock_settings):
+    mock_settings.EMERGENCY_PROTOCOL_BLOCKLIST = "spark, aave, Silo_SAVUSD_USDC"
+    with patch("app.services.optimizer.rebalancer.get_settings", return_value=mock_settings):
+        rebalancer = Rebalancer()
+
+    assert rebalancer._emergency_blocked_protocols() == {
+        "spark",
+        "aave_v3",
+        "silo_savusd_usdc",
+    }
+
+
+def test_emergency_blocked_protocols_ignores_blank_tokens(mock_settings):
+    mock_settings.EMERGENCY_PROTOCOL_BLOCKLIST = "  , ,  "
+    with patch("app.services.optimizer.rebalancer.get_settings", return_value=mock_settings):
+        rebalancer = Rebalancer()
+
+    assert rebalancer._emergency_blocked_protocols() == set()
 
 
 # ── Test: Full auto-rebalance executes ───────────────────────────────────────

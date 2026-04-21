@@ -260,6 +260,19 @@ class Rebalancer:
         if self.settings.SILO_SUSDP_VAULT:
             self._protocol_addresses["silo_susdp_usdc"] = self.settings.SILO_SUSDP_VAULT
 
+    def _emergency_blocked_protocols(self) -> set[str]:
+        """Return normalized protocol ids disabled by emergency ops controls."""
+        raw = str(getattr(self.settings, "EMERGENCY_PROTOCOL_BLOCKLIST", "") or "")
+        blocked: set[str] = set()
+        for token in raw.split(","):
+            protocol_id = token.strip().lower()
+            if not protocol_id:
+                continue
+            if protocol_id == "aave":
+                protocol_id = "aave_v3"
+            blocked.add(protocol_id)
+        return blocked
+
     def _min_rebalance_gap(self, total_usd: Decimal) -> timedelta:
         """Return minimum time between successful rebalances for this balance size.
 
@@ -757,6 +770,15 @@ class Rebalancer:
                 reason="No protocols permitted by active session key",
             )
 
+        emergency_blocked = self._emergency_blocked_protocols()
+        blocked_in_scope = sorted(pid for pid in allowed_rates if pid in emergency_blocked)
+        if blocked_in_scope:
+            logger.warning(
+                "Emergency protocol blocklist active for %s: %s",
+                smart_account_address,
+                ", ".join(blocked_in_scope),
+            )
+
         # 4. Get current allocations from DB + on-chain verification
         # CRITICAL: Always verify DB allocations against on-chain balances.
         # Stale DB entries (from failed rebalances, partial executions, etc.)
@@ -1132,7 +1154,7 @@ class Rebalancer:
                     is_withdrawal_safe=True,
                 )
             protocol_utilizations[pid] = proto_health.utilization
-            return await check_protocol_health(
+            result = await check_protocol_health(
                 protocol_id=pid,
                 protocol_health=proto_health,
                 current_apy=apy_by_protocol.get(pid, Decimal("0")),
@@ -1144,6 +1166,18 @@ class Rebalancer:
                 protocol_tvl=tvl_by_protocol.get(pid, Decimal("0")),
                 circuit_breaker_failures=circuit_breaker.get_failure_count(pid),
             )
+
+            if pid in emergency_blocked:
+                result.is_healthy = False
+                result.is_deposit_safe = False
+                if not any("Emergency blocklist" in reason for reason in result.exclusion_reasons):
+                    result.exclusion_reasons.append(
+                        "Emergency blocklist: protocol temporarily disabled by ops"
+                    )
+                if position > Decimal("0"):
+                    result.flag = RebalanceFlag.FORCED_REBALANCE
+
+            return result
 
         def _estimate_capacity(pid: str) -> Decimal:
             """Rough protocol capacity for early-stop estimation."""
