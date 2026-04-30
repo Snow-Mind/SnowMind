@@ -300,3 +300,30 @@ def test_tiny_partial_withdrawal_does_not_round_positive_protocol_to_zero():
 
     assert fraction == Decimal("1E-9")
     assert partial["aave_v3"] == 1
+
+
+def test_partial_withdrawal_skips_protocol_leg_that_rounds_to_zero_assets():
+    """Avoid wasting gas on a dust share redeem that cannot return 1 microUSDC."""
+    full_shares = {
+        "aave_v3": 0,
+        "benqi": 1_404,
+        "spark": 0,
+        "euler_v2": 0,
+        "silo_savusd_usdc": 937_000_000,
+        "silo_susdp_usdc": 0,
+    }
+    protocol_usdc = {
+        "benqi": 1,
+        "silo_savusd_usdc": 993_031,
+    }
+
+    partial, fraction = _compute_partial_shares(
+        full_shares=full_shares,
+        protocol_usdc_balances=protocol_usdc,
+        idle_usdc_raw=10_000,
+        total_needed_raw=501_516,
+    )
+
+    assert fraction > Decimal("0")
+    assert partial["benqi"] == 0
+    assert partial["silo_savusd_usdc"] > 0

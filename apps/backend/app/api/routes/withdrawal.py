@@ -578,7 +578,9 @@ def _compute_partial_shares(
         computed = int(Decimal(str(full)) * fraction)
         if computed <= 0 and full > 0 and balance_raw > 0:
             computed = 1
-        partial[pid] = min(computed, int(full))
+        computed = min(computed, int(full))
+        estimated_assets_raw = (computed * balance_raw) // int(full) if full > 0 else 0
+        partial[pid] = computed if estimated_assets_raw >= 1 else 0
 
     return partial, min(raw_fraction, Decimal("1"))
 
