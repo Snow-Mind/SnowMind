@@ -24,6 +24,15 @@ export interface RegisterAccountRequest {
   initialAllocation?: Record<string, string>;
 }
 
+export interface ProtocolSelectionDepositRequest {
+  allowedProtocols: string[];
+  fundingTxHash: string;
+  fundingAmountUsdc: string;
+  fundingSource?: string;
+  allocationCaps?: Record<string, number>;
+  triggerRebalance?: boolean;
+}
+
 // --- Responses ---
 
 export interface RegisterAccountResponse {
@@ -210,6 +219,18 @@ export interface AllowedProtocolsUpdateResponse {
 export interface AllocationCapsUpdateResponse {
   allocationCaps: Record<string, number> | null;
   updatedRows: number;
+}
+
+export interface ProtocolSelectionDepositResponse {
+  allowedProtocols: string[];
+  allocationCaps: Record<string, number> | null;
+  effectiveCapTotalPct: number;
+  idleRemainderPossible: boolean;
+  updatedRows: number;
+  fundingTxHash: string;
+  fundingAmountUsdc: string;
+  fundingRecorded: boolean;
+  rebalanceQueued: boolean;
 }
 
 export interface AssistantMessage {

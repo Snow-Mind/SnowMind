@@ -17,6 +17,8 @@ import type {
   DiversificationPreferenceResponse,
   AllowedProtocolsUpdateResponse,
   AllocationCapsUpdateResponse,
+  ProtocolSelectionDepositRequest,
+  ProtocolSelectionDepositResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
   AssistantChatRequest,
@@ -428,6 +430,19 @@ export const api = {
       {
         method: "PUT",
         body: JSON.stringify({ allocationCaps }),
+      },
+    ),
+
+  depositWithProtocolSelection: (
+    address: string,
+    payload: ProtocolSelectionDepositRequest,
+  ) =>
+    request<ProtocolSelectionDepositResponse>(
+      `/api/v1/accounts/${encodeURIComponent(address)}/deposit`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+        retryable: true,
       },
     ),
 

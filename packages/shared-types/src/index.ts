@@ -19,6 +19,8 @@ export type {
   DiversificationPreferenceResponse,
   AllowedProtocolsUpdateResponse,
   AllocationCapsUpdateResponse,
+  ProtocolSelectionDepositRequest,
+  ProtocolSelectionDepositResponse,
   ApyTimeseriesPoint,
   PlatformTvlResponse,
   AssistantMessage,

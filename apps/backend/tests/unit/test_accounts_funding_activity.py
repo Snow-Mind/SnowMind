@@ -49,7 +49,7 @@ def test_record_funding_transfer_inserts_activity_and_updates_principal() -> Non
     db = _FakeDB(existing_tx=False)
 
     with patch("app.services.fee_calculator.record_deposit") as record_deposit:
-        accounts._record_funding_transfer(
+        recorded = accounts._record_funding_transfer(
             db=db,
             account_id="acct-1",
             address="0xabc",
@@ -59,6 +59,7 @@ def test_record_funding_transfer_inserts_activity_and_updates_principal() -> Non
             is_existing_account=False,
         )
 
+    assert recorded is True
     assert len(db.rebalance_logs.inserted_rows) == 1
     inserted = db.rebalance_logs.inserted_rows[0]
     assert inserted["from_protocol"] == "user_wallet"
@@ -76,7 +77,7 @@ def test_record_funding_transfer_skips_duplicate_tx_hash() -> None:
     db = _FakeDB(existing_tx=True)
 
     with patch("app.services.fee_calculator.record_deposit") as record_deposit:
-        accounts._record_funding_transfer(
+        recorded = accounts._record_funding_transfer(
             db=db,
             account_id="acct-1",
             address="0xabc",
@@ -86,6 +87,7 @@ def test_record_funding_transfer_skips_duplicate_tx_hash() -> None:
             is_existing_account=False,
         )
 
+    assert recorded is False
     assert db.rebalance_logs.inserted_rows == []
     record_deposit.assert_not_called()
 
@@ -95,7 +97,7 @@ def test_record_funding_transfer_skips_existing_account_without_tx_hash() -> Non
     db = _FakeDB(existing_tx=False)
 
     with patch("app.services.fee_calculator.record_deposit") as record_deposit:
-        accounts._record_funding_transfer(
+        recorded = accounts._record_funding_transfer(
             db=db,
             account_id="acct-1",
             address="0xabc",
@@ -105,6 +107,7 @@ def test_record_funding_transfer_skips_existing_account_without_tx_hash() -> Non
             is_existing_account=True,
         )
 
+    assert recorded is False
     assert db.rebalance_logs.inserted_rows == []
     record_deposit.assert_not_called()
 
@@ -114,7 +117,7 @@ def test_record_funding_transfer_existing_account_with_new_tx_tracks_top_up() ->
     db = _FakeDB(existing_tx=False)
 
     with patch("app.services.fee_calculator.record_deposit") as record_deposit:
-        accounts._record_funding_transfer(
+        recorded = accounts._record_funding_transfer(
             db=db,
             account_id="acct-1",
             address="0xabc",
@@ -124,6 +127,7 @@ def test_record_funding_transfer_existing_account_with_new_tx_tracks_top_up() ->
             is_existing_account=True,
         )
 
+    assert recorded is True
     assert len(db.rebalance_logs.inserted_rows) == 1
     inserted = db.rebalance_logs.inserted_rows[0]
     assert inserted["tx_hash"] == "0xfedcba"

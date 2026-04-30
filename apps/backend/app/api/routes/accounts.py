@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -49,6 +50,8 @@ _DEFAULT_ALLOWED_PROTOCOLS = [
 
 _ACCOUNT_REACTIVATION_DUST_USDC = Decimal("0.01")
 _ACCOUNT_BALANCE_READ_TIMEOUT_SECONDS = 8.0
+_MAX_DEPOSIT_REQUEST_USDC = Decimal("10000000")
+_TX_HASH_PATTERN = re.compile(r"^0x[a-f0-9]{64}$")
 _ERC20_BALANCE_OF_ABI = [
     {
         "name": "balanceOf",
@@ -369,23 +372,23 @@ def _record_funding_transfer(
     funding_amount_usdc: str | None,
     funding_source: str | None,
     is_existing_account: bool,
-) -> None:
+) -> bool:
     """Persist onboarding funding transfer as a durable activity row.
 
     This ensures the dashboard can show the initial deposit transaction even
     when subsequent monitoring cycles are all "skipped" entries.
     """
     if not funding_amount_usdc:
-        return
+        return False
 
     try:
         amount = Decimal(str(funding_amount_usdc))
     except (InvalidOperation, TypeError, ValueError):
         logger.warning("Ignoring invalid fundingAmountUsdc for %s: %r", address, funding_amount_usdc)
-        return
+        return False
 
     if amount <= Decimal("0.000001"):
-        return
+        return False
 
     normalized_amount = amount.quantize(Decimal("0.000001"))
     normalized_hash = funding_tx_hash.lower() if funding_tx_hash else None
@@ -397,7 +400,7 @@ def _record_funding_transfer(
             "Skipping funding activity for existing account %s because funding tx hash is missing",
             address,
         )
-        return
+        return False
 
     # Idempotency: same funding tx for same account should not duplicate rows.
     if normalized_hash:
@@ -411,7 +414,7 @@ def _record_funding_transfer(
             .execute()
         )
         if existing.data:
-            return
+            return False
 
     row = {
         "account_id": account_id,
@@ -429,7 +432,7 @@ def _record_funding_transfer(
         db.table("rebalance_logs").insert(row).execute()
     except Exception as exc:
         logger.warning("Failed to persist funding transfer activity for %s: %s", address, exc)
-        return
+        return False
 
     # Keep principal accounting in sync for platform analytics.
     try:
@@ -437,6 +440,34 @@ def _record_funding_transfer(
         record_deposit(db, account_id, normalized_amount)
     except Exception as exc:
         logger.warning("Failed to update deposit tracking for %s: %s", address, exc)
+    return True
+
+
+def _normalize_tx_hash(raw_tx_hash: str) -> str:
+    tx_hash = str(raw_tx_hash or "").strip().lower()
+    if not _TX_HASH_PATTERN.fullmatch(tx_hash):
+        raise ValueError(
+            "fundingTxHash must be a 0x-prefixed 32-byte transaction hash"
+        )
+    return tx_hash
+
+
+def _parse_deposit_amount_usdc(raw_amount: str) -> Decimal:
+    try:
+        amount = Decimal(str(raw_amount))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("fundingAmountUsdc must be a valid decimal string") from exc
+
+    if amount <= Decimal("0"):
+        raise ValueError("fundingAmountUsdc must be greater than 0")
+    if amount > _MAX_DEPOSIT_REQUEST_USDC:
+        raise ValueError(
+            f"fundingAmountUsdc exceeds maximum (${_MAX_DEPOSIT_REQUEST_USDC})"
+        )
+    quantized = amount.quantize(Decimal("0.000001"))
+    if amount != quantized:
+        raise ValueError("fundingAmountUsdc exceeds USDC precision (max 6 decimals)")
+    return quantized
 
 
 # ── Request body ───────────────────────────────────────────
@@ -1214,6 +1245,19 @@ class AllocationCapsUpdateRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ProtocolSelectionDepositRequest(BaseModel):
+    allowed_protocols: list[str] = Field(..., alias="allowedProtocols")
+    funding_tx_hash: str = Field(..., alias="fundingTxHash")
+    funding_amount_usdc: str = Field(..., alias="fundingAmountUsdc")
+    funding_source: str | None = Field(
+        "dashboard_wallet_transfer",
+        alias="fundingSource",
+    )
+    allocation_caps: dict[str, int] | None = Field(None, alias="allocationCaps")
+    trigger_rebalance: bool = Field(True, alias="triggerRebalance")
+    model_config = {"populate_by_name": True}
+
+
 @router.put("/{address}/diversification-preference")
 @limiter.limit("20/minute")
 async def update_diversification_preference(
@@ -1493,5 +1537,173 @@ async def update_allocation_caps(
         "idleRemainderPossible": idle_remainder_possible,
         "allowedProtocols": allowed_scope,
         "updatedRows": active_count,
+    }
+
+
+@router.post("/{address}/deposit")
+@limiter.limit("15/minute")
+async def deposit_with_protocol_selection(
+    request: Request,
+    address: str,
+    req: ProtocolSelectionDepositRequest,
+    db: Client = Depends(get_db),
+    _auth: dict = Depends(require_privy_auth),
+):
+    """Update protocol scope, record a deposit funding tx, and queue deployment."""
+    address = validate_eth_address(address)
+    acct = (
+        db.table("accounts")
+        .select("id, owner_address, privy_did, is_active")
+        .eq("address", address)
+        .limit(1)
+        .execute()
+    )
+    if not acct.data:
+        raise HTTPException(status_code=404, detail="Account not found")
+    verify_account_ownership(_auth, acct.data[0], db=db)
+    account_row = acct.data[0]
+    account_id = account_row["id"]
+    if not account_row.get("is_active", True):
+        db.table("accounts").update(
+            {
+                "is_active": True,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", account_id).execute()
+
+    normalized_protocols = _normalize_allowed_protocols(req.allowed_protocols)
+    if not normalized_protocols:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one valid protocol must be selected",
+        )
+
+    try:
+        normalized_tx_hash = _normalize_tx_hash(req.funding_tx_hash)
+        normalized_amount = _parse_deposit_amount_usdc(req.funding_amount_usdc)
+        requested_caps = _normalize_allocation_caps(req.allocation_caps, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    active_keys = (
+        db.table("session_keys")
+        .select("id, allocation_caps")
+        .eq("account_id", account_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    active_count = len(active_keys.data or [])
+    if active_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="No active session key found. Re-grant session key first",
+        )
+
+    try:
+        excluded_funded_db = _find_excluded_funded_protocols(
+            db,
+            account_id,
+            normalized_protocols,
+        )
+        excluded_funded_chain = await _find_excluded_funded_protocols_onchain(
+            address,
+            normalized_protocols,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed funded-protocol validation for deposit endpoint %s (%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to validate current allocations. Please retry.",
+        ) from exc
+
+    # On-chain balances are authoritative. Log DB drift but do not block on it.
+    if excluded_funded_db and not excluded_funded_chain:
+        logger.info(
+            "Ignoring stale DB-funded exclusions for %s: %s",
+            address,
+            ", ".join(excluded_funded_db),
+        )
+
+    if excluded_funded_chain:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Some selected markets still hold funds: "
+                f"{', '.join(excluded_funded_chain)}. "
+                "Keep them enabled or withdraw first."
+            ),
+        )
+
+    scoped_caps = _scope_allocation_caps(requested_caps, normalized_protocols)
+    if requested_caps is None:
+        try:
+            existing_caps = _normalize_allocation_caps(
+                active_keys.data[0].get("allocation_caps"),
+                strict=False,
+            )
+            scoped_caps = _scope_allocation_caps(existing_caps, normalized_protocols)
+        except Exception as exc:
+            logger.warning(
+                "Failed to scope existing allocation caps for %s: %s",
+                address,
+                exc,
+            )
+
+    if not _has_deployable_cap(scoped_caps, normalized_protocols):
+        raise HTTPException(
+            status_code=400,
+            detail="At least one selected market must have a cap above 0%",
+        )
+
+    effective_total_pct = _effective_cap_total_pct(scoped_caps, normalized_protocols)
+    idle_remainder_possible = effective_total_pct < 100
+
+    try:
+        db.table("session_keys").update(
+            {
+                "allowed_protocols": normalized_protocols,
+                "allocation_caps": scoped_caps,
+            }
+        ).eq("account_id", account_id).eq("is_active", True).execute()
+    except Exception as exc:
+        logger.exception(
+            "Failed to update protocol scope in deposit endpoint %s (%s): %s",
+            address,
+            account_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update selected protocols",
+        ) from exc
+
+    deposit_recorded = _record_funding_transfer(
+        db=db,
+        account_id=account_id,
+        address=address,
+        funding_tx_hash=normalized_tx_hash,
+        funding_amount_usdc=str(normalized_amount),
+        funding_source=req.funding_source,
+        is_existing_account=True,
+    )
+
+    if req.trigger_rebalance:
+        asyncio.create_task(_trigger_initial_rebalance(account_id, address))
+
+    return {
+        "allowedProtocols": normalized_protocols,
+        "allocationCaps": scoped_caps,
+        "effectiveCapTotalPct": effective_total_pct,
+        "idleRemainderPossible": idle_remainder_possible,
+        "updatedRows": active_count,
+        "fundingTxHash": normalized_tx_hash,
+        "fundingAmountUsdc": str(normalized_amount),
+        "fundingRecorded": deposit_recorded,
+        "rebalanceQueued": req.trigger_rebalance,
     }
 
