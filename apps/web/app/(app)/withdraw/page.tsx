@@ -287,7 +287,7 @@ export default function WithdrawPage() {
                       : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:text-white/60 hover:border-white/[0.10]'
                     }`}
                 >
-                  Max
+                  100%
                 </button>
               </div>
 

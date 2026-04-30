@@ -66,6 +66,14 @@ def test_apply_principal_display_dust_clamps_micro_drift() -> None:
     assert adjusted == Decimal("1.000000")
 
 
+def test_apply_principal_display_dust_clamps_sub_cent_negative_earned_drift() -> None:
+    adjusted = portfolio._apply_principal_display_dust(
+        net_principal=Decimal("1.010761"),
+        total_current_value=Decimal("1.003031"),
+    )
+    assert adjusted == Decimal("1.003031")
+
+
 def test_apply_principal_display_dust_keeps_material_drift() -> None:
     adjusted = portfolio._apply_principal_display_dust(
         net_principal=Decimal("100.000000"),

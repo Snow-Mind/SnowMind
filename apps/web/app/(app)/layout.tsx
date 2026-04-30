@@ -1333,6 +1333,7 @@ function WithdrawAgentModal({
   } | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [availableBalanceUsdc, setAvailableBalanceUsdc] = useState(0);
+  const withdrawalPercents = [25, 50, 75, 100] as const;
 
   const allocationTotalUsdc = portfolio?.allocations?.reduce(
     (sum, a) => sum + Number(a.amountUsdc),
@@ -1346,6 +1347,10 @@ function WithdrawAgentModal({
   const parsedAmount = Number(amount);
   const isValidAmount = Number.isFinite(parsedAmount) && parsedAmount > 0 && parsedAmount <= availableBalanceUsdc + 0.000001;
   const isFullWithdrawal = isEffectivelyFullWithdrawal(amount, availableBalanceUsdc);
+  const setWithdrawalPercent = (pct: number) => {
+    const nextAmount = (availableBalanceUsdc * pct / 100).toFixed(6);
+    setAmount(nextAmount);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1569,8 +1574,29 @@ function WithdrawAgentModal({
                   onClick={() => setAmount(availableBalanceUsdc.toFixed(6))}
                   className="rounded border border-[#E8E2DA] px-2 py-0.5 text-[10px] font-semibold text-[#1A1715] hover:bg-[#F5F0EB] transition-colors"
                 >
-                  MAX
+                  100%
                 </button>
+              </div>
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                {withdrawalPercents.map((pct) => {
+                  const pctAmount = availableBalanceUsdc * pct / 100;
+                  const isActive = amount !== "" && Math.abs(Number(amount) - pctAmount) < 0.000001;
+                  return (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => setWithdrawalPercent(pct)}
+                      disabled={availableBalanceUsdc <= 0 || balanceLoading}
+                      className={`rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition-colors disabled:opacity-50 ${
+                        isActive
+                          ? "border-[#1A1715] bg-[#1A1715] text-white"
+                          : "border-[#E8E2DA] bg-white text-[#5C5550] hover:bg-[#F5F0EB]"
+                      }`}
+                    >
+                      {pct}%
+                    </button>
+                  );
+                })}
               </div>
               {isFullWithdrawal && isValidAmount && (
                 <p className="mt-2 text-[11px] text-[#B45309]">
