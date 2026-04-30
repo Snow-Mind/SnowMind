@@ -277,3 +277,26 @@ def test_micro_withdrawal_from_large_portfolio():
 
     assert partial["aave_v3"] >= 1
     assert partial["aave_v3"] < 1_000_000
+
+
+def test_tiny_partial_withdrawal_does_not_round_positive_protocol_to_zero():
+    """A protocol with positive shares and balance should contribute at least 1 share."""
+    full_shares = {
+        "aave_v3": 5,
+        "benqi": 0,
+        "spark": 0,
+        "euler_v2": 0,
+        "silo_savusd_usdc": 0,
+        "silo_susdp_usdc": 0,
+    }
+    protocol_usdc = {"aave_v3": 1_000_000_000}
+
+    partial, fraction = _compute_partial_shares(
+        full_shares=full_shares,
+        protocol_usdc_balances=protocol_usdc,
+        idle_usdc_raw=0,
+        total_needed_raw=1,
+    )
+
+    assert fraction == Decimal("1E-9")
+    assert partial["aave_v3"] == 1

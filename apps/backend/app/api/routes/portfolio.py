@@ -289,6 +289,11 @@ def _portfolio_cache_put(cache_key: str, response: PortfolioResponse, ttl_second
     )
 
 
+def clear_portfolio_cache(account_id: str, address: str) -> None:
+    """Evict cached portfolio reads after writes that change balances."""
+    _portfolio_cache.pop(f"{str(account_id)}:{address.lower()}", None)
+
+
 def _principal_reconcile_key(account_id: str, smart_address: str, owner_address: str) -> str:
     return f"{account_id}:{smart_address.lower()}:{owner_address.lower()}"
 

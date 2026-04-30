@@ -1517,6 +1517,7 @@ function WithdrawAgentModal({
   const previewWithdrawAmount = preview ? Number(preview.withdrawAmount) : 0;
   const previewUserReceives = preview ? Number(preview.userReceives) : 0;
   const previewCurrentBalanceRaw = preview ? Number(preview.currentBalance) : 0;
+  const isProcessingWithdrawal = step === "processing";
   const previewCurrentBalance = Number.isFinite(previewCurrentBalanceRaw)
     ? previewCurrentBalanceRaw
     : availableBalanceUsdc;
@@ -1646,17 +1647,17 @@ function WithdrawAgentModal({
               </button>
               <button
                 onClick={handleExecute}
-                disabled={step === "processing"}
+                disabled={isProcessingWithdrawal}
                 className="flex-[2] items-center justify-center gap-1.5 rounded-lg bg-[#1A1715] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#2D2926] disabled:opacity-50"
               >
-                {step === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isProcessingWithdrawal && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 Confirm withdrawal
               </button>
             </div>
           </div>
         )}
 
-        {step === "processing" && (
+        {isProcessingWithdrawal && (
           <div className="mt-6 flex flex-col items-center text-center">
             <Loader2 className="h-6 w-6 animate-spin text-[#1A1715]" />
             <p className="mt-3 text-xs text-[#8A837C]">

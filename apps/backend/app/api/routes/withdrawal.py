@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import require_privy_auth, verify_account_ownership
 from app.core.validators import validate_eth_address
+from app.api.routes.portfolio import clear_portfolio_cache
 from app.services.fee_calculator import (
     FeeCalculation,
     calculate_agent_fee,
@@ -573,7 +574,11 @@ def _compute_partial_shares(
 
     partial: dict[str, int] = {}
     for pid, full in full_shares.items():
-        partial[pid] = int(Decimal(str(full)) * fraction)
+        balance_raw = int(protocol_usdc_balances.get(pid, 0) or 0)
+        computed = int(Decimal(str(full)) * fraction)
+        if computed <= 0 and full > 0 and balance_raw > 0:
+            computed = 1
+        partial[pid] = min(computed, int(full))
 
     return partial, min(raw_fraction, Decimal("1"))
 
@@ -1278,6 +1283,8 @@ async def execute_withdrawal(
                     "Vault liquidity is currently below your full position, so some funds remain invested. "
                     "Your account stays active; please retry when liquidity returns."
                 )
+
+        clear_portfolio_cache(str(account["id"]), address)
 
         return WithdrawalExecuteResponse(
             status="executed",
