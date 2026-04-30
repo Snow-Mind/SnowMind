@@ -93,7 +93,7 @@ _PRINCIPAL_RECONCILE_COOLDOWN_SECONDS = 300
 _PRINCIPAL_RECONCILE_RETRY_SECONDS = 30
 _PRINCIPAL_RECONCILE_NO_IMPROVE_COOLDOWN_SECONDS = 3600
 _YIELD_DUST_EPSILON_USD = Decimal("0.00001")
-_PRINCIPAL_DISPLAY_DUST_USD = Decimal("0.01")
+_PRINCIPAL_DISPLAY_DUST_USD = Decimal("0.00001")
 _PORTFOLIO_ONCHAIN_CALL_TIMEOUT_SECONDS = 8.0
 _UNSUPPORTED_PROTOCOL_SCAN_LIMIT = 250
 _SNOWTRACE_PAGE_SIZE = 1000
@@ -1337,6 +1337,18 @@ async def get_portfolio(
         .execute()
     )
     last_ts = last_rb.data[0]["created_at"] if last_rb.data else None
+
+    # If yield tracking is missing, attempt a one-time reconciliation from
+    # on-chain transfer history so earned values do not stay pinned to zero.
+    if tracked_net_principal is None and total_current_value > _PROTOCOL_BALANCE_VALUATION_EPSILON_USDC:
+        reconciled_principal = await _reconcile_principal_tracking_from_chain(
+            db,
+            account_id=str(account_id),
+            smart_address=address,
+            owner_address=owner_address,
+        )
+        if reconciled_principal is not None:
+            tracked_net_principal = reconciled_principal
 
     # Expose principal and yield consistently:
     #   current value = net principal + net earned

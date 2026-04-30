@@ -1289,6 +1289,23 @@ function WithdrawModal({ onClose, onDeactivate }: { onClose: () => void; onDeact
 
 // ── Withdraw Modal (Dashboard Quick Action) ─────────────────
 
+const FULL_WITHDRAWAL_DUST_USDC = 0.01;
+
+function isEffectivelyFullWithdrawal(amount: string, currentBalance: number): boolean {
+  const requested = Number(amount);
+  if (!Number.isFinite(requested) || requested <= 0) return false;
+  if (requested >= currentBalance) return true;
+  return currentBalance - requested <= FULL_WITHDRAWAL_DUST_USDC;
+}
+
+function formatUsdcAmount(value: number): string {
+  if (!Number.isFinite(value)) return "0.00";
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  });
+}
+
 function WithdrawAgentModal({
   smartAccountAddress,
   onClose,
@@ -1302,15 +1319,21 @@ function WithdrawAgentModal({
   const queryClient = useQueryClient();
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType !== "privy") ?? wallets[0] ?? null;
-  const [withdrawStep, setWithdrawStep] = useState<"idle" | "processing" | "deactivating">("idle");
+  const [step, setStep] = useState<"input" | "preview" | "processing" | "deactivating">("input");
+  const [amount, setAmount] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [withdrawPreview, setWithdrawPreview] = useState<{
-    currentBalance: number;
-    userReceives: number;
+  const [executeError, setExecuteError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    withdrawAmount: string;
+    currentBalance: string;
+    agentFee: string;
+    userReceives: string;
+    feeExempt: boolean;
   } | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [availableBalanceUsdc, setAvailableBalanceUsdc] = useState(0);
 
-  // Compute a robust fallback balance while preview is loading.
   const allocationTotalUsdc = portfolio?.allocations?.reduce(
     (sum, a) => sum + Number(a.amountUsdc),
     0,
@@ -1320,26 +1343,22 @@ function WithdrawAgentModal({
     : 0;
   const fallbackTotalUsdc = Math.max(allocationTotalUsdc, portfolioTotalUsdc, 0);
 
-  const hasExactPreviewQuote = withdrawPreview !== null;
-  const displayUserReceivesUsdc = withdrawPreview?.userReceives ?? 0;
-  const requestCurrentBalanceUsdc = withdrawPreview?.currentBalance ?? 0;
-  const liquidityGapUsdc = hasExactPreviewQuote
-    ? Math.max(requestCurrentBalanceUsdc - displayUserReceivesUsdc, 0)
-    : 0;
-  const liquidityConstrained = hasExactPreviewQuote && requestCurrentBalanceUsdc > 0 && liquidityGapUsdc > 0.01;
+  const parsedAmount = Number(amount);
+  const isValidAmount = Number.isFinite(parsedAmount) && parsedAmount > 0 && parsedAmount <= availableBalanceUsdc + 0.000001;
+  const isFullWithdrawal = isEffectivelyFullWithdrawal(amount, availableBalanceUsdc);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadWithdrawalPreview() {
+    async function loadAvailableBalance() {
       if (!smartAccountAddress) return;
       if (fallbackTotalUsdc <= 0) {
-        setWithdrawPreview(null);
+        setAvailableBalanceUsdc(0);
         setPreviewError(null);
         return;
       }
 
-      setPreviewLoading(true);
+      setBalanceLoading(true);
       setPreviewError(null);
       try {
         const data = await api.previewWithdrawal({
@@ -1351,57 +1370,87 @@ function WithdrawAgentModal({
         if (cancelled) return;
 
         const parsedCurrent = Number(data.currentBalance);
-        const parsedReceives = Number(data.userReceives);
-
-        setWithdrawPreview({
-          currentBalance: Number.isFinite(parsedCurrent) ? parsedCurrent : fallbackTotalUsdc,
-          userReceives: Number.isFinite(parsedReceives) ? parsedReceives : fallbackTotalUsdc,
-        });
+        setAvailableBalanceUsdc(Number.isFinite(parsedCurrent) ? parsedCurrent : fallbackTotalUsdc);
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         setPreviewError(msg);
-        setWithdrawPreview(null);
+        setAvailableBalanceUsdc(fallbackTotalUsdc);
       } finally {
-        if (!cancelled) setPreviewLoading(false);
+        if (!cancelled) setBalanceLoading(false);
       }
     }
 
-    void loadWithdrawalPreview();
+    void loadAvailableBalance();
     return () => {
       cancelled = true;
     };
   }, [smartAccountAddress, fallbackTotalUsdc]);
 
-  async function handleFullWithdraw() {
+  async function handlePreview() {
     if (!smartAccountAddress) return;
-    setWithdrawStep("processing");
+    setExecuteError(null);
+    setPreviewError(null);
 
-    if (!withdrawPreview) {
-      toast.error("Unable to fetch exact on-chain withdrawal quote. Please retry.");
-      setWithdrawStep("idle");
+    if (!isValidAmount) {
+      setPreviewError("Enter a withdrawal amount within your available balance.");
       return;
     }
 
-    const requestedAmount = Math.max(requestCurrentBalanceUsdc, 0).toFixed(6);
+    setPreviewLoading(true);
+    try {
+      const requestedAmount = isFullWithdrawal
+        ? availableBalanceUsdc.toFixed(6)
+        : parsedAmount.toFixed(6);
+
+      const data = await api.previewWithdrawal({
+        smartAccountAddress,
+        withdrawAmount: requestedAmount,
+        isFullWithdrawal,
+      });
+
+      setPreview({
+        withdrawAmount: data.withdrawAmount,
+        currentBalance: data.currentBalance,
+        agentFee: data.agentFee,
+        userReceives: data.userReceives,
+        feeExempt: data.feeExempt,
+      });
+      setStep("preview");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPreviewError(msg);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function handleExecute() {
+    if (!smartAccountAddress || !preview) return;
+    setExecuteError(null);
+    setStep("processing");
 
     if (!wallet) {
       toast.error("Please connect MetaMask to authorize withdrawal.");
-      setWithdrawStep("idle");
+      setStep("preview");
       return;
     }
+
+    const previewBalance = Number(preview.currentBalance);
+    const normalizedPreviewBalance = Number.isFinite(previewBalance) ? previewBalance : availableBalanceUsdc;
+    const effectiveFullWithdrawal = isEffectivelyFullWithdrawal(preview.withdrawAmount, normalizedPreviewBalance);
 
     try {
       const signaturePayload = await signWithdrawalAuthorization(wallet, {
         smartAccountAddress,
-        withdrawAmount: requestedAmount,
-        isFullWithdrawal: true,
+        withdrawAmount: preview.withdrawAmount,
+        isFullWithdrawal: effectiveFullWithdrawal,
       });
 
       const result = await api.executeWithdrawal({
         smartAccountAddress,
-        withdrawAmount: requestedAmount,
-        isFullWithdrawal: true,
+        withdrawAmount: preview.withdrawAmount,
+        isFullWithdrawal: effectiveFullWithdrawal,
         ownerSignature: signaturePayload.ownerSignature,
         signatureMessage: signaturePayload.signatureMessage,
         signatureTimestamp: signaturePayload.signatureTimestamp,
@@ -1416,7 +1465,7 @@ function WithdrawAgentModal({
         ]);
 
         if (result.accountDeactivated) {
-          setWithdrawStep("deactivating");
+          setStep("deactivating");
           toast.success(result.message || "Successfully withdrawn funds!");
           await new Promise((r) => setTimeout(r, 1500));
           await onDeactivate();
@@ -1424,7 +1473,9 @@ function WithdrawAgentModal({
         }
 
         toast.success(result.message || "Withdrawal completed.");
-        setWithdrawStep("idle");
+        setStep("input");
+        setPreview(null);
+        setAmount("");
         onClose();
         return;
       }
@@ -1432,14 +1483,17 @@ function WithdrawAgentModal({
       throw new Error(result.message || "Withdrawal was not executed");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("User denied") || msg.includes("User rejected")) toast.error("Transaction cancelled.");
-      else toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
-      setWithdrawStep("idle");
+      if (msg.includes("User denied") || msg.includes("User rejected")) {
+        toast.error("Transaction cancelled.");
+      } else {
+        toast.error(msg.length > 120 ? msg.slice(0, 100) + "…" : msg);
+      }
+      setExecuteError(msg);
+      setStep("preview");
     }
   }
 
-  // Deactivation confirmation screen
-  if (withdrawStep === "deactivating") {
+  if (step === "deactivating") {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
         <div className="relative w-full max-w-md rounded-2xl border border-[#E8E2DA] bg-white p-8 shadow-xl text-center">
@@ -1460,6 +1514,18 @@ function WithdrawAgentModal({
     );
   }
 
+  const previewWithdrawAmount = preview ? Number(preview.withdrawAmount) : 0;
+  const previewUserReceives = preview ? Number(preview.userReceives) : 0;
+  const previewCurrentBalanceRaw = preview ? Number(preview.currentBalance) : 0;
+  const previewCurrentBalance = Number.isFinite(previewCurrentBalanceRaw)
+    ? previewCurrentBalanceRaw
+    : availableBalanceUsdc;
+  const previewIsFull = preview ? isEffectivelyFullWithdrawal(preview.withdrawAmount, previewCurrentBalance) : false;
+  const liquidityConstrained = previewIsFull
+    && previewCurrentBalance > 0
+    && previewUserReceives > 0
+    && (previewCurrentBalance - previewUserReceives) > 0.01;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
       <div className="relative w-full max-w-md rounded-2xl border border-[#E8E2DA] bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -1471,53 +1537,133 @@ function WithdrawAgentModal({
         </div>
 
         <p className="mt-3 text-xs text-[#8A837C]">
-          This action withdraws your full currently redeemable agent balance to your wallet.
-          Automation deactivates only if no protocol positions remain after execution.
+          Withdraw any amount of your currently redeemable balance to your wallet.
+          Automation only deactivates after a full withdrawal with no remaining protocol positions.
         </p>
 
-        <div className="mt-5 rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] px-4 py-3">
-          <p className="text-xs font-medium text-[#1A1715]">You receive</p>
-          <div className="mt-1 flex items-center gap-1.5">
-            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#2775CA] text-[8px] font-bold text-white">$</span>
-            <span className="font-mono text-sm text-[#5C5550]">
-              {previewLoading
-                ? "Calculating..."
-                : hasExactPreviewQuote
-                  ? `${displayUserReceivesUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`
-                  : "Unavailable"}
-            </span>
-          </div>
-          {hasExactPreviewQuote && !previewLoading && (
-            <p className="mt-1 text-[10px] text-[#8A837C]">
-              On-chain currently redeemable: {requestCurrentBalanceUsdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC
-            </p>
-          )}
-          {previewError && (
-            <p className="mt-1 text-[10px] text-[#DC2626]">{previewError}</p>
-          )}
-        </div>
+        {step === "input" && (
+          <div className="mt-4 space-y-4">
+            <div>
+              <label className="text-xs font-medium text-[#5C5550]">Withdrawal amount</label>
+              <div className="mt-2 flex items-baseline gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.000001"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className="w-full rounded-xl border border-[#E8E2DA] bg-[#FAFAF8] px-4 py-3 text-lg font-mono text-[#1A1715] placeholder:text-[#B8B0A8] focus:border-[#1A1715]/30 focus:outline-none"
+                />
+                <span className="text-sm font-medium text-[#8A837C]">USDC</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[11px] text-[#8A837C]">
+                <span>
+                  {balanceLoading
+                    ? "Loading available balance…"
+                    : `${formatUsdcAmount(availableBalanceUsdc)} USDC available`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAmount(availableBalanceUsdc.toFixed(6))}
+                  className="rounded border border-[#E8E2DA] px-2 py-0.5 text-[10px] font-semibold text-[#1A1715] hover:bg-[#F5F0EB] transition-colors"
+                >
+                  MAX
+                </button>
+              </div>
+              {isFullWithdrawal && isValidAmount && (
+                <p className="mt-2 text-[11px] text-[#B45309]">
+                  Full withdrawal — agent deactivates only if no protocol positions remain.
+                </p>
+              )}
+            </div>
 
-        {liquidityConstrained && !previewLoading && (
-          <div className="mt-3 rounded-lg border border-[#F59E0B]/30 bg-[#FEF3C7]/50 px-3 py-2">
-            <p className="text-[11px] text-[#92400E]">
-              Silo liquidity is currently lower than your full position. You can withdraw only the currently available amount now, and the remaining balance will stay invested. Please come back when liquidity increases.
-            </p>
+            {previewError && (
+              <p className="text-[11px] text-[#DC2626]">{previewError}</p>
+            )}
+
+            <button
+              onClick={handlePreview}
+              disabled={!isValidAmount || previewLoading}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2.5 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
+            >
+              {previewLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Preview withdrawal
+            </button>
           </div>
         )}
 
-        <button
-          onClick={handleFullWithdraw}
-          disabled={
-            withdrawStep === "processing"
-            || previewLoading
-            || !hasExactPreviewQuote
-            || displayUserReceivesUsdc <= 0
-          }
-          className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#E8E2DA] bg-white px-5 py-2.5 text-xs font-semibold text-[#1A1715] transition-all hover:border-[#D4CEC7] hover:shadow-sm disabled:opacity-50"
-        >
-          {withdrawStep === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          {liquidityConstrained ? "Withdraw available liquidity" : "Withdraw and deactivate"}
-        </button>
+        {step === "preview" && preview && (
+          <div className="mt-5 space-y-4">
+            <div className="rounded-lg border border-[#E8E2DA] bg-[#FAFAF8] px-4 py-3">
+              <div className="flex items-center justify-between text-xs text-[#8A837C]">
+                <span>Withdraw amount</span>
+                <span className="font-mono text-[#5C5550]">
+                  {formatUsdcAmount(previewWithdrawAmount)} USDC
+                </span>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-[#8A837C]">
+                <span>You receive</span>
+                <span className="font-mono text-[#1A1715]">
+                  {formatUsdcAmount(previewUserReceives)} USDC
+                </span>
+              </div>
+              {previewCurrentBalance > 0 && (
+                <p className="mt-2 text-[10px] text-[#8A837C]">
+                  On-chain currently redeemable: {formatUsdcAmount(previewCurrentBalance)} USDC
+                </p>
+              )}
+            </div>
+
+            {previewIsFull ? (
+              <p className="text-[11px] text-[#8A837C]">
+                Full withdrawal requested — automation deactivates only if no protocol positions remain.
+              </p>
+            ) : (
+              <p className="text-[11px] text-[#8A837C]">
+                Partial withdrawal — remaining funds stay in your smart account and the agent stays active.
+              </p>
+            )}
+
+            {liquidityConstrained && (
+              <div className="rounded-lg border border-[#F59E0B]/30 bg-[#FEF3C7]/50 px-3 py-2">
+                <p className="text-[11px] text-[#92400E]">
+                  Vault liquidity is lower than your full position. You can withdraw the currently available amount now, and the remaining balance will stay invested. Please retry when liquidity increases.
+                </p>
+              </div>
+            )}
+
+            {executeError && (
+              <p className="text-[11px] text-[#DC2626]">{executeError}</p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep("input")}
+                className="flex-1 rounded-lg border border-[#E8E2DA] bg-white px-4 py-2.5 text-xs font-semibold text-[#5C5550] hover:border-[#D4CEC7]"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleExecute}
+                disabled={step === "processing"}
+                className="flex-[2] items-center justify-center gap-1.5 rounded-lg bg-[#1A1715] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#2D2926] disabled:opacity-50"
+              >
+                {step === "processing" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Confirm withdrawal
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "processing" && (
+          <div className="mt-6 flex flex-col items-center text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-[#1A1715]" />
+            <p className="mt-3 text-xs text-[#8A837C]">
+              Processing withdrawal. This typically takes 10-30 seconds.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

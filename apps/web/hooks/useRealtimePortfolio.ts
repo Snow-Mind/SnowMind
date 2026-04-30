@@ -95,6 +95,25 @@ export function useRealtimePortfolio(
       flushTimer = setTimeout(flushInvalidations, 600)
     }
 
+    const handleRebalanceStatus = (
+      status: unknown,
+      previousStatus?: unknown,
+    ) => {
+      if (status === previousStatus) return
+
+      if (status === "executed") {
+        toast.success("Rebalance executed — portfolio updated", {
+          duration: 5000,
+        })
+      } else if (status === "failed") {
+        toast.error("Rebalance failed — funds unchanged and safe")
+      } else if (status === "skipped") {
+        toast.info("Agent checked rates — no rebalance needed", {
+          duration: 3000,
+        })
+      }
+    }
+
     // Subscribe to changes on both rebalance_logs and allocations tables
     const channel = supabase
       .channel(`portfolio-${smartAccountAddress}`)
@@ -107,18 +126,16 @@ export function useRealtimePortfolio(
         // Coalesce invalidations so multi-row bursts do not flood API reads.
         scheduleInvalidations(["portfolio", "history", "status"])
 
-        const status = payload.new.status
-        if (status === "executed") {
-          toast.success("Rebalance executed — portfolio updated", {
-            duration: 5000,
-          })
-        } else if (status === "failed") {
-          toast.error("Rebalance failed — funds unchanged and safe")
-        } else if (status === "skipped") {
-          toast.info("Agent checked rates — no rebalance needed", {
-            duration: 3000,
-          })
-        }
+        handleRebalanceStatus(payload.new.status)
+      })
+      .on("postgres_changes", {
+        event:  "UPDATE",
+        schema: "public",
+        table:  "rebalance_logs",
+        filter: `account_id=eq.${accountId}`,
+      }, (payload: { new: Record<string, unknown>; old: Record<string, unknown> }) => {
+        scheduleInvalidations(["portfolio", "history", "status"])
+        handleRebalanceStatus(payload.new.status, payload.old?.status)
       })
       .on("postgres_changes", {
         event:  "UPDATE",

@@ -58,12 +58,12 @@ def test_normalize_yield_dust_keeps_real_values() -> None:
     assert portfolio._normalize_yield_dust(Decimal("-0.0002")) == Decimal("-0.0002")
 
 
-def test_apply_principal_display_dust_clamps_sub_cent_drift() -> None:
+def test_apply_principal_display_dust_clamps_micro_drift() -> None:
     adjusted = portfolio._apply_principal_display_dust(
-        net_principal=Decimal("1.010759"),
-        total_current_value=Decimal("1.001625"),
+        net_principal=Decimal("1.000009"),
+        total_current_value=Decimal("1.000000"),
     )
-    assert adjusted == Decimal("1.001625")
+    assert adjusted == Decimal("1.000000")
 
 
 def test_apply_principal_display_dust_keeps_material_drift() -> None:
