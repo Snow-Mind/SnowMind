@@ -514,6 +514,70 @@ def _to_raw_usdc(amount_usdc: Decimal) -> int:
     return int((normalized * Decimal("1e6")).to_integral_exact())
 
 
+async def _get_idle_usdc_raw(smart_account: str) -> int:
+    """Read raw USDC balance held directly in the smart account (not deployed)."""
+    settings = get_settings()
+    w3 = get_shared_async_web3()
+    usdc = w3.eth.contract(
+        address=w3.to_checksum_address(settings.USDC_ADDRESS),
+        abi=_ERC20_BALANCE_OF_ABI,
+    )
+    return int(
+        await usdc.functions.balanceOf(
+            w3.to_checksum_address(smart_account)
+        ).call()
+    )
+
+
+async def _get_per_protocol_usdc_balances(smart_account: str) -> dict[str, int]:
+    """Read USDC-equivalent balance for each active protocol (raw 6-decimal units)."""
+    balances: dict[str, int] = {}
+    for pid, adapter in ACTIVE_ADAPTERS.items():
+        try:
+            balances[pid] = int(await adapter.get_balance(smart_account))
+        except Exception as exc:
+            logger.warning(
+                "Failed to read %s USDC balance for %s: %s", pid, smart_account, exc,
+            )
+            balances[pid] = 0
+    return balances
+
+
+def _compute_partial_shares(
+    *,
+    full_shares: dict[str, int],
+    protocol_usdc_balances: dict[str, int],
+    idle_usdc_raw: int,
+    total_needed_raw: int,
+) -> tuple[dict[str, int], Decimal]:
+    """Compute proportional share amounts for a partial withdrawal.
+
+    Strategy: use idle USDC first, then withdraw proportionally from each
+    deployed protocol for the remainder.
+
+    Returns (partial_shares_by_protocol, protocol_fraction).
+    protocol_fraction is 0 when idle covers the full withdrawal.
+    """
+    if idle_usdc_raw >= total_needed_raw:
+        return {pid: 0 for pid in full_shares}, Decimal("0")
+
+    needed_from_protocols = total_needed_raw - idle_usdc_raw
+    total_deployed = sum(protocol_usdc_balances.values())
+
+    if total_deployed <= 0:
+        return dict(full_shares), Decimal("1")
+
+    raw_fraction = Decimal(str(needed_from_protocols)) / Decimal(str(total_deployed))
+    # 0.5 % buffer absorbs share→USDC rounding drift across vaults
+    fraction = min(raw_fraction * Decimal("1.005"), Decimal("1"))
+
+    partial: dict[str, int] = {}
+    for pid, full in full_shares.items():
+        partial[pid] = int(Decimal(str(full)) * fraction)
+
+    return partial, min(raw_fraction, Decimal("1"))
+
+
 def _truncate_skip_reason(reason: str, max_len: int = 240) -> str:
     """Keep DB log reasons compact and predictable for UI rendering."""
     normalized = " ".join(str(reason).split())
@@ -991,6 +1055,60 @@ async def execute_withdrawal(
                 detail="Computed withdrawal exceeds on-chain balance. Please retry.",
             )
 
+        # ── Partial withdrawal: proportional share computation ─────────
+        # For full withdrawal the execution service redeems all shares.
+        # For partial withdrawal we only redeem enough to cover the
+        # requested amount, using idle USDC first.
+        protocol_fraction = Decimal("1")
+        if not effective_full_withdrawal:
+            total_needed_raw = withdraw_raw + agent_fee_raw
+            try:
+                idle_usdc_raw = await _get_idle_usdc_raw(address)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read idle USDC for partial-withdrawal share calc for %s: %s",
+                    address, exc,
+                )
+                idle_usdc_raw = 0
+
+            protocol_usdc_balances = await _get_per_protocol_usdc_balances(address)
+            full_shares = {
+                "aave_v3": aave_atoken_balance,
+                "benqi": benqi_qi_balance,
+                "spark": spark_share_balance,
+                "euler_v2": euler_share_balance,
+                "silo_savusd_usdc": silo_savusd_share_balance,
+                "silo_susdp_usdc": silo_susdp_share_balance,
+            }
+
+            partial_shares, protocol_fraction = _compute_partial_shares(
+                full_shares=full_shares,
+                protocol_usdc_balances=protocol_usdc_balances,
+                idle_usdc_raw=idle_usdc_raw,
+                total_needed_raw=total_needed_raw,
+            )
+
+            aave_atoken_balance = partial_shares.get("aave_v3", 0)
+            benqi_qi_balance = partial_shares.get("benqi", 0)
+            spark_share_balance = partial_shares.get("spark", 0)
+            euler_share_balance = partial_shares.get("euler_v2", 0)
+            silo_savusd_share_balance = partial_shares.get("silo_savusd_usdc", 0)
+            silo_susdp_share_balance = partial_shares.get("silo_susdp_usdc", 0)
+
+            logger.info(
+                "Partial withdrawal for %s: fraction=%.4f, idle_used=%d, "
+                "aave=%d benqi=%d spark=%d euler=%d silo_sav=%d silo_susdp=%d",
+                address,
+                float(protocol_fraction),
+                min(idle_usdc_raw, total_needed_raw),
+                aave_atoken_balance,
+                benqi_qi_balance,
+                spark_share_balance,
+                euler_share_balance,
+                silo_savusd_share_balance,
+                silo_susdp_share_balance,
+            )
+
         payload = {
             "serializedPermission": session_key,
             "sessionPrivateKey": session_private_key,
@@ -1079,6 +1197,35 @@ async def execute_withdrawal(
             amount_moved=withdraw_amount,
             tx_hash=tx_hash,
         )
+
+        # ── Update DB allocations for partial withdrawals ──────────
+        if not effective_full_withdrawal and protocol_fraction > Decimal("0"):
+            try:
+                retain = Decimal("1") - protocol_fraction
+                alloc_rows = (
+                    db.table("allocations")
+                    .select("id, amount_usdc")
+                    .eq("account_id", account["id"])
+                    .execute()
+                )
+                for alloc in (alloc_rows.data or []):
+                    old_amt = Decimal(str(alloc["amount_usdc"]))
+                    new_amt = (old_amt * retain).quantize(Decimal("0.000001"))
+                    if new_amt < Decimal("0.000001"):
+                        db.table("allocations").delete().eq("id", alloc["id"]).execute()
+                    else:
+                        db.table("allocations").update(
+                            {"amount_usdc": str(new_amt)}
+                        ).eq("id", alloc["id"]).execute()
+                logger.info(
+                    "Reduced allocations for %s by %.4f after partial withdrawal",
+                    address, float(protocol_fraction),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to update allocations after partial withdrawal for %s: %s",
+                    address, exc,
+                )
 
         account_deactivated = False
         message = f"Partial withdrawal of ${fee_calc.user_receives} complete."
