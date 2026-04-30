@@ -207,7 +207,7 @@ export default function WithdrawPage() {
             <h1 className="text-xl font-bold">Withdraw USDC</h1>
           </div>
           <p className="text-sm text-white/40 ml-[52px]">
-            Your funds are withdrawn from all protocols in a single atomic transaction.
+            Withdraw any amount. Partial withdrawals pull proportionally from each protocol so the rest keeps earning.
           </p>
         </div>
 
@@ -255,10 +255,51 @@ export default function WithdrawPage() {
                 />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-white/30">USDC</span>
               </div>
+
+              {/* Percentage quick-select */}
+              <div className="flex gap-2 mt-3">
+                {[25, 50, 75].map((pct) => {
+                  const pctAmount = (balance * pct / 100)
+                  const isActive = amount !== '' && Math.abs(parseFloat(amount) - pctAmount) < 0.01
+                  return (
+                    <button
+                      key={pct}
+                      onClick={() => {
+                        const val = pctAmount.toFixed(6)
+                        setAmount(val)
+                        setIsFullWithdrawal(isEffectivelyFullWithdrawal(val, balance))
+                      }}
+                      className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-all
+                        ${isActive
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:text-white/60 hover:border-white/[0.10]'
+                        }`}
+                    >
+                      {pct}%
+                    </button>
+                  )
+                })}
+                <button
+                  onClick={() => { setIsFullWithdrawal(true); setAmount(balance.toFixed(6)) }}
+                  className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-all
+                    ${isFullWithdrawal
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:text-white/60 hover:border-white/[0.10]'
+                    }`}
+                >
+                  Max
+                </button>
+              </div>
+
               {isFullWithdrawal && (
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400/80">
                   <AlertCircle className="h-3 w-3" />
                   Full withdrawal — account will be deactivated and session key revoked
+                </div>
+              )}
+              {!isFullWithdrawal && amount !== '' && parseFloat(amount) > 0 && (
+                <div className="mt-2 text-xs text-white/30">
+                  Remaining balance: ${formatUsdcDisplay(Math.max(balance - parseFloat(amount), 0))} USDC
                 </div>
               )}
             </div>
@@ -294,23 +335,55 @@ export default function WithdrawPage() {
         {/* ══════ Step: Preview ══════ */}
         {step === 'preview' && preview && (
           <div className="space-y-5">
-            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 space-y-4">
-              <h3 className="text-sm font-semibold text-white/80 mb-4">Withdrawal Summary</h3>
+            {(() => {
+              const previewBal = parseFloat(preview.currentBalance)
+              const withdrawAmt = parseFloat(preview.withdrawAmount)
+              const remaining = Math.max(previewBal - withdrawAmt, 0)
+              const isPartial = remaining > FULL_WITHDRAWAL_DUST_USDC
+              return (
+                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5 space-y-4">
+                  <h3 className="text-sm font-semibold text-white/80 mb-4">Withdrawal Summary</h3>
 
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/50">Withdrawal Amount</span>
-                  <span className="font-mono text-white/90">${parseFloat(preview.withdrawAmount).toFixed(2)}</span>
+                  <div className="space-y-3">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-white/50">Current Balance</span>
+                      <span className="font-mono text-white/60">${formatUsdcDisplay(previewBal)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-white/50">Withdrawal Amount</span>
+                      <span className="font-mono text-white/90">${formatUsdcDisplay(withdrawAmt)}</span>
+                    </div>
+
+                    {isPartial && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-white/50">Remaining Balance</span>
+                        <span className="font-mono text-white/60">${formatUsdcDisplay(remaining)}</span>
+                      </div>
+                    )}
+
+                    <div className="border-t border-white/[0.06] my-2" />
+
+                    <div className="flex justify-between text-base font-semibold">
+                      <span className="text-white/80">You will receive</span>
+                      <span className="font-mono text-emerald-400">${formatUsdcDisplay(parseFloat(preview.userReceives))}</span>
+                    </div>
+                  </div>
+
+                  {isPartial && (
+                    <div className="mt-3 text-xs text-white/30 leading-relaxed">
+                      Funds are withdrawn proportionally from each protocol.
+                      Your remaining balance continues earning yield.
+                    </div>
+                  )}
+                  {!isPartial && (
+                    <div className="mt-3 flex items-center gap-1.5 text-xs text-amber-400/80">
+                      <AlertCircle className="h-3 w-3" />
+                      Full withdrawal — account will be deactivated
+                    </div>
+                  )}
                 </div>
-
-                <div className="border-t border-white/[0.06] my-2" />
-
-                <div className="flex justify-between text-base font-semibold">
-                  <span className="text-white/80">You will receive</span>
-                  <span className="font-mono text-emerald-400">${parseFloat(preview.userReceives).toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
+              )
+            })()}
 
             {/* Security note */}
             <div className="flex items-start gap-2 rounded-xl bg-white/[0.02] border border-white/[0.04] p-3">

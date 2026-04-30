@@ -2484,16 +2484,18 @@ export async function executeWithdrawal({
   }
   const calls = []
 
-  // Aave: only withdraw if user has aTokens (withdraw(maxUint256) reverts with 0 balance)
+  // Aave: for full withdrawal use maxUint256; for partial use the specific
+  // aToken amount the backend computed (aTokens are 1:1 with USDC).
   const aaveATokenBalance = BigInt(balances?.aaveATokenBalance || "0")
   if (aaveATokenBalance > 0n) {
+    const aaveWithdrawArg = isFullWithdrawal ? maxUint256 : aaveATokenBalance
     calls.push({
       to: contracts.AAVE_POOL,
       value: 0n,
       data: encodeFunctionData({
         abi: AAVE_ABI,
         functionName: "withdraw",
-        args: [contracts.USDC, maxUint256, smartAccountAddress],
+        args: [contracts.USDC, aaveWithdrawArg, smartAccountAddress],
       }),
     })
   }
