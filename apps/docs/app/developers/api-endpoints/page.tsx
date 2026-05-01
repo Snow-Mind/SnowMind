@@ -20,37 +20,12 @@ export default function APIEndpointsPage() {
       <p>
         <strong>GET</strong> <code>/portfolio/{'{address}'}</code>
       </p>
-      <p>Fetch real-time portfolio balances, APY, and rebalance history for an account.</p>
+      <p>Fetch real-time balances, APY, and allocations for a smart account.</p>
 
       <h4>Parameters</h4>
       <ul>
         <li><code>address</code> (path, required) — Smart account address (0x-prefixed)</li>
       </ul>
-
-      <h4>Response</h4>
-      <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
-        <code>{`{
-  "accountAddress": "0x...",
-  "totalDepositedUsd": "1000.50",
-  "totalYieldUsd": "12.34",
-  "allocations": [
-    {
-      "protocolId": "aave",
-      "balanceUsd": "500.25",
-      "apy": 5.2,
-      "weight": 50
-    }
-  ],
-  "rebalanceHistory": [
-    {
-      "timestamp": "2026-05-01T10:30:00Z",
-      "status": "completed",
-      "changes": [...],
-      "txHash": "0x..."
-    }
-  ]
-}`}</code>
-      </pre>
 
       <h2>Deposit Endpoints</h2>
 
@@ -95,73 +70,52 @@ export default function APIEndpointsPage() {
 }`}</code>
       </pre>
 
-      <h4>Errors</h4>
-      <ul>
-        <li><code>400</code> — Invalid protocol list or allocation caps</li>
-        <li><code>404</code> — Account not found</li>
-        <li><code>409</code> — No active session key; grant one first</li>
-      </ul>
-
       <h2>Withdrawal Endpoints</h2>
 
       <h3>Preview Withdrawal</h3>
       <p>
-        <strong>POST</strong> <code>/accounts/{'{address}'}/withdraw/preview</code>
+        <strong>POST</strong> <code>/withdrawals/preview</code>
       </p>
-      <p>Calculate fees and final balance for a withdrawal without executing it.</p>
+      <p>Calculate fees and withdrawable amount without executing.</p>
 
       <h4>Request Body</h4>
       <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
         <code>{`{
-  "withdrawAmountUsdc": "500.00",
-  "withdrawAll": false
-}`}</code>
-      </pre>
-
-      <h4>Response</h4>
-      <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
-        <code>{`{
-  "withdrawAmountUsdc": "500.00",
-  "feeAmountUsdc": "2.50",
-  "netProceeds": "497.50",
-  "timestamp": "2026-05-01T10:30:00Z"
+  "smartAccountAddress": "0x...",
+  "withdrawAmount": "500.00",
+  "isFullWithdrawal": false
 }`}</code>
       </pre>
 
       <h3>Execute Withdrawal</h3>
       <p>
-        <strong>POST</strong> <code>/accounts/{'{address}'}/withdraw</code>
+        <strong>POST</strong> <code>/withdrawals/execute</code>
       </p>
-      <p>Execute a full or partial withdrawal. Atomically exits all protocol positions.</p>
+      <p>Execute a full or partial withdrawal with a signed authorization.</p>
 
       <h4>Request Body</h4>
       <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
         <code>{`{
-  "withdrawAmountUsdc": "500.00",
-  "withdrawAll": false,
-  "ownerSignature": "0x..."
+  "smartAccountAddress": "0x...",
+  "withdrawAmount": "500.00",
+  "isFullWithdrawal": false,
+  "ownerSignature": "0x...",
+  "signatureMessage": "SnowMind Withdrawal Authorization...",
+  "signatureTimestamp": 1714540000
 }`}</code>
       </pre>
 
-      <h4>Response</h4>
-      <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
-        <code>{`{
-  "success": true,
-  "userOpHash": "0x...",
-  "finalBalance": "500.00",
-  "feeAmount": "2.50",
-  "txHash": "0x...",
-  "status": "pending"
-}`}</code>
-      </pre>
+      <Callout variant="warning" title="Signature Required">
+        Every withdrawal must include a fresh user signature from the owner wallet. Agents cannot withdraw without user authorization.
+      </Callout>
 
-      <h2>Protocol Management Endpoints</h2>
+      <h2>Protocol Management</h2>
 
       <h3>Update Allowed Protocols</h3>
       <p>
         <strong>PUT</strong> <code>/accounts/{'{address}'}/allowed-protocols</code>
       </p>
-      <p>Change the set of protocols SnowMind can use for your account.</p>
+      <p>Change the set of protocols SnowMind can deploy into.</p>
 
       <h4>Request Body</h4>
       <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
@@ -170,25 +124,11 @@ export default function APIEndpointsPage() {
 }`}</code>
       </pre>
 
-      <h4>Response</h4>
-      <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
-        <code>{`{
-  "allowedProtocols": ["aave", "benqi"],
-  "allocationCaps": {
-    "aave": 50,
-    "benqi": 50
-  },
-  "effectiveCapTotalPct": 100,
-  "idleRemainderPossible": false,
-  "updatedRows": 1
-}`}</code>
-      </pre>
-
       <h3>Update Allocation Caps</h3>
       <p>
         <strong>PUT</strong> <code>/accounts/{'{address}'}/allocation-caps</code>
       </p>
-      <p>Adjust the maximum % allocation per protocol.</p>
+      <p>Adjust per-protocol max allocation percentages.</p>
 
       <h4>Request Body</h4>
       <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
@@ -200,48 +140,35 @@ export default function APIEndpointsPage() {
 }`}</code>
       </pre>
 
-      <h4>Response</h4>
-      <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
-        <code>{`{
-  "allocationCaps": {
-    "aave": 60,
-    "benqi": 40
-  },
-  "allowedProtocols": ["aave", "benqi"],
-  "effectiveCapTotalPct": 100,
-  "idleRemainderPossible": false,
-  "updatedRows": 1
-}`}</code>
-      </pre>
+      <h2>Session Key Endpoints</h2>
+      <p>
+        Session keys grant SnowMind scoped execution permissions. These are required for automated deposits and withdrawals.
+      </p>
+
+      <h3>Store Session Key</h3>
+      <p>
+        <strong>POST</strong> <code>/accounts/{'{address}'}/session-key</code>
+      </p>
+
+      <h3>Revoke Session Key</h3>
+      <p>
+        <strong>POST</strong> <code>/accounts/{'{address}'}/session-key/revoke</code>
+      </p>
 
       <h2>Authentication Header</h2>
-      <p>
-        Include your Privy auth token in every request:
-      </p>
       <pre className="bg-snow-surface border border-snow-border p-4 rounded-lg overflow-x-auto text-sm">
-        <code>Authorization: Bearer {'{YOUR_PRIVY_AUTH_TOKEN}'}</code>
+        <code>Authorization: Bearer {'{YOUR_PRIVY_TOKEN}'}</code>
       </pre>
 
-      <Callout variant="info" title="Getting Your Auth Token">
-        After logging in to SnowMind with Privy, retrieve your token from the Privy session. See <strong>SDK Examples</strong> for code.
-      </Callout>
-
       <h2>Error Responses</h2>
-      <p>
-        All errors return JSON with an HTTP status code:
-      </p>
       <ul>
         <li><code>400 Bad Request</code> — Invalid parameters</li>
         <li><code>401 Unauthorized</code> — Missing or invalid auth token</li>
-        <li><code>404 Not Found</code> — Account or resource not found</li>
-        <li><code>409 Conflict</code> — State conflict (e.g., funded protocol cannot be deselected)</li>
+        <li><code>404 Not Found</code> — Account not found</li>
+        <li><code>409 Conflict</code> — State conflict (funded protocol exclusion)</li>
         <li><code>429 Too Many Requests</code> — Rate limit exceeded</li>
-        <li><code>500 Internal Server Error</code> — Server error; retry later</li>
+        <li><code>500 Internal Server Error</code> — Retry later</li>
       </ul>
-
-      <Callout variant="warning" title="Retry Logic">
-        Implement exponential backoff for 429 and 5xx errors. Do not retry 400/401/404 errors.
-      </Callout>
     </article>
   );
 }
