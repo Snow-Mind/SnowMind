@@ -14,9 +14,10 @@ interface PortfolioChartProps {
 
 export default function PortfolioChart({ portfolio, compact = false }: PortfolioChartProps) {
   // Build pie data from allocations — include idle USDC so users see their funds
+  // Use $0.01 minimum to avoid showing dust amounts that display as "$0.00"
   const chartData = useMemo(
     () => (portfolio?.allocations ?? [])
-      .filter((a) => Number(a.amountUsdc) > 0)
+      .filter((a) => Number(a.amountUsdc) >= 0.01)
       .map((a) => {
         if (a.protocolId === "idle") {
           return {

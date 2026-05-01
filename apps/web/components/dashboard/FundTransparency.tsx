@@ -216,7 +216,7 @@ export default function FundTransparency({
             </p>
           )}
 
-          {idleBalance && Number(idleBalance.amountUsdc) > 0 && (
+          {idleBalance && Number(idleBalance.amountUsdc) >= 0.01 && (
             <div className="flex items-center justify-between rounded-lg border border-[#E8E2DA] bg-[#F5F0EB]/50 px-3 py-2.5">
               <div className="flex items-center gap-2">
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#64748B]" />

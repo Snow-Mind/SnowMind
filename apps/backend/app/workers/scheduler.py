@@ -524,11 +524,15 @@ class SnowMindScheduler:
             today = datetime.now(timezone.utc).date().isoformat()
             for pid, rate in rates.items():
                 try:
+                    # Use effective_apy (TWAP-smoothed for vaults) rather than raw
+                    # spot apy, which can spike on vault rebalancing events and
+                    # unfairly penalise yield-profile stability scoring.
+                    snapshot_apy = rate.effective_apy if rate.effective_apy is not None else rate.apy
                     self.db.table("daily_apy_snapshots").upsert(
                         {
                             "protocol_id": pid,
                             "date": today,
-                            "apy": str(rate.apy),
+                            "apy": str(snapshot_apy),
                             "tvl_usd": str(rate.tvl_usd),
                         },
                         on_conflict="protocol_id,date",

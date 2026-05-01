@@ -132,9 +132,9 @@ SnowMind deposits USDC directly into Aave V3's lending pool — no wrapper, cura
 |---|---|---|
 | Oracle Quality | 2/2 | Dual oracle system: Chainlink + Edge Oracle (by Chaos Labs & Chainlink), audited by Zellic |
 | Liquidity | /3 | Dynamic — fetched every 24 hours from on-chain TVL |
-| Collateral Quality | /2 | |
+| Collateral Quality | 1/2 | Mixed — includes sAVAX (staking token) |
 | Yield Profile | /1 | Dynamic — fetched every 24 hours from on-chain data |
-| Architecture | /1 | |
+| Architecture | 1/1 | Direct deposit, no intermediary |
 | **Total** | **/9** | |
 
 **Hard Filters:**
@@ -157,12 +157,12 @@ Measured as available USDC liquidity in Benqi's USDC market on Avalanche. Score 
 - TVL > $10M = 3 pts | TVL > $1M = 2 pts | TVL > $500K = 1 pt | TVL < $500K = 0 pts
 - As of 2026-04-05: ~$6M available liquidity
 
-**Collateral Quality (2/2):**
-Benqi Core Markets use a shared-pool model (Compound V2 fork). This is 2/2 because:
+**Collateral Quality (1/2):**
+Benqi Core Markets use a shared-pool model (Compound V2 fork). This is 1/2 because:
 - **Mostly blue-chip**: AVAX, WETH.e, BTC.b are the major collateral assets
 - **Stablecoins**: USDC, USDt, AUSD, EURC
-- **sAVAX**: Only yield-bearing asset — liquid-staked AVAX, well-understood with established track record
-- **No exotic collateral**: No USDe, sUSDe, synthetics, or unproven assets — significantly cleaner collateral pool than Aave
+- **sAVAX**: Liquid-staked AVAX — a yield-bearing derivative token. Per the framework definition ("Mixed: staking tokens, yield-bearing stablecoins" = 1pt), the presence of sAVAX as accepted collateral means this pool is mixed, not blue-chip only
+- **No exotic collateral**: No USDe, sUSDe, synthetics, or unproven assets
 
 **Yield Profile (Dynamic — checked every 24 hours):**
 Yield is organic — from borrower interest, no token emissions. Score is calculated from 30-day rolling APY data:

@@ -36,7 +36,7 @@ _APY_LOOKBACK_DAYS = 30
 # Static manual scores from report.md (max static subtotal = 5).
 STATIC_SCORES: dict[str, dict[str, int]] = {
     "aave_v3": {"oracle": 2, "collateral": 1, "architecture": 1},
-    "benqi": {"oracle": 2, "collateral": 2, "architecture": 1},
+    "benqi": {"oracle": 2, "collateral": 1, "architecture": 1},
     "spark": {"oracle": 2, "collateral": 2, "architecture": 0},
     "euler_v2": {"oracle": 1, "collateral": 1, "architecture": 0},
     "silo_savusd_usdc": {"oracle": 2, "collateral": 1, "architecture": 1},
