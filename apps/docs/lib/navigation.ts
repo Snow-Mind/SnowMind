@@ -37,6 +37,14 @@ export const navigation: NavGroup[] = [
     ],
   },
   {
+    title: "Developers",
+    items: [
+      { title: "API Overview", href: "/developers/api-overview" },
+      { title: "API Endpoints", href: "/developers/api-endpoints" },
+      { title: "SDK Examples", href: "/developers/sdk-examples" },
+    ],
+  },
+  {
     title: "Other",
     items: [
       { title: "FAQ", href: "/other/faq" },

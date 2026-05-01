@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { BookOpen, Shield, Zap, BarChart3 } from "lucide-react";
+import { BookOpen, Shield, Zap, BarChart3, Code } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "SnowMind Documentation",
@@ -37,6 +37,13 @@ const cards = [
     href: "/learn/protocol-assessment",
     icon: BookOpen,
   },
+  {
+    title: "Developers",
+    description:
+      "Integrate SnowMind via REST API. Automate deposits, withdrawals, and portfolio management.",
+    href: "/developers/api-overview",
+    icon: Code,
+  },
 ];
 
 export default function DocsHome() {
@@ -50,7 +57,7 @@ export default function DocsHome() {
         Avalanche — safely, transparently, and autonomously.
       </p>
 
-      <div className="mt-10 grid gap-4 sm:grid-cols-2">
+      <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((card) => (
           <Link
             key={card.title}
