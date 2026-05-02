@@ -104,10 +104,13 @@ class RateValidator:
         Doc: "If any rate reads above 25% APY, flag as suspicious and don't auto-act."
         """
         if apy > self.SANITY_MAX_APY:
-            logger.error(
-                "SANITY BOUND EXCEEDED: %s reporting %.1f%% APY. Halting rebalancing.",
+            # Excludes only this protocol from the cycle (see validate_all);
+            # other protocols still rebalance. Use warning to avoid false alarms.
+            logger.warning(
+                "Sanity bound exceeded: %s reporting %.1f%% APY (>%.1f%% cap) — excluding this protocol from cycle",
                 protocol_id,
                 float(apy * 100),
+                float(self.SANITY_MAX_APY * 100),
             )
             return False
         return True
