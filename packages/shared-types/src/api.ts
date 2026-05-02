@@ -158,6 +158,7 @@ export interface RebalanceStatusResponse {
     | "NO_ACTIVE_SESSION_KEY"
     | "NO_DEPOSITED_BALANCE"
     | "NO_PERMITTED_PROTOCOLS"
+    | "NO_DEPOSIT_SAFE_PROTOCOLS"
     | "SESSION_KEY_INVALID"
     | "SESSION_KEY_NOT_APPROVED"
     | "USEROP_VALIDATE_REVERT"
@@ -166,7 +167,8 @@ export interface RebalanceStatusResponse {
     | "MIN_INTERVAL_NOT_MET"
     | "IDLE_FUNDS_PENDING_DEPLOYMENT"
     | "SKIPPED"
-    | "UNKNOWN";
+    | "UNKNOWN"
+    | "NOT_REGISTERED";
   reasonDetail?: string;
 }
 

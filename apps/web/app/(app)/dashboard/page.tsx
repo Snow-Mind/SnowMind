@@ -12,6 +12,7 @@ import {
   ScrollText,
   Sparkles,
   Loader2,
+  Info,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import LiveRates from "@/components/dashboard/LiveRates";
@@ -268,6 +269,43 @@ export default function DashboardPage() {
     && hasActiveSessionKey
     && ["skipped", "failed", "halted"].includes(deployStatus);
 
+  // Edge cases #1 / #11 / #51 — every selected market is unsafe to deposit
+  // into right now (utilization >90%, paused, or rate flagged). Funds idle
+  // at 0% APY until a market becomes safe again.
+  const allMarketsUnsafe = !isLoading
+    && accountIsActive
+    && hasActiveSessionKey
+    && rebalanceStatus?.reasonCode === "NO_DEPOSIT_SAFE_PROTOCOLS";
+
+  // Edge case #31 — funds in the smart account but no session key has
+  // ever been (or is currently) active. Distinct from a regrant case
+  // because the user has not yet activated the optimizer.
+  const fundedButNotActivated = !isLoading
+    && hasDeployableIdleBalance
+    && !hasActiveSessionKey
+    && !rebalanceStatus?.lastRebalance;
+
+  // Edge case #2 — sum of per-protocol allocation caps (across the user's
+  // allowed protocols) is below 80%. The optimizer cannot deploy more than
+  // the sum of caps, so the remainder will sit idle at 0% APY.
+  const allowedProtocolIds = accountDetail?.sessionKey?.allowedProtocols ?? [];
+  const allocationCapsSumPct = (() => {
+    if (!accountDetail?.allocationCaps || allowedProtocolIds.length === 0) return null;
+    const caps = accountDetail.allocationCaps;
+    let total = 0;
+    for (const pid of allowedProtocolIds) {
+      const raw = caps[pid] ?? caps[pid === "aave_v3" ? "aave" : pid] ?? 100;
+      const num = Number(raw);
+      if (!Number.isFinite(num)) continue;
+      total += Math.max(0, Math.min(100, num));
+    }
+    return Math.min(100, total);
+  })();
+  const showLowDeployableCapBanner = !isLoading
+    && hasActiveSessionKey
+    && allocationCapsSumPct !== null
+    && allocationCapsSumPct < 80;
+
   const triggerIdleDeployment = useCallback(async (force = false, allowWhenAuthFault = false) => {
     if (!address || !shouldAutoDeployIdle || (hasAuthFault && !allowWhenAuthFault)) return;
 
@@ -498,6 +536,78 @@ export default function DashboardPage() {
             className="shrink-0 rounded-md border border-[#E84142]/30 bg-white px-3 py-1.5 text-[11px] font-medium text-[#E84142] hover:bg-[#FFF6F6]"
           >
             Re-grant in Settings
+          </Link>
+        </motion.div>
+      )}
+
+      {/* Edge case #1/#11/#51 — every selected market is full (utilization >90%) */}
+      {allMarketsUnsafe && (
+        <motion.div
+          className="flex items-start gap-3 rounded-lg border border-amber-500/25 bg-amber-50 px-4 py-3"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-arctic">Markets are full right now</p>
+            <p className="mt-0.5 text-[11px] text-[#6E6761]">
+              All your selected markets are at high utilization. Your funds are
+              held safely as USDC and will be deployed automatically when a
+              market has capacity again — usually within minutes to hours.
+            </p>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Edge case #31 — funded smart account but optimizer never activated */}
+      {fundedButNotActivated && (
+        <motion.div
+          className="flex items-start gap-3 rounded-lg border border-glacier/25 bg-glacier/[0.06] px-4 py-3"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-glacier" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-arctic">Activate the optimizer to start earning</p>
+            <p className="mt-0.5 text-[11px] text-[#6E6761]">
+              We can see USDC in your smart account, but the optimizer is not
+              active yet. Activate it and your funds will start earning yield.
+            </p>
+          </div>
+          <Link
+            href="/onboarding"
+            className="shrink-0 rounded-md border border-glacier/30 bg-white px-3 py-1.5 text-[11px] font-medium text-glacier hover:bg-glacier/[0.08]"
+          >
+            Activate
+          </Link>
+        </motion.div>
+      )}
+
+      {/* Edge case #2 — caps cap deployment to <80% of funds */}
+      {showLowDeployableCapBanner && allocationCapsSumPct !== null && (
+        <motion.div
+          className="flex items-start gap-3 rounded-lg border border-amber-500/25 bg-amber-50 px-4 py-3"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-arctic">
+              Your caps deploy only {allocationCapsSumPct}% of your funds
+            </p>
+            <p className="mt-0.5 text-[11px] text-[#6E6761]">
+              The rest will sit idle and earn nothing. Raise your per-market
+              caps in Settings to put more of your USDC to work.
+            </p>
+          </div>
+          <Link
+            href="/settings"
+            className="shrink-0 rounded-md border border-amber-500/30 bg-white px-3 py-1.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
+          >
+            Adjust caps
           </Link>
         </motion.div>
       )}

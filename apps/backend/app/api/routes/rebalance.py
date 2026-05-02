@@ -117,6 +117,11 @@ def _classify_reason(
             return ("NO_DEPOSITED_BALANCE", detail)
         if "No protocols permitted by active session key" in detail:
             return ("NO_PERMITTED_PROTOCOLS", detail)
+        # Edge case: every market the user opted into failed deposit-safety
+        # checks this cycle (utilization >90%, paused, etc). Funds sit idle
+        # at 0% APY until at least one market becomes safe again.
+        if "no_deposit_safe_protocols" in detail_l or "no protocol passed deposit safety" in detail_l:
+            return ("NO_DEPOSIT_SAFE_PROTOCOLS", detail)
         if "Session key invalid" in detail:
             return ("SESSION_KEY_INVALID", detail)
         if "Rebalance not worth it" in detail:
